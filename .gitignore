@@ -51,3 +51,6 @@ coverage/
 .vscode/
 .idea/
 *.swp
+
+# Claude Code — personal, machine-local overrides (not shared with the team)
+.claude/settings.local.json

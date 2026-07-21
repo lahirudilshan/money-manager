@@ -4595,6 +4595,26 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-image-loader@npm:~57.0.1":
+  version: 57.0.1
+  resolution: "expo-image-loader@npm:57.0.1"
+  peerDependencies:
+    expo: "*"
+  checksum: 10c0/c68a12901d789bfc395b045305a68a352e05d4b3e4fcbbe382591a5fff5fcd896e81c4cbb082dfaa520c5ac6ee2c3221c3887b0292b7b831e21779bd360936f0
+  languageName: node
+  linkType: hard
+
+"expo-image-picker@npm:~57.0.5":
+  version: 57.0.5
+  resolution: "expo-image-picker@npm:57.0.5"
+  dependencies:
+    expo-image-loader: "npm:~57.0.1"
+  peerDependencies:
+    expo: "*"
+  checksum: 10c0/18911cd4f8aa59b027325b978737c2b91a5fc63029def8c55edf549d7d84889f0f5d1b7dceee0144240cc02e53152ba2cb77a9c9c59a493ac6f1669b4dff095c
+  languageName: node
+  linkType: hard
+
 "expo-json-utils@npm:~57.0.1":
   version: 57.0.1
   resolution: "expo-json-utils@npm:57.0.1"
@@ -6056,8 +6076,10 @@ __metadata:
     expo: "npm:~57.0.7"
     expo-constants: "npm:~57.0.6"
     expo-dev-client: "npm:~57.0.7"
+    expo-file-system: "npm:~57.0.1"
     expo-font: "npm:~57.0.1"
     expo-haptics: "npm:~57.0.1"
+    expo-image-picker: "npm:~57.0.5"
     expo-linear-gradient: "npm:~57.0.1"
     expo-linking: "npm:~57.0.3"
     expo-notifications: "npm:~57.0.6"

@@ -1,17 +1,19 @@
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
-import { selectGroupViews, useAppStore } from '../src/store/useAppStore';
-import { syncGroupReminders } from '../src/services/notifications';
+import { selectCategoryViews, useAppStore } from '../src/store/useAppStore';
+import { syncCategoryReminders } from '../src/services/notifications';
 import { T } from '../src/components/ui';
 
 function RootNavigator() {
   const theme = useTheme();
+  const router = useRouter();
   const ready = useAppStore((s) => s.ready);
+  const needsOnboarding = useAppStore((s) => s.needsOnboarding);
   const initialise = useAppStore((s) => s.initialise);
   const [startupError, setStartupError] = useState<string | null>(null);
 
@@ -22,18 +24,18 @@ function RootNavigator() {
     // able to break startup, so they are awaited separately and swallowed.
     initialise()
       .then(() => {
-        // Remind about groups that still need money moved into them.
+        // Remind about categories that still need money moved into them.
         const state = useAppStore.getState();
-        const reminders = selectGroupViews(state)
+        const reminders = selectCategoryViews(state)
           .filter((view) => view.summary.shortfallMinor > 0)
           .map((view) => ({
-            groupId: view.group.id,
-            groupName: view.group.name,
+            categoryId: view.category.id,
+            categoryName: view.category.name,
             shortfallMinor: view.summary.shortfallMinor,
-            dueDay: view.group.dueDay,
+            dueDay: view.category.dueDay,
           }));
 
-        void syncGroupReminders(reminders).catch((error) =>
+        void syncCategoryReminders(reminders).catch((error) =>
           console.warn('Reminder sync skipped:', error),
         );
       })
@@ -48,6 +50,17 @@ function RootNavigator() {
       cancelled = true;
     };
   }, [initialise]);
+
+  // Redirect into onboarding only once the navigator below is actually
+  // mounted — dispatching `router.replace` while this component is still
+  // returning the loading spinner (i.e. before the Stack exists) causes
+  // expo-router to re-queue the navigation on every render, which is an
+  // infinite "Maximum update depth exceeded" loop, not a real redirect.
+  useEffect(() => {
+    if (ready && needsOnboarding) {
+      router.replace('/onboarding');
+    }
+  }, [ready, needsOnboarding, router]);
 
   // Surface the failure rather than spinning forever on a broken database.
   if (startupError) {
@@ -93,10 +106,12 @@ function RootNavigator() {
       }}
     >
       <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="group/[id]" />
-      <Stack.Screen name="group/new" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="group/edit/[id]" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="category/[id]" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="onboarding" />
+      <Stack.Screen name="category/[id]" />
+      <Stack.Screen name="category/new" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="category/edit/[id]" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="subcategory/[id]" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="transaction/new" options={{ presentation: 'modal' }} />
     </Stack>
   );
 }

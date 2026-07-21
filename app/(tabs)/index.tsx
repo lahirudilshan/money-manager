@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ReorderableGroupList } from '../../src/components/ReorderableGroupList';
 import {
   Empty,
   GradientButton,
@@ -19,16 +20,17 @@ import { formatMoney } from '../../src/core/money';
 import { formatPeriod, shiftPeriod } from '../../src/core/planning';
 import {
   selectBoardTotals,
-  selectGroupViews,
+  selectCategoryViews,
   selectRatios,
   selectTotalIncome,
   useAppStore,
+  type CategoryView,
 } from '../../src/store/useAppStore';
 import { tintFor } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
- * The board: every group as a bold, tinted tile in a 2-column grid, with a
+ * The board: every category as a bold, tinted tile in a 2-column grid, with a
  * gradient hero carrying the headline number. This is the "full picture" the
  * spreadsheet gave the user, given a fintech-app treatment.
  */
@@ -39,13 +41,35 @@ export default function BoardScreen() {
   const router = useRouter();
 
   const state = useAppStore();
-  const views = useMemo(() => selectGroupViews(state), [state]);
+  const views = useMemo(() => selectCategoryViews(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
   const ratios = useMemo(() => selectRatios(state), [state]);
   const income = useMemo(() => selectTotalIncome(state), [state]);
 
   const unfunded = views.filter((view) => !view.summary.isFullyFunded);
   const leftToFund = unfunded.reduce((sum, v) => sum + v.summary.shortfallMinor, 0);
+
+  const [reorderMode, setReorderMode] = useState(false);
+
+  function renderCategoryTile(view: CategoryView) {
+    const { category, card, summary } = view;
+    const progressLabel = summary.isFullyFunded
+      ? 'Funded'
+      : `${Math.round(summary.fundedPct)}% funded`;
+
+    return (
+      <GroupTile
+        icon={category.icon as never}
+        color={category.color}
+        tint={tintFor(category.color, colors)}
+        name={category.name}
+        amount={formatMoney(summary.totalMinor, { compact: true })}
+        subtitle={`${summary.counts.completed}/${summary.subcategoryCount} done · ${card?.name ?? 'no card'}`}
+        progressLabel={progressLabel}
+        onPress={() => (reorderMode ? undefined : router.push(`/category/${category.id}`))}
+      />
+    );
+  }
 
   return (
     <ScrollView
@@ -59,29 +83,58 @@ export default function BoardScreen() {
       showsVerticalScrollIndicator={false}
     >
       {/* Month switcher — the board is always scoped to one month. */}
-      <Row justify="space-between">
-        <Pressable
-          onPress={() => state.setPeriod(shiftPeriod(state.period, -1))}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel="Previous month"
+      <Row justify="space-between" align="center">
+        <Label>THE PLAN</Label>
+        <Row
+          gap={2}
+          style={{
+            backgroundColor: colors.surface,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: colors.hairline,
+            padding: 3,
+          }}
         >
-          <Ionicons name="chevron-back" size={22} color={colors.inkMuted} />
-        </Pressable>
+          <Pressable
+            onPress={() => state.setPeriod(shiftPeriod(state.period, -1))}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Previous month"
+            style={({ pressed }) => ({
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+            })}
+          >
+            <Ionicons name="chevron-back" size={18} color={colors.inkSecondary} />
+          </Pressable>
 
-        <View style={{ alignItems: 'center', gap: 1 }}>
-          <Label>THE PLAN</Label>
-          <T variant="title">{formatPeriod(state.period)}</T>
-        </View>
+          <View style={{ minWidth: 132, alignItems: 'center', justifyContent: 'center' }}>
+            <T variant="bodyStrong" numberOfLines={1}>
+              {formatPeriod(state.period)}
+            </T>
+          </View>
 
-        <Pressable
-          onPress={() => state.setPeriod(shiftPeriod(state.period, 1))}
-          hitSlop={12}
-          accessibilityRole="button"
-          accessibilityLabel="Next month"
-        >
-          <Ionicons name="chevron-forward" size={22} color={colors.inkMuted} />
-        </Pressable>
+          <Pressable
+            onPress={() => state.setPeriod(shiftPeriod(state.period, 1))}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Next month"
+            style={({ pressed }) => ({
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+            })}
+          >
+            <Ionicons name="chevron-forward" size={18} color={colors.inkSecondary} />
+          </Pressable>
+        </Row>
       </Row>
 
       {/* Gradient hero: the headline number the whole app answers to. */}
@@ -156,7 +209,7 @@ export default function BoardScreen() {
                 {formatMoney(leftToFund)} still to transfer
               </T>
               <T variant="caption" tone="muted">
-                {unfunded.length} group{unfunded.length === 1 ? '' : 's'} not yet funded
+                {unfunded.length} categor{unfunded.length === 1 ? 'y' : 'ies'} not yet funded
               </T>
             </View>
           </Row>
@@ -170,7 +223,7 @@ export default function BoardScreen() {
                 Everything is funded
               </T>
               <T variant="caption" tone="muted">
-                All groups have their money transferred
+                All categories have their money transferred
               </T>
             </View>
           </Row>
@@ -178,48 +231,83 @@ export default function BoardScreen() {
       ) : null}
 
       <View style={{ gap: space.md }}>
-        <Row justify="space-between">
-          <Label>GROUPS</Label>
-          <T variant="caption" tone="muted">
-            {totals.settledGroupCount}/{totals.groupCount} settled
-          </T>
+        <Row justify="space-between" align="center">
+          <View>
+            <Label>CATEGORIES</Label>
+            <T variant="caption" tone="muted">
+              {totals.settledCategoryCount}/{totals.categoryCount} settled
+            </T>
+          </View>
+          {views.length > 1 ? (
+            <Pressable
+              onPress={() => setReorderMode((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel={reorderMode ? 'Done reordering' : 'Reorder categories'}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 4,
+                paddingVertical: 7,
+                paddingHorizontal: space.md,
+                borderRadius: 999,
+                backgroundColor: reorderMode
+                  ? colors.accent
+                  : pressed
+                    ? colors.surfaceSunken
+                    : colors.surface,
+                borderWidth: 1,
+                borderColor: reorderMode ? colors.accent : colors.hairline,
+              })}
+            >
+              <Ionicons
+                name={reorderMode ? 'checkmark' : 'swap-vertical'}
+                size={14}
+                color={reorderMode ? colors.inkInverse : colors.inkSecondary}
+              />
+              <T
+                variant="small"
+                color={reorderMode ? colors.inkInverse : colors.inkSecondary}
+                style={{ fontWeight: '600' }}
+              >
+                {reorderMode ? 'Done' : 'Reorder'}
+              </T>
+            </Pressable>
+          ) : null}
         </Row>
 
         {views.length === 0 ? (
           <Empty
             icon="albums-outline"
-            title="No groups yet"
-            message="Create a group like 'Home Expenses', add its categories, then assign a card to fund it from."
-            actionLabel="Create a group"
-            onAction={() => router.push('/group/new')}
+            title="No categories yet"
+            message="Create a category like 'Home Expenses', add its subcategories, then assign a card to fund it from."
+            actionLabel="Create a category"
+            onAction={() => router.push('/category/new')}
+          />
+        ) : reorderMode ? (
+          <ReorderableGroupList
+            items={views.map((v) => ({ id: v.category.id, view: v }))}
+            renderItem={(item) => renderCategoryTile(item.view)}
+            onReorder={(orderedIds) => state.reorderCategories(orderedIds)}
           />
         ) : (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-            {views.map((view) => {
-              const { group, card, summary } = view;
-              const progressLabel = summary.isFullyFunded
-                ? 'Funded'
-                : `${Math.round(summary.fundedPct)}% funded`;
-
-              return (
-                <GroupTile
-                  key={group.id}
-                  icon={group.icon as never}
-                  color={group.color}
-                  tint={tintFor(group.color, colors)}
-                  name={group.name}
-                  amount={formatMoney(summary.totalMinor, { compact: true })}
-                  subtitle={`${summary.counts.completed}/${summary.categoryCount} done · ${card?.name ?? 'no card'}`}
-                  progressLabel={progressLabel}
-                  onPress={() => router.push(`/group/${group.id}`)}
-                />
-              );
-            })}
+          <View
+            style={{
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              gap: space.md,
+              alignItems: 'flex-start',
+            }}
+          >
+            {views.map((view) => (
+              <View key={view.category.id} style={{ flexGrow: 1, flexBasis: '46%' }}>
+                {renderCategoryTile(view)}
+              </View>
+            ))}
           </View>
         )}
       </View>
 
-      <GradientButton label="New group" icon="add" onPress={() => router.push('/group/new')} />
+      <GradientButton label="New category" icon="add" onPress={() => router.push('/category/new')} />
     </ScrollView>
   );
 }

@@ -109,9 +109,10 @@ export default function LoansScreen() {
         ) : (
           <>
             {/*
-              Debt gets its own warm tint rather than the app's violet gradient
-              — that gradient reads as "your money, your plan"; borrowing is a
-              different kind of number and should not borrow that identity.
+              Debt gets its own warm tint rather than the app's blue/teal
+              gradient — that gradient reads as "your money, your plan";
+              borrowing is a different kind of number and should not borrow
+              that identity.
             */}
             <Surface style={{ gap: space.lg, backgroundColor: colors.pendingSoft, borderColor: colors.pending }}>
               <Row justify="space-between" align="flex-start">

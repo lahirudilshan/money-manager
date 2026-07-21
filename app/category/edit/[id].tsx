@@ -2,13 +2,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ColorPicker, Field, PillSelect, SheetHeader } from '../../../src/components/forms';
+import { Field, PillSelect, SheetHeader } from '../../../src/components/forms';
 import { Button, T } from '../../../src/components/ui';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { groupColors } from '../../../src/theme';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 
-const GROUP_ICONS = [
+const CATEGORY_ICONS = [
   { key: 'home-outline', label: 'Home', icon: 'home-outline' as const },
   { key: 'basket-outline', label: 'Living', icon: 'basket-outline' as const },
   { key: 'card-outline', label: 'Loans', icon: 'card-outline' as const },
@@ -17,24 +16,21 @@ const GROUP_ICONS = [
   { key: 'albums-outline', label: 'Other', icon: 'albums-outline' as const },
 ];
 
-export default function EditGroupScreen() {
+export default function EditCategoryScreen() {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const state = useAppStore();
 
-  const group = useMemo(() => state.groups.find((g) => g.id === id), [state.groups, id]);
+  const category = useMemo(() => state.categories.find((c) => c.id === id), [state.categories, id]);
 
-  const [name, setName] = useState(group?.name ?? '');
-  const [icon, setIcon] = useState(group?.icon ?? GROUP_ICONS[0].key);
-  const [cardId, setCardId] = useState<string | null>(group?.cardId ?? null);
-  const [colorIndex, setColorIndex] = useState(() => {
-    const found = groupColors.indexOf((group?.color ?? '') as (typeof groupColors)[number]);
-    return found >= 0 ? found : 0;
-  });
+  const [name, setName] = useState(category?.name ?? '');
+  const [icon, setIcon] = useState(category?.icon ?? CATEGORY_ICONS[0].key);
+  const [cardId, setCardId] = useState<string | null>(category?.cardId ?? null);
+  const [dueDay, setDueDay] = useState(String(category?.dueDay ?? 1));
 
-  if (!group) {
+  if (!category) {
     return (
       <View
         style={{
@@ -45,7 +41,7 @@ export default function EditGroupScreen() {
           gap: space.md,
         }}
       >
-        <T variant="heading">Group not found</T>
+        <T variant="heading">Category not found</T>
         <Button label="Go back" onPress={() => router.back()} variant="ghost" />
       </View>
     );
@@ -55,11 +51,13 @@ export default function EditGroupScreen() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
-    state.updateGroup(group!.id, {
+    const parsedDueDay = Math.min(31, Math.max(1, Number.parseInt(dueDay, 10) || 1));
+
+    state.updateCategory(category!.id, {
       name: trimmed,
       cardId,
-      color: groupColors[colorIndex],
       icon,
+      dueDay: parsedDueDay,
     });
     router.back();
   }
@@ -75,24 +73,29 @@ export default function EditGroupScreen() {
       }}
       keyboardShouldPersistTaps="handled"
     >
-      <SheetHeader title="Edit group" onClose={() => router.back()} />
+      <SheetHeader title="Edit category" onClose={() => router.back()} />
 
-      <Field label="Name" value={name} onChangeText={setName} placeholder="Group name" />
+      <Field label="Name" value={name} onChangeText={setName} placeholder="Category name" />
 
-      <PillSelect label="Icon" options={GROUP_ICONS} selectedKey={icon} onSelect={setIcon} />
+      <PillSelect label="Icon" options={CATEGORY_ICONS} selectedKey={icon} onSelect={setIcon} />
 
       <PillSelect
         label="Transfer money to"
         options={state.cards.map((card) => ({
           key: card.id,
           label: card.name,
-          color: card.color,
         }))}
         selectedKey={cardId}
         onSelect={setCardId}
       />
 
-      <ColorPicker colors={groupColors} selectedIndex={colorIndex} onSelect={setColorIndex} />
+      <Field
+        label="Due day (1–31)"
+        value={dueDay}
+        onChangeText={setDueDay}
+        placeholder="1"
+        keyboardType="numeric"
+      />
 
       <Button label="Save changes" onPress={handleSave} disabled={!name.trim()} />
     </ScrollView>

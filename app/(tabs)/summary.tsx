@@ -18,7 +18,7 @@ import { formatMoney } from '../../src/core/money';
 import { formatPeriod } from '../../src/core/planning';
 import {
   selectBoardTotals,
-  selectGroupViews,
+  selectCategoryViews,
   selectTotalIncome,
   useAppStore,
 } from '../../src/store/useAppStore';
@@ -26,9 +26,9 @@ import { statusStyle } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
- * The spreadsheet view: every group and every line in one dense, scannable
- * table. This is the "clear view of the whole structure" — the board shows
- * state, this shows the numbers.
+ * The spreadsheet view: every category and every line in one dense,
+ * scannable table. This is the "clear view of the whole structure" — the
+ * board shows state, this shows the numbers.
  */
 export default function SummaryScreen() {
   const { colors, space } = useTheme();
@@ -37,7 +37,7 @@ export default function SummaryScreen() {
   const router = useRouter();
 
   const state = useAppStore();
-  const views = useMemo(() => selectGroupViews(state), [state]);
+  const views = useMemo(() => selectCategoryViews(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
   const income = useMemo(() => selectTotalIncome(state), [state]);
 
@@ -85,18 +85,18 @@ export default function SummaryScreen() {
         ) : null}
       </Surface>
 
-      {/* Every group, every line. */}
+      {/* Every category, every line. */}
       {views.length === 0 ? (
         <Empty
           icon="grid-outline"
           title="Nothing planned"
-          message="Create groups on the board and they will appear here as a full breakdown."
+          message="Create categories on the board and they will appear here as a full breakdown."
         />
       ) : (
         views.map((view) => (
-          <Surface key={view.group.id} style={{ gap: space.sm }} padded={false}>
+          <Surface key={view.category.id} style={{ gap: space.sm }} padded={false}>
             <Pressable
-              onPress={() => router.push(`/group/${view.group.id}`)}
+              onPress={() => router.push(`/category/${view.category.id}`)}
               accessibilityRole="button"
               style={({ pressed }) => ({
                 padding: space.lg,
@@ -111,12 +111,12 @@ export default function SummaryScreen() {
                       width: 3,
                       height: 22,
                       borderRadius: 2,
-                      backgroundColor: view.group.color,
+                      backgroundColor: view.category.color,
                     }}
                   />
                   <View style={{ flex: 1 }}>
                     <T variant="bodyStrong" numberOfLines={1}>
-                      {view.group.name}
+                      {view.category.name}
                     </T>
                     <T variant="caption" tone="muted">
                       {view.card?.name ?? 'No card'}
@@ -142,44 +142,55 @@ export default function SummaryScreen() {
             <Divider />
 
             <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md, gap: 2 }}>
-              {view.categories.map((category) => {
-                const style = statusStyle(category.status, colors);
-                const amount = category.actualMinor ?? category.plannedMinor;
+              {view.subcategories.map((subcategory) => {
+                const style = statusStyle(subcategory.status, colors);
+                const amount = subcategory.actualMinor ?? subcategory.plannedMinor;
 
                 return (
-                  <Row key={category.id} justify="space-between" style={{ paddingVertical: 5 }}>
-                    <Row gap={space.sm} style={{ flex: 1 }}>
-                      {/* Status dot + the row's own text — never colour alone. */}
-                      <View
-                        style={{
-                          width: 7,
-                          height: 7,
-                          borderRadius: 4,
-                          backgroundColor: style.fg,
-                        }}
-                      />
-                      <T
-                        variant="small"
-                        tone={category.status === 'completed' ? 'muted' : 'secondary'}
-                        numberOfLines={1}
-                        style={{ flex: 1 }}
-                      >
-                        {category.name}
-                      </T>
+                  <Pressable
+                    key={subcategory.id}
+                    onPress={() => router.push(`/subcategory/${subcategory.id}`)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${subcategory.name}, ${style.label}`}
+                    style={({ pressed }) => ({
+                      paddingVertical: 5,
+                      opacity: pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Row justify="space-between">
+                      <Row gap={space.sm} style={{ flex: 1 }}>
+                        {/* Status dot + the row's own text — never colour alone. */}
+                        <View
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: 4,
+                            backgroundColor: style.fg,
+                          }}
+                        />
+                        <T
+                          variant="small"
+                          tone={subcategory.status === 'completed' ? 'muted' : 'secondary'}
+                          numberOfLines={1}
+                          style={{ flex: 1 }}
+                        >
+                          {subcategory.name}
+                        </T>
+                      </Row>
+                      <Row gap={space.sm}>
+                        <T variant="caption" color={style.fg}>
+                          {style.label}
+                        </T>
+                        <T
+                          variant="figure"
+                          tone={subcategory.status === 'completed' ? 'muted' : 'ink'}
+                          style={{ minWidth: 92, textAlign: 'right' }}
+                        >
+                          {formatMoney(amount)}
+                        </T>
+                      </Row>
                     </Row>
-                    <Row gap={space.sm}>
-                      <T variant="caption" color={style.fg}>
-                        {style.label}
-                      </T>
-                      <T
-                        variant="figure"
-                        tone={category.status === 'completed' ? 'muted' : 'ink'}
-                        style={{ minWidth: 92, textAlign: 'right' }}
-                      >
-                        {formatMoney(amount)}
-                      </T>
-                    </Row>
-                  </Row>
+                  </Pressable>
                 );
               })}
             </View>

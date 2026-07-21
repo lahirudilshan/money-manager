@@ -2,13 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
 import { Alert, Modal, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ColorPicker, Field, PillSelect, SheetHeader } from '../../src/components/forms';
+import { BankCardTile } from '../../src/components/BankCardTile';
+import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
 import {
   Button,
   Divider,
   Empty,
   FundingBar,
-  Glyph,
   GradientCard,
   Label,
   Row,
@@ -19,7 +19,6 @@ import {
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { selectCardViews, useAppStore, type CardView } from '../../src/store/useAppStore';
-import { groupColors } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 const CARD_KINDS = [
@@ -41,32 +40,65 @@ export default function CardsScreen() {
   const views = useMemo(() => selectCardViews(state), [state]);
 
   const [open, setOpen] = useState(false);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [last4, setLast4] = useState('');
   const [kind, setKind] = useState<CardKind>('bank');
   const [opening, setOpening] = useState('');
   const [target, setTarget] = useState('');
-  const [colorIndex, setColorIndex] = useState(0);
 
   const totalHeld = views.reduce((sum, view) => sum + view.balanceMinor, 0);
 
-  function handleCreate() {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-
-    state.addCard({
-      name: trimmed,
-      kind,
-      color: groupColors[colorIndex],
-      icon: CARD_KINDS.find((k) => k.key === kind)?.icon ?? 'card-outline',
-      openingBalanceMinor: parseAmount(opening) ?? 0,
-      targetMinor: kind === 'goal' ? parseAmount(target) : null,
-      sortOrder: state.cards.length,
-    });
-
+  function resetForm() {
     setName('');
+    setBankName('');
+    setLast4('');
     setOpening('');
     setTarget('');
     setKind('bank');
+    setEditingCardId(null);
+  }
+
+  function openCreate() {
+    resetForm();
+    setOpen(true);
+  }
+
+  function openEdit(cardId: string) {
+    const card = state.cards.find((c) => c.id === cardId);
+    if (!card) return;
+    setEditingCardId(card.id);
+    setName(card.name);
+    setBankName(card.bankName ?? '');
+    setLast4(card.last4 ?? '');
+    setKind(card.kind as CardKind);
+    setOpening(String(card.openingBalanceMinor / 100));
+    setTarget(card.targetMinor ? String(card.targetMinor / 100) : '');
+    setOpen(true);
+  }
+
+  function handleSave() {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    const patch = {
+      name: trimmed,
+      kind,
+      bankName: bankName.trim() || null,
+      last4: last4.trim() || null,
+      icon: CARD_KINDS.find((k) => k.key === kind)?.icon ?? 'card-outline',
+      openingBalanceMinor: parseAmount(opening) ?? 0,
+      targetMinor: kind === 'goal' ? parseAmount(target) : null,
+    };
+
+    if (editingCardId) {
+      state.updateCard(editingCardId, patch);
+    } else {
+      state.addCard({ ...patch, sortOrder: state.cards.length });
+    }
+
+    resetForm();
     setOpen(false);
   }
 
@@ -85,7 +117,7 @@ export default function CardsScreen() {
         <ScreenHeader
           eyebrow="DESTINATIONS"
           title="Cards"
-          action={{ icon: 'add', onPress: () => setOpen(true), label: 'Add card' }}
+          action={{ icon: 'add', onPress: openCreate, label: 'Add card' }}
         />
 
         <GradientCard>
@@ -106,10 +138,12 @@ export default function CardsScreen() {
             title="No cards yet"
             message="Add the accounts your groups transfer money into."
             actionLabel="Add a card"
-            onAction={() => setOpen(true)}
+            onAction={openCreate}
           />
         ) : (
-          views.map((view) => <CardRow key={view.card.id} view={view} />)
+          views.map((view) => (
+            <CardRow key={view.card.id} view={view} onEdit={() => openEdit(view.card.id)} />
+          ))
         )}
       </ScrollView>
 
@@ -124,7 +158,7 @@ export default function CardsScreen() {
           contentContainerStyle={{ padding: space.lg, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <SheetHeader title="New card" onClose={() => setOpen(false)} />
+          <SheetHeader title={editingCardId ? 'Edit card' : 'New card'} onClose={() => setOpen(false)} />
           <Field
             label="Name"
             value={name}
@@ -137,6 +171,19 @@ export default function CardsScreen() {
             options={CARD_KINDS}
             selectedKey={kind}
             onSelect={(key) => setKind(key as CardKind)}
+          />
+          <Field
+            label="Bank name (optional)"
+            value={bankName}
+            onChangeText={setBankName}
+            placeholder="e.g. HNB"
+          />
+          <Field
+            label="Last 4 digits (optional)"
+            value={last4}
+            onChangeText={(text) => setLast4(text.replace(/\D/g, '').slice(0, 4))}
+            placeholder="1234"
+            keyboardType="numeric"
           />
           <Field
             label="Opening balance"
@@ -154,19 +201,18 @@ export default function CardsScreen() {
               keyboardType="numeric"
             />
           ) : null}
-          <ColorPicker
-            colors={groupColors}
-            selectedIndex={colorIndex}
-            onSelect={setColorIndex}
+          <Button
+            label={editingCardId ? 'Save changes' : 'Create card'}
+            onPress={handleSave}
+            disabled={!name.trim()}
           />
-          <Button label="Create card" onPress={handleCreate} disabled={!name.trim()} />
         </ScrollView>
       </Modal>
     </>
   );
 }
 
-function CardRow({ view }: { view: CardView }) {
+function CardRow({ view, onEdit }: { view: CardView; onEdit: () => void }) {
   const { colors, space } = useTheme();
   const state = useAppStore();
   const { card } = view;
@@ -177,78 +223,87 @@ function CardRow({ view }: { view: CardView }) {
     : 0;
 
   function confirmDelete() {
-    Alert.alert(`Delete ${card.name}?`, 'Groups pointing at it will need a new card.', [
+    Alert.alert(`Delete ${card.name}?`, 'Categories pointing at it will need a new card.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => state.deleteCard(card.id) },
     ]);
   }
 
   return (
-    <Surface style={{ gap: space.md }}>
-      <Row>
-        <Glyph icon={card.icon as never} color={card.color} size={44} />
-        <View style={{ flex: 1, gap: 1 }}>
-          <T variant="heading">{card.name}</T>
-          <T variant="caption" tone="muted" numberOfLines={1}>
-            {view.groupNames.length > 0
-              ? view.groupNames.join(' · ')
-              : 'No groups assigned'}
-          </T>
-        </View>
-        <Ionicons
-          name="trash-outline"
-          size={18}
-          color={colors.inkMuted}
-          onPress={confirmDelete}
-          suppressHighlighting
-        />
-      </Row>
+    <View style={{ gap: space.sm }}>
+      <BankCardTile card={card} onPress={onEdit} />
 
-      <Row justify="space-between" align="flex-end">
-        <View style={{ gap: 1 }}>
-          <Label>BALANCE</Label>
-          <T variant="display">{formatMoney(view.balanceMinor)}</T>
-        </View>
-        {view.committedMinor > 0 ? (
-          <View style={{ alignItems: 'flex-end', gap: 1 }}>
-            <Label>COMMITTED</Label>
-            <T variant="figure" color={colors.pending}>
-              {formatMoney(view.committedMinor, { compact: true })}
+      <Surface style={{ gap: space.md }}>
+        <Row>
+          <View style={{ flex: 1, gap: 1 }}>
+            <T variant="caption" tone="muted" numberOfLines={1}>
+              {view.categoryNames.length > 0
+                ? view.categoryNames.join(' · ')
+                : 'No categories assigned'}
             </T>
           </View>
+          <Ionicons
+            name="create-outline"
+            size={18}
+            color={colors.inkMuted}
+            onPress={onEdit}
+            suppressHighlighting
+          />
+          <Ionicons
+            name="trash-outline"
+            size={18}
+            color={colors.inkMuted}
+            onPress={confirmDelete}
+            suppressHighlighting
+          />
+        </Row>
+
+        <Row justify="space-between" align="flex-end">
+          <View style={{ gap: 1 }}>
+            <Label>BALANCE</Label>
+            <T variant="display">{formatMoney(view.balanceMinor)}</T>
+          </View>
+          {view.committedMinor > 0 ? (
+            <View style={{ alignItems: 'flex-end', gap: 1 }}>
+              <Label>COMMITTED</Label>
+              <T variant="figure" color={colors.pending}>
+                {formatMoney(view.committedMinor, { compact: true })}
+              </T>
+            </View>
+          ) : null}
+        </Row>
+
+        {hasGoal ? (
+          <View style={{ gap: space.xs }}>
+            <FundingBar pct={goalPct} color={colors.accent} />
+            <Row justify="space-between">
+              <T variant="caption" tone="muted">
+                {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
+              </T>
+              <T variant="caption" tone="muted">
+                {formatMoney(Math.max(0, card.targetMinor! - view.balanceMinor), {
+                  compact: true,
+                })}{' '}
+                to go
+              </T>
+            </Row>
+          </View>
         ) : null}
-      </Row>
 
-      {hasGoal ? (
-        <View style={{ gap: space.xs }}>
-          <FundingBar pct={goalPct} color={card.color} />
-          <Row justify="space-between">
-            <T variant="caption" tone="muted">
-              {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
-            </T>
-            <T variant="caption" tone="muted">
-              {formatMoney(Math.max(0, card.targetMinor! - view.balanceMinor), {
-                compact: true,
-              })}{' '}
-              to go
-            </T>
-          </Row>
-        </View>
-      ) : null}
-
-      {view.fundedInMinor > 0 ? (
-        <>
-          <Divider />
-          <Row justify="space-between">
-            <T variant="caption" tone="muted">
-              Transferred in this month
-            </T>
-            <T variant="figure" color={colors.completed}>
-              +{formatMoney(view.fundedInMinor)}
-            </T>
-          </Row>
-        </>
-      ) : null}
-    </Surface>
+        {view.fundedInMinor > 0 ? (
+          <>
+            <Divider />
+            <Row justify="space-between">
+              <T variant="caption" tone="muted">
+                Transferred in this month
+              </T>
+              <T variant="figure" color={colors.completed}>
+                +{formatMoney(view.fundedInMinor)}
+              </T>
+            </Row>
+          </>
+        ) : null}
+      </Surface>
+    </View>
   );
 }
