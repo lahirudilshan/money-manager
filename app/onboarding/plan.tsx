@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
+import { DayPicker } from '../../src/components/DayPicker';
 import { DragList } from '../../src/components/DragList';
 import { Divider, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
@@ -395,13 +396,10 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                 </Row>
               </View>
 
-              <View style={{ gap: space.sm }}>
-                <Label>PAYMENT DAY</Label>
-                <DayGrid
-                  value={line.dueDay}
-                  onChange={(dueDay) => draft.updateLine(line.id, { dueDay })}
-                />
-              </View>
+              <DayPicker
+                value={line.dueDay}
+                onChange={(dueDay) => draft.updateLine(line.id, { dueDay })}
+              />
 
               {state.cards.length > 0 ? (
                 <View style={{ gap: space.sm }}>
@@ -504,49 +502,3 @@ function Chip({
   );
 }
 
-/**
- * A 1–31 calendar-style grid, 7 to a row like a month view — no horizontal
- * scrolling to hunt through. The last row is short, which reads naturally as
- * the tail of a month.
- */
-function DayGrid({ value, onChange }: { value: number; onChange: (day: number) => void }) {
-  const { colors, radius, space } = useTheme();
-  const days = Array.from({ length: 31 }, (_, index) => index + 1);
-
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
-      {days.map((day) => {
-        const selected = day === value;
-        return (
-          <Pressable
-            key={day}
-            onPress={() => onChange(day)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={`Day ${day}`}
-            style={({ pressed }) => ({
-              // 7 columns: each cell is (100% - 6 gaps) / 7 ≈ 13.2%.
-              width: '13.1%',
-              aspectRatio: 1,
-              borderRadius: radius.md,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: 1.5,
-              borderColor: selected ? colors.accent : colors.hairline,
-              backgroundColor: selected ? colors.accent : colors.surface,
-              opacity: pressed ? 0.7 : 1,
-            })}
-          >
-            <T
-              variant="small"
-              color={selected ? colors.inkInverse : colors.inkSecondary}
-              style={{ fontWeight: selected ? '800' : '500' }}
-            >
-              {day}
-            </T>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}

@@ -3,34 +3,31 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Field, SheetHeader } from '../../src/components/forms';
 import {
   Button,
   Divider,
-  Empty,
   FundingBar,
   Glyph,
   Label,
   Row,
-  StatusPill,
   Surface,
   T,
 } from '../../src/components/ui';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
+import { BankLogo } from '../../src/components/BankLogo';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { formatPeriod } from '../../src/core/planning';
+import { dueDateFor, formatPeriod } from '../../src/core/planning';
+import { resolveBrand } from '../../src/data/banks';
 import { selectCategoryView, useAppStore } from '../../src/store/useAppStore';
 import { statusStyle } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
-const FREQUENCIES = [
-  { key: 'monthly', label: 'Monthly' },
-  { key: 'one_time', label: 'One-time' },
-  { key: 'yearly', label: 'Yearly' },
-];
-
 /**
- * A category: fund it in one action, then tick each subcategory through
- * pending -> transferred -> completed.
+ * A category's overview and settings.
+ *
+ * Working through the bills happens on the List card — this page is where you
+ * see the whole category's money at a glance, record the bulk transfer (with
+ * an exact amount when it wasn't the full plan), and change its settings.
  */
 export default function CategoryDetailScreen() {
   const { colors, space } = useTheme();
@@ -43,10 +40,6 @@ export default function CategoryDetailScreen() {
 
   const [fundOpen, setFundOpen] = useState(false);
   const [fundAmount, setFundAmount] = useState('');
-  const [subOpen, setSubOpen] = useState(false);
-  const [subName, setSubName] = useState('');
-  const [subAmount, setSubAmount] = useState('');
-  const [subFrequency, setSubFrequency] = useState<'monthly' | 'one_time' | 'yearly'>('monthly');
 
   if (!view) {
     return (
@@ -65,13 +58,16 @@ export default function CategoryDetailScreen() {
     );
   }
 
-  const { category, card, subcategories, summary } = view;
+  const { category, card, summary } = view;
+  const transferred = view.transferStatus === 'transferred';
+  const transferStyle = statusStyle('transferred', colors);
+  const brand = card
+    ? resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name })
+    : undefined;
+  const dueDate = dueDateFor(state.period, category.dueDay);
 
   function openFundSheet() {
-    // Prefill with what is still outstanding — the common case is one tap.
-    setFundAmount(
-      summary.shortfallMinor > 0 ? String(summary.shortfallMinor / 100) : '',
-    );
+    setFundAmount(summary.shortfallMinor > 0 ? String(summary.shortfallMinor / 100) : '');
     setFundOpen(true);
   }
 
@@ -83,23 +79,8 @@ export default function CategoryDetailScreen() {
     setFundAmount('');
   }
 
-  function handleAddSubcategory() {
-    const name = subName.trim();
-    if (!name) return;
-    state.addSubcategory({
-      name,
-      categoryId: category.id,
-      plannedMinor: parseAmount(subAmount) ?? 0,
-      frequency: subFrequency,
-    });
-    setSubName('');
-    setSubAmount('');
-    setSubFrequency('monthly');
-    setSubOpen(false);
-  }
-
   function confirmDelete() {
-    Alert.alert(`Delete ${category.name}?`, 'Its subcategories will be removed too.', [
+    Alert.alert(`Delete ${category.name}?`, 'Its bills will be removed too.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -118,12 +99,13 @@ export default function CategoryDetailScreen() {
         style={{ flex: 1, backgroundColor: colors.canvas }}
         contentContainerStyle={{
           paddingTop: insets.top + space.md,
-          paddingBottom: space.xxxl * 2,
+          paddingBottom: space.xxxl,
           paddingHorizontal: space.lg,
           gap: space.lg,
         }}
         showsVerticalScrollIndicator={false}
       >
+        {/* Nav row. */}
         <Row justify="space-between">
           <Pressable
             onPress={() => router.back()}
@@ -133,107 +115,123 @@ export default function CategoryDetailScreen() {
           >
             <Ionicons name="chevron-back" size={26} color={colors.ink} />
           </Pressable>
-          <Row gap={space.sm}>
-            <Pressable
-              onPress={() => router.push(`/category/edit/${category.id}`)}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Edit category"
-            >
-              <Ionicons name="create-outline" size={22} color={colors.inkSecondary} />
-            </Pressable>
-            <Pressable
-              onPress={confirmDelete}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Delete category"
-            >
-              <Ionicons name="trash-outline" size={21} color={colors.danger} />
-            </Pressable>
-          </Row>
+          <Pressable
+            onPress={() => router.push(`/category/edit/${category.id}`)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Edit category"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Ionicons name="create-outline" size={22} color={colors.inkSecondary} />
+          </Pressable>
         </Row>
 
-        {/* Category header: identity, destination card, and the money. */}
-        <View style={{ gap: space.md }}>
-          <Row>
-            <Glyph icon={category.icon as never} color={category.color} size={46} />
-            <View style={{ flex: 1, gap: 2 }}>
-              <T variant="title">{category.name}</T>
-              <T variant="caption" tone="muted">
-                {formatPeriod(state.period)}
+        {/* Identity. */}
+        <Row>
+          <Glyph icon={category.icon as never} color={category.color} size={48} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <T variant="title">{category.name}</T>
+            <T variant="caption" tone="muted">
+              {formatPeriod(state.period)} · {summary.subcategoryCount} bill
+              {summary.subcategoryCount === 1 ? '' : 's'}
+            </T>
+          </View>
+        </Row>
+
+        {/* Money overview. */}
+        <Surface style={{ gap: space.lg }}>
+          <Row justify="space-between" align="flex-start">
+            <View style={{ gap: 2 }}>
+              <Label>TOTAL PLAN</Label>
+              <T variant="display">{formatMoney(summary.totalMinor)}</T>
+            </View>
+            <View style={{ alignItems: 'flex-end', gap: 2 }}>
+              <Label>PAID</Label>
+              <T
+                variant="figureLarge"
+                color={summary.isSettled ? colors.completed : colors.ink}
+              >
+                {formatMoney(summary.paidMinor)}
               </T>
             </View>
           </Row>
 
-          <Surface style={{ gap: space.lg }}>
-            <Row justify="space-between" align="flex-start">
-              <View style={{ gap: 2 }}>
-                <Label>TOTAL PLAN</Label>
-                <T variant="display">{formatMoney(summary.totalMinor)}</T>
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                <Label>TRANSFERRED</Label>
-                <T
-                  variant="figureLarge"
-                  color={summary.isFullyFunded ? colors.completed : colors.pending}
-                >
-                  {formatMoney(summary.fundedMinor)}
-                </T>
-              </View>
+          <View style={{ gap: space.sm }}>
+            <FundingBar
+              pct={
+                summary.subcategoryCount > 0
+                  ? (summary.counts.paid / summary.subcategoryCount) * 100
+                  : 0
+              }
+              color={category.color}
+              height={10}
+              surplus={summary.isSettled}
+            />
+            <Row justify="space-between">
+              <T variant="caption" tone="muted">
+                {summary.counts.paid}/{summary.subcategoryCount} bills paid
+              </T>
+              <T
+                variant="caption"
+                color={summary.outstandingMinor > 0 ? colors.pending : colors.completed}
+              >
+                {summary.outstandingMinor > 0
+                  ? `${formatMoney(summary.outstandingMinor, { compact: true })} left`
+                  : 'All paid'}
+              </T>
             </Row>
+          </View>
+        </Surface>
 
-            <View style={{ gap: space.sm }}>
-              <FundingBar
-                pct={summary.fundedPct}
-                color={category.color}
-                height={10}
-                surplus={summary.surplusMinor > 0}
-              />
-              <Row justify="space-between">
-                <T variant="caption" tone="muted">
-                  {Math.round(summary.fundedPct)}% funded
-                </T>
-                {summary.shortfallMinor > 0 ? (
-                  <T variant="caption" color={colors.pending}>
-                    {formatMoney(summary.shortfallMinor)} short
-                  </T>
-                ) : summary.surplusMinor > 0 ? (
-                  <T variant="caption" color={colors.completed}>
-                    {formatMoney(summary.surplusMinor)} extra
-                  </T>
-                ) : (
-                  <T variant="caption" color={colors.completed}>
-                    Fully funded
-                  </T>
-                )}
-              </Row>
+        {/* Bulk transfer — the salary→account move. */}
+        <View style={{ gap: space.sm }}>
+          <Label>BULK TRANSFER</Label>
+          <Pressable
+            onPress={() => state.toggleCategoryTransfer(category.id)}
+            accessibilityRole="button"
+            accessibilityState={{ checked: transferred }}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.md,
+              padding: space.lg,
+              borderRadius: 16,
+              borderWidth: 1.5,
+              borderColor: transferred ? transferStyle.fg : colors.hairline,
+              backgroundColor: transferred ? transferStyle.bg : colors.surface,
+              opacity: pressed ? 0.85 : 1,
+            })}
+          >
+            <Ionicons
+              name={transferred ? 'checkmark-circle' : 'swap-horizontal'}
+              size={26}
+              color={transferred ? transferStyle.fg : colors.inkSecondary}
+            />
+            <View style={{ flex: 1 }}>
+              <T
+                variant="bodyStrong"
+                color={transferred ? transferStyle.fg : colors.ink}
+              >
+                {transferred ? 'Money transferred' : 'Not transferred yet'}
+              </T>
+              <T
+                variant="caption"
+                color={transferred ? transferStyle.fg : colors.inkMuted}
+                style={transferred ? { opacity: 0.85 } : undefined}
+              >
+                {transferred
+                  ? 'The account holds this category’s money'
+                  : 'Tap when the bulk money lands'}
+              </T>
             </View>
+          </Pressable>
 
-            <Divider />
-
-            {/* Where this category's money is transferred to. */}
-            <Pressable
-              onPress={() => router.push(`/category/edit/${category.id}`)}
-              accessibilityRole="button"
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-            >
-              <Row>
-                <Ionicons name="card-outline" size={17} color={colors.inkMuted} />
-                <View style={{ flex: 1 }}>
-                  <T variant="caption" tone="muted">
-                    Funded to
-                  </T>
-                  <T variant="bodyStrong">{card?.name ?? 'No card assigned'}</T>
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-              </Row>
-            </Pressable>
-          </Surface>
-
+          {/* Record an exact partial amount, for when it wasn't the full plan. */}
           <Row gap={space.sm}>
             <Button
-              label={summary.shortfallMinor > 0 ? 'Transfer money' : 'Add transfer'}
-              icon="swap-horizontal"
+              label="Log exact amount"
+              icon="cash-outline"
+              variant="secondary"
               onPress={openFundSheet}
               style={{ flex: 1 }}
             />
@@ -246,152 +244,41 @@ export default function CategoryDetailScreen() {
               />
             ) : null}
           </Row>
+          {summary.fundedMinor > 0 ? (
+            <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+              {formatMoney(summary.fundedMinor)} logged this month
+            </T>
+          ) : null}
         </View>
 
-        {/* The checklist. */}
-        <View style={{ gap: space.md }}>
-          <Row justify="space-between">
-            <Label>SUBCATEGORIES</Label>
-            <Row gap={space.md}>
-              <Pressable
-                onPress={() => state.markCategory(category.id, 'paid')}
-                hitSlop={8}
-                accessibilityRole="button"
-              >
-                <T variant="caption" tone="accent">
-                  Mark all paid
-                </T>
-              </Pressable>
-              <Pressable
-                onPress={() => state.markCategory(category.id, 'pending')}
-                hitSlop={8}
-                accessibilityRole="button"
-              >
-                <T variant="caption" tone="muted">
-                  Reset
-                </T>
-              </Pressable>
-            </Row>
-          </Row>
-
-          {subcategories.length === 0 ? (
-            <Empty
-              icon="pricetag-outline"
-              title="No subcategories"
-              message="Add the individual bills that make up this category."
-              actionLabel="Add subcategory"
-              onAction={() => setSubOpen(true)}
+        {/* Settings summary. */}
+        <View style={{ gap: space.sm }}>
+          <Label>SETTINGS</Label>
+          <Surface padded={false}>
+            <SettingRow
+              label="Funded to"
+              value={card?.name ?? 'No account'}
+              leading={brand ? <BankLogo brand={brand} size={28} /> : undefined}
+              onPress={() => router.push(`/category/edit/${category.id}`)}
             />
-          ) : (
-            <Surface padded={false} style={{ paddingVertical: space.xs }}>
-              {subcategories.map((subcategory, index) => {
-                const style = statusStyle(subcategory.status, colors);
-                const amount = subcategory.actualMinor ?? subcategory.plannedMinor;
-
-                return (
-                  <View key={subcategory.id}>
-                    <Row style={{ paddingHorizontal: space.lg }}>
-                      {/* Its own tap target: advances the status. Separate
-                          from the row below so "change status" and "view
-                          detail" are two distinct, unambiguous taps. */}
-                      <Pressable
-                        onPress={() => state.cycleStatus(subcategory.id)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Mark ${subcategory.name} as next status. Currently ${style.label}.`}
-                        hitSlop={10}
-                        style={({ pressed }) => ({
-                          width: 40,
-                          height: 40,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          opacity: pressed ? 0.6 : 1,
-                        })}
-                      >
-                        <View
-                          style={{
-                            width: 26,
-                            height: 26,
-                            borderRadius: 13,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            backgroundColor:
-                              subcategory.status === 'pending' ? 'transparent' : style.fg,
-                            borderWidth: subcategory.status === 'pending' ? 2 : 0,
-                            borderColor: colors.hairlineStrong,
-                          }}
-                        >
-                          {subcategory.status === 'paid' ? (
-                            <Ionicons name="checkmark" size={15} color="#FFFFFF" />
-                          ) : null}
-                        </View>
-                      </Pressable>
-
-                      {/* The rest of the row: tap to view/edit detail. */}
-                      <Pressable
-                        onPress={() => router.push(`/subcategory/${subcategory.id}`)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${subcategory.name}, ${style.label}. View detail.`}
-                        style={({ pressed }) => ({
-                          flex: 1,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          paddingVertical: space.md,
-                          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-                        })}
-                      >
-                        <View style={{ flex: 1, gap: 2 }}>
-                          <T
-                            variant="body"
-                            numberOfLines={1}
-                            style={
-                              subcategory.status === 'paid'
-                                ? { textDecorationLine: 'line-through' }
-                                : undefined
-                            }
-                            tone={subcategory.status === 'paid' ? 'muted' : 'ink'}
-                          >
-                            {subcategory.name}
-                          </T>
-                          <StatusPill status={subcategory.status} compact />
-                        </View>
-
-                        <T
-                          variant="figure"
-                          tone={subcategory.status === 'paid' ? 'muted' : 'ink'}
-                        >
-                          {formatMoney(amount)}
-                        </T>
-                        <Ionicons
-                          name="chevron-forward"
-                          size={14}
-                          color={colors.inkMuted}
-                          style={{ marginLeft: space.xs }}
-                        />
-                      </Pressable>
-                    </Row>
-                    {index < subcategories.length - 1 ? (
-                      <Divider style={{ marginLeft: 56 }} />
-                    ) : null}
-                  </View>
-                );
-              })}
-            </Surface>
-          )}
-
-          <Button
-            label="Add subcategory"
-            icon="add"
-            variant="secondary"
-            onPress={() => setSubOpen(true)}
-          />
-
-          <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
-            Tap the circle to advance status · tap the row for details
-          </T>
+            <Divider style={{ marginHorizontal: space.lg }} />
+            <SettingRow
+              label="Payment day"
+              value={dueDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+              onPress={() => router.push(`/category/edit/${category.id}`)}
+            />
+          </Surface>
         </View>
+
+        <Button
+          label="Delete category"
+          variant="danger"
+          icon="trash-outline"
+          onPress={confirmDelete}
+        />
       </ScrollView>
 
-      {/* Fund sheet */}
+      {/* Log-exact-amount sheet. */}
       <Modal
         visible={fundOpen}
         animationType="slide"
@@ -403,7 +290,7 @@ export default function CategoryDetailScreen() {
           contentContainerStyle={{ padding: space.lg, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <SheetHeader title="Transfer money" onClose={() => setFundOpen(false)} />
+          <SheetHeader title="Log transfer" onClose={() => setFundOpen(false)} />
 
           <Surface style={{ gap: space.sm }}>
             <Row>
@@ -411,7 +298,7 @@ export default function CategoryDetailScreen() {
               <View style={{ flex: 1 }}>
                 <T variant="bodyStrong">{category.name}</T>
                 <T variant="caption" tone="muted">
-                  to {card?.name ?? 'no card assigned'}
+                  to {card?.name ?? 'no account assigned'}
                 </T>
               </View>
             </Row>
@@ -424,14 +311,14 @@ export default function CategoryDetailScreen() {
             </Row>
             <Row justify="space-between">
               <T variant="small" tone="secondary">
-                Already transferred
+                Already logged
               </T>
               <T variant="figure">{formatMoney(summary.fundedMinor)}</T>
             </Row>
           </Surface>
 
           <Field
-            label="Amount to transfer"
+            label="Amount transferred"
             value={fundAmount}
             onChangeText={setFundAmount}
             placeholder="0"
@@ -440,60 +327,54 @@ export default function CategoryDetailScreen() {
           />
 
           <T variant="caption" tone="muted">
-            Transferring marks every pending subcategory in this category as
-            transferred. Tick them off as you actually pay them.
+            This records the money as moved to the account and marks the category
+            transferred. It doesn’t pay any bill — tick those off on the List.
           </T>
 
           <Button
-            label={`Transfer ${formatMoney(parseAmount(fundAmount) ?? 0)}`}
+            label={`Log ${formatMoney(parseAmount(fundAmount) ?? 0)}`}
             icon="swap-horizontal"
             onPress={handleFund}
             disabled={!parseAmount(fundAmount)}
           />
         </ScrollView>
       </Modal>
-
-      {/* Add subcategory sheet — the category already exists, so this is
-          just the leaf-adding form, not the combined CategorySheet. */}
-      <Modal
-        visible={subOpen}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setSubOpen(false)}
-      >
-        <ScrollView
-          style={{ flex: 1, backgroundColor: colors.canvas }}
-          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <SheetHeader title="New subcategory" onClose={() => setSubOpen(false)} />
-          <Field
-            label="Name"
-            value={subName}
-            onChangeText={setSubName}
-            placeholder="e.g. Electricity"
-            autoFocus
-          />
-          <Field
-            label="Planned amount"
-            value={subAmount}
-            onChangeText={setSubAmount}
-            placeholder="0"
-            keyboardType="numeric"
-          />
-          <PillSelect
-            label="Frequency"
-            options={FREQUENCIES}
-            selectedKey={subFrequency}
-            onSelect={(key) => setSubFrequency(key as typeof subFrequency)}
-          />
-          <Button
-            label="Add to category"
-            onPress={handleAddSubcategory}
-            disabled={!subName.trim()}
-          />
-        </ScrollView>
-      </Modal>
     </>
+  );
+}
+
+/** A tappable settings summary row with an optional leading visual. */
+function SettingRow({
+  label,
+  value,
+  leading,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  leading?: React.ReactNode;
+  onPress: () => void;
+}) {
+  const { colors, space } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}`}
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        padding: space.lg,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      {leading}
+      <T variant="body" tone="secondary" style={{ flex: 1 }}>
+        {label}
+      </T>
+      <T variant="bodyStrong">{value}</T>
+      <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+    </Pressable>
   );
 }

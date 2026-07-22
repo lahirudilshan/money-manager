@@ -1,18 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
 import { BankLogo } from '../../src/components/BankLogo';
 import {
-  Button,
   Divider,
   Empty,
   GradientButton,
   GradientCard,
   Glyph,
   Label,
+  PinnedFooter,
   Row,
   Surface,
   T,
@@ -194,8 +194,12 @@ export default function IncomeScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setOpen(false)}
       >
-        <ScrollView
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, backgroundColor: colors.canvas }}
+        >
+        <ScrollView
+          style={{ flex: 1 }}
           contentContainerStyle={{ padding: space.lg, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
@@ -279,12 +283,17 @@ export default function IncomeScreen() {
               </View>
             </View>
           ) : null}
-          <Button
+        </ScrollView>
+
+        <PinnedFooter>
+          <GradientButton
             label="Add income"
+            icon="add"
             onPress={handleCreate}
             disabled={!name.trim() || preview <= 0}
           />
-        </ScrollView>
+        </PinnedFooter>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );

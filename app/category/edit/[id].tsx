@@ -1,9 +1,10 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DayPicker } from '../../../src/components/DayPicker';
 import { Field, PillSelect, SheetHeader } from '../../../src/components/forms';
-import { Button, T } from '../../../src/components/ui';
+import { Button, GradientButton, PinnedFooter, T } from '../../../src/components/ui';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 
@@ -28,7 +29,7 @@ export default function EditCategoryScreen() {
   const [name, setName] = useState(category?.name ?? '');
   const [icon, setIcon] = useState(category?.icon ?? CATEGORY_ICONS[0].key);
   const [cardId, setCardId] = useState<string | null>(category?.cardId ?? null);
-  const [dueDay, setDueDay] = useState(String(category?.dueDay ?? 1));
+  const [dueDay, setDueDay] = useState(category?.dueDay ?? 1);
 
   if (!category) {
     return (
@@ -51,53 +52,55 @@ export default function EditCategoryScreen() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
-    const parsedDueDay = Math.min(31, Math.max(1, Number.parseInt(dueDay, 10) || 1));
-
     state.updateCategory(category!.id, {
       name: trimmed,
       cardId,
       icon,
-      dueDay: parsedDueDay,
+      dueDay: Math.min(31, Math.max(1, dueDay)),
     });
     router.back();
   }
 
   return (
-    <ScrollView
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1, backgroundColor: colors.canvas }}
-      contentContainerStyle={{
-        paddingTop: insets.top + space.md,
-        paddingBottom: space.xxxl,
-        paddingHorizontal: space.lg,
-        gap: space.lg,
-      }}
-      keyboardShouldPersistTaps="handled"
     >
-      <SheetHeader title="Edit category" onClose={() => router.back()} />
+      <View style={{ paddingTop: insets.top + space.md, paddingHorizontal: space.lg }}>
+        <SheetHeader title="Edit category" onClose={() => router.back()} />
+      </View>
 
-      <Field label="Name" value={name} onChangeText={setName} placeholder="Category name" />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: space.lg,
+          paddingBottom: space.xl,
+          paddingHorizontal: space.lg,
+          gap: space.lg,
+        }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Field label="Name" value={name} onChangeText={setName} placeholder="Category name" />
 
-      <PillSelect label="Icon" options={CATEGORY_ICONS} selectedKey={icon} onSelect={setIcon} />
+        <PillSelect label="Icon" options={CATEGORY_ICONS} selectedKey={icon} onSelect={setIcon} />
 
-      <PillSelect
-        label="Transfer money to"
-        options={state.cards.map((card) => ({
-          key: card.id,
-          label: card.name,
-        }))}
-        selectedKey={cardId}
-        onSelect={setCardId}
-      />
+        <PillSelect
+          label="Transfer money to"
+          options={state.cards.map((card) => ({
+            key: card.id,
+            label: card.name,
+          }))}
+          selectedKey={cardId}
+          onSelect={setCardId}
+        />
 
-      <Field
-        label="Due day (1–31)"
-        value={dueDay}
-        onChangeText={setDueDay}
-        placeholder="1"
-        keyboardType="numeric"
-      />
+        <DayPicker value={dueDay} onChange={setDueDay} />
+      </ScrollView>
 
-      <Button label="Save changes" onPress={handleSave} disabled={!name.trim()} />
-    </ScrollView>
+      <PinnedFooter>
+        <GradientButton label="Save changes" icon="checkmark" onPress={handleSave} disabled={!name.trim()} />
+      </PinnedFooter>
+    </KeyboardAvoidingView>
   );
 }

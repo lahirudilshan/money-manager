@@ -12,18 +12,19 @@ import { T } from './ui';
 /**
  * Floating dock.
  *
- * Fully detached from the screen edges on all four sides — unlike a docked
- * bar, the canvas shows all the way round it, so it reads as an object
- * sitting above the content rather than a fixed chrome strip. The active
- * route is a pill that slides beneath the icon+label rather than a static
- * tint, so switching tabs is felt as motion, not just a colour swap. The add
- * action lives inside the dock as a small trailing icon button instead of a
- * large button breaking the bar's silhouette.
+ * Fully detached from the screen edges on all four sides — the canvas shows
+ * all the way round it, so it reads as an object above the content rather than
+ * a fixed chrome strip. Every slot (the tabs and the trailing add action) is a
+ * fixed 48px square laid out in one evenly-spaced row, so the icons sit on a
+ * single baseline and nothing is pushed off-centre. The active tab is a soft
+ * accent-tinted square behind its icon+label; the add action is the one filled
+ * gradient square, marking it as the primary action without breaking the row's
+ * rhythm.
  */
 
-const DOCK_HEIGHT = 60;
+const DOCK_HEIGHT = 64;
 const SIDE_INSET = 16;
-const ADD_BUTTON_SIZE = 40;
+const SLOT = 48;
 
 const ICONS: Record<string, { active: string; inactive: string; label: string }> = {
   index: { active: 'home', inactive: 'home-outline', label: 'Home' },
@@ -43,7 +44,7 @@ export function useTabBarClearance(): number {
 }
 
 export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
-  const { colors, radius, shadow, space } = useTheme();
+  const { colors, radius, shadow } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -79,91 +80,105 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
             backgroundColor: colors.surface,
             borderWidth: 1,
             borderColor: colors.hairline,
-            paddingHorizontal: 6,
-            gap: 6,
+            paddingHorizontal: 8,
           },
           shadow.lifted,
         ]}
       >
-        <View style={{ flex: 1, flexDirection: 'row' }}>
-          {routes.map((route) => {
-            // Compare by key, not by position — filtering out hidden routes
-            // shifts array indices out of step with `state.index`.
-            const focused = state.routes[state.index]?.key === route.key;
-            const meta = ICONS[route.name] ?? {
-              active: 'ellipse',
-              inactive: 'ellipse-outline',
-              label: route.name,
-            };
+        {/* Tabs share the leading space equally; the add slot is fixed-width
+            and trails, so the four labels stay perfectly even regardless of
+            screen width. */}
+        {routes.map((route) => {
+          // Compare by key, not by position — filtering out hidden routes
+          // shifts array indices out of step with `state.index`.
+          const focused = state.routes[state.index]?.key === route.key;
+          const meta = ICONS[route.name] ?? {
+            active: 'ellipse',
+            inactive: 'ellipse-outline',
+            label: route.name,
+          };
 
-            return (
-              <Pressable
-                key={route.key}
-                accessibilityRole="tab"
-                accessibilityState={{ selected: focused }}
-                accessibilityLabel={meta.label}
-                onPress={() => {
-                  const event = navigation.emit({
-                    type: 'tabPress',
-                    target: route.key,
-                    canPreventDefault: true,
-                  });
-                  if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
-                }}
+          return (
+            <Pressable
+              key={route.key}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: focused }}
+              accessibilityLabel={meta.label}
+              hitSlop={4}
+              onPress={() => {
+                const event = navigation.emit({
+                  type: 'tabPress',
+                  target: route.key,
+                  canPreventDefault: true,
+                });
+                if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
+              }}
+              style={({ pressed }) => ({
+                flex: 1,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <View
                 style={{
-                  flex: 1,
+                  height: SLOT,
+                  minWidth: SLOT,
+                  paddingHorizontal: 6,
+                  borderRadius: radius.md,
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 2,
+                  gap: 3,
+                  backgroundColor: focused ? colors.accentSoft : 'transparent',
                 }}
               >
-                {/* Active tab: icon sits inside a filled accent circle. */}
-                <View
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 17,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: focused ? colors.accent : 'transparent',
-                  }}
-                >
-                  <Ionicons
-                    name={(focused ? meta.active : meta.inactive) as never}
-                    size={19}
-                    color={focused ? colors.inkInverse : colors.inkMuted}
-                  />
-                </View>
-                <T
-                  variant="caption"
+                <Ionicons
+                  name={(focused ? meta.active : meta.inactive) as never}
+                  size={20}
                   color={focused ? colors.accent : colors.inkMuted}
+                />
+                <T
+                  color={focused ? colors.accent : colors.inkMuted}
+                  numberOfLines={1}
                   style={{
-                    fontSize: 9.5,
+                    fontSize: 10,
+                    lineHeight: 11,
                     fontWeight: focused ? '700' : '500',
                     includeFontPadding: Platform.OS === 'android' ? false : undefined,
                   }}
                 >
                   {meta.label}
                 </T>
-              </Pressable>
-            );
-          })}
-        </View>
+              </View>
+            </Pressable>
+          );
+        })}
+
+        {/* Slim divider sets the add action apart without a hard break. */}
+        <View
+          style={{
+            width: 1,
+            height: 26,
+            backgroundColor: colors.hairline,
+            marginHorizontal: 6,
+          }}
+        />
 
         {/*
-          Add action lives inside the dock rather than floating above it —
-          the model has no free-form entry, so this opens the transaction
-          screen: pick a predefined category (or create one) and log it.
+          Add action — a fixed 48px gradient square, the one filled slot, so it
+          reads as the primary action. Opens the transaction screen (the model
+          has no free-form entry): pick a category and log it.
         */}
         <Pressable
           onPress={() => router.push('/transaction/new')}
           accessibilityRole="button"
           accessibilityLabel="Add transaction"
+          hitSlop={6}
           style={({ pressed }) => ({
-            width: ADD_BUTTON_SIZE,
-            height: ADD_BUTTON_SIZE,
-            borderRadius: ADD_BUTTON_SIZE / 2,
-            marginRight: 2,
+            width: SLOT,
+            height: SLOT,
+            borderRadius: radius.md,
+            overflow: 'hidden',
             transform: [{ scale: pressed ? 0.92 : 1 }],
           })}
         >
@@ -171,15 +186,9 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
             colors={[colors.gradientStart, colors.gradientEnd]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={{
-              width: '100%',
-              height: '100%',
-              borderRadius: ADD_BUTTON_SIZE / 2,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
           >
-            <Ionicons name="add" size={20} color="#FFFFFF" />
+            <Ionicons name="add" size={24} color="#FFFFFF" />
           </LinearGradient>
         </Pressable>
       </View>

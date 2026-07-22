@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, SheetHeader } from '../../src/components/forms';
-import { Button, Divider, GradientButton, Row, Surface, T } from '../../src/components/ui';
+import { Button, Divider, GradientButton, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
@@ -293,24 +293,14 @@ export default function SubcategoryScreen() {
         </View>
       </ScrollView>
 
-      {/* Fixed footer: Save never scrolls out of reach. */}
-      <View
-        style={{
-          paddingHorizontal: space.lg,
-          paddingTop: space.sm,
-          paddingBottom: insets.bottom + space.sm,
-          borderTopWidth: 1,
-          borderTopColor: colors.hairline,
-          backgroundColor: colors.surface,
-        }}
-      >
+      <PinnedFooter>
         <GradientButton
           label="Save changes"
           icon="checkmark"
           onPress={handleSave}
           disabled={!name.trim()}
         />
-      </View>
+      </PinnedFooter>
 
     {stateRow?.imageUri ? (
       <Modal

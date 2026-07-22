@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,7 +10,9 @@ import {
   Divider,
   Empty,
   FundingBar,
+  GradientButton,
   Label,
+  PinnedFooter,
   Row,
   ScreenHeader,
   Surface,
@@ -159,8 +161,12 @@ export default function LoansScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setOpen(false)}
       >
-        <ScrollView
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, backgroundColor: colors.canvas }}
+        >
+        <ScrollView
+          style={{ flex: 1 }}
           contentContainerStyle={{ padding: space.lg, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
@@ -199,8 +205,17 @@ export default function LoansScreen() {
             />
           </Row>
           <LoanPreview amount={amount} rate={rate} years={years} />
-          <Button label="Add loan" onPress={handleCreate} disabled={!name.trim()} />
         </ScrollView>
+
+        <PinnedFooter>
+          <GradientButton
+            label="Add loan"
+            icon="add"
+            onPress={handleCreate}
+            disabled={!name.trim()}
+          />
+        </PinnedFooter>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );

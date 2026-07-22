@@ -2,31 +2,34 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
+  KeyboardAvoidingView,
   LayoutAnimation,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  TextInput,
   UIManager,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BankLogo } from '../../src/components/BankLogo';
+import { DayPicker } from '../../src/components/DayPicker';
 import { Field } from '../../src/components/forms';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import {
   Divider,
   Empty,
-  FundingBar,
   GradientButton,
   Label,
+  PinnedFooter,
   Row,
-  ScreenHeader,
-  StatusPill,
   Surface,
   T,
 } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { formatPeriod } from '../../src/core/planning';
+import { formatPeriod, resolveCardId } from '../../src/core/planning';
+import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -45,17 +48,21 @@ type Filter = 'all' | 'unpaid' | 'paid';
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'unpaid', label: 'Unpaid' },
+  { key: 'unpaid', label: 'To pay' },
   { key: 'paid', label: 'Paid' },
 ];
 
+const animate = () =>
+  LayoutAnimation.configureNext(LayoutAnimation.create(160, 'easeInEaseOut', 'opacity'));
+
 /**
- * The structure view: every category, expandable to its lines.
+ * The plan, as a feed of category cards you can act on in place.
  *
- * Where the dashboard answers "what needs doing", this answers "what does my
- * plan actually look like". Categories collapse by default so the whole shape
- * is visible at once, and each row states its status in words as well as
- * colour. Tapping any level opens its detail screen for edits and actions.
+ * Each card carries the category's identity, its bulk-transfer state (one tap
+ * to mark the salary money moved to its account), a paid-progress bar, and —
+ * when expanded — its bills as a checklist with a big tap target per line and
+ * an "Add bill" action. Reading the plan and working through it happen on the
+ * same screen; the detail pages are only for settings and per-bill edits.
  */
 export default function ListScreen() {
   const { colors, space } = useTheme();
@@ -68,17 +75,18 @@ export default function ListScreen() {
   const totals = useMemo(() => selectBoardTotals(state), [state]);
   const income = useMemo(() => selectTotalIncome(state), [state]);
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Everything starts expanded — the plan is meant to be worked through, not
+  // hunted for. Collapsing is opt-in per card, or all at once.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<Filter>('all');
-  // The category a new subcategory is being added to, or null when the sheet
-  // is closed. Held here (not per-row) so one modal serves every category.
   const [addingToCategoryId, setAddingToCategoryId] = useState<string | null>(null);
 
   const addingToCategory = views.find((v) => v.category.id === addingToCategoryId)?.category;
+  const allCollapsed = views.length > 0 && collapsed.size === views.length;
 
   function toggle(categoryId: string) {
-    LayoutAnimation.configureNext(LayoutAnimation.create(180, 'easeInEaseOut', 'opacity'));
-    setExpanded((current) => {
+    animate();
+    setCollapsed((current) => {
       const next = new Set(current);
       if (next.has(categoryId)) next.delete(categoryId);
       else next.add(categoryId);
@@ -86,14 +94,12 @@ export default function ListScreen() {
     });
   }
 
-  function expandAll() {
-    LayoutAnimation.configureNext(LayoutAnimation.create(180, 'easeInEaseOut', 'opacity'));
-    setExpanded((current) =>
-      current.size === views.length ? new Set() : new Set(views.map((v) => v.category.id)),
-    );
+  function toggleAll() {
+    animate();
+    setCollapsed(allCollapsed ? new Set() : new Set(views.map((v) => v.category.id)));
   }
 
-  // Filtering hides lines, and any category left with none drops out entirely.
+  // Filtering hides bills; a category with none left drops out.
   const filtered = useMemo(() => {
     if (filter === 'all') return views;
     return views
@@ -107,6 +113,8 @@ export default function ListScreen() {
   }, [views, filter]);
 
   const left = income - totals.plannedMinor;
+  const paidPct =
+    totals.plannedMinor > 0 ? Math.round((totals.paidMinor / totals.plannedMinor) * 100) : 0;
 
   return (
     <ScrollView
@@ -115,49 +123,77 @@ export default function ListScreen() {
         paddingTop: insets.top + space.md,
         paddingBottom: tabClearance,
         paddingHorizontal: space.lg,
-        gap: space.lg,
+        gap: space.md,
       }}
       showsVerticalScrollIndicator={false}
     >
-      <ScreenHeader
-        eyebrow={formatPeriod(state.period)}
-        title="Your plan"
-        action={{
-          icon: 'add',
-          label: 'New category',
-          onPress: () => router.push('/category/new'),
-        }}
-      />
+      {/* Header + compact plan summary in one block. */}
+      <Row justify="space-between" align="flex-start">
+        <View style={{ gap: 1 }}>
+          <Label>{formatPeriod(state.period)}</Label>
+          <T variant="title">Your plan</T>
+        </View>
+        <Pressable
+          onPress={() => router.push('/category/new')}
+          accessibilityRole="button"
+          accessibilityLabel="New category"
+          style={({ pressed }) => ({
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            paddingVertical: 8,
+            paddingHorizontal: space.md,
+            borderRadius: 999,
+            backgroundColor: colors.accent,
+            opacity: pressed ? 0.85 : 1,
+          })}
+        >
+          <Ionicons name="add" size={16} color={colors.inkInverse} />
+          <T variant="caption" color={colors.inkInverse} style={{ fontWeight: '700' }}>
+            Category
+          </T>
+        </Pressable>
+      </Row>
 
-      {/* Totals strip. */}
-      <Surface style={{ gap: space.sm }}>
-        <Row justify="space-between">
-          <T variant="small" tone="secondary">
-            Income
-          </T>
-          <T variant="figure" color={colors.completed}>
-            {formatMoney(income)}
-          </T>
-        </Row>
-        <Row justify="space-between">
-          <T variant="small" tone="secondary">
-            Planned
-          </T>
-          <T variant="figure">−{formatMoney(totals.plannedMinor, { showCurrency: false })}</T>
-        </Row>
-        <Divider />
-        <Row justify="space-between">
-          <T variant="bodyStrong">Left over</T>
-          <T variant="figureLarge" color={left >= 0 ? colors.ink : colors.danger}>
-            {formatMoney(left)}
-          </T>
-        </Row>
-      </Surface>
+      {views.length > 0 ? (
+        <Surface style={{ gap: space.md }}>
+          <Row justify="space-between">
+            <SummaryStat label="Income" value={formatMoney(income, { compact: true })} />
+            <SummaryStat
+              label="Planned"
+              value={formatMoney(totals.plannedMinor, { compact: true })}
+            />
+            <SummaryStat
+              label="Left"
+              value={formatMoney(left, { compact: true })}
+              color={left >= 0 ? colors.ink : colors.danger}
+            />
+          </Row>
+          <View style={{ gap: 4 }}>
+            <ProgressBar pct={paidPct} color={colors.completed} />
+            <Row justify="space-between">
+              <T variant="caption" tone="muted">
+                {formatMoney(totals.paidMinor, { compact: true })} paid
+              </T>
+              <T variant="caption" tone="muted">
+                {paidPct}% of plan
+              </T>
+            </Row>
+          </View>
+        </Surface>
+      ) : null}
 
-      {/* Filter + expand controls. */}
+      {/* Filters + collapse control. */}
       {views.length > 0 ? (
         <Row justify="space-between" align="center">
-          <Row gap={space.xs}>
+          <Row
+            gap={0}
+            style={{
+              backgroundColor: colors.surfaceSunken,
+              borderRadius: 999,
+              padding: 3,
+            }}
+          >
             {FILTERS.map((option) => {
               const selected = filter === option.key;
               return (
@@ -170,15 +206,16 @@ export default function ListScreen() {
                     paddingVertical: 6,
                     paddingHorizontal: space.md,
                     borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: selected ? colors.accent : colors.hairline,
-                    backgroundColor: selected ? colors.accent : colors.surface,
-                    opacity: pressed ? 0.75 : 1,
+                    backgroundColor: selected ? colors.surface : 'transparent',
+                    opacity: pressed ? 0.8 : 1,
+                    ...(selected
+                      ? { borderWidth: 1, borderColor: colors.hairline }
+                      : {}),
                   })}
                 >
                   <T
                     variant="caption"
-                    color={selected ? colors.inkInverse : colors.inkSecondary}
+                    color={selected ? colors.ink : colors.inkSecondary}
                     style={{ fontWeight: selected ? '700' : '500' }}
                   >
                     {option.label}
@@ -189,13 +226,23 @@ export default function ListScreen() {
           </Row>
 
           <Pressable
-            onPress={expandAll}
+            onPress={toggleAll}
             hitSlop={8}
             accessibilityRole="button"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 3,
+              opacity: pressed ? 0.6 : 1,
+            })}
           >
+            <Ionicons
+              name={allCollapsed ? 'chevron-down' : 'chevron-up'}
+              size={14}
+              color={colors.accent}
+            />
             <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
-              {expanded.size === views.length ? 'Collapse all' : 'Expand all'}
+              {allCollapsed ? 'Expand' : 'Collapse'}
             </T>
           </Pressable>
         </Row>
@@ -203,27 +250,29 @@ export default function ListScreen() {
 
       {filtered.length === 0 ? (
         <Empty
-          icon="list-outline"
-          title={views.length === 0 ? 'Nothing planned' : 'Nothing matches'}
+          icon="albums-outline"
+          title={views.length === 0 ? 'Nothing planned' : 'Nothing here'}
           message={
             views.length === 0
-              ? 'Create a category and add the lines you pay each month.'
-              : 'No lines match this filter. Try "All".'
+              ? 'Create a category, then add the bills you pay each month.'
+              : filter === 'paid'
+                ? 'No bills paid yet this month.'
+                : 'Everything is paid. Nice.'
           }
           actionLabel={views.length === 0 ? 'Create a category' : undefined}
           onAction={views.length === 0 ? () => router.push('/category/new') : undefined}
         />
       ) : (
-        <View style={{ gap: space.sm }}>
+        <View style={{ gap: space.md }}>
           {filtered.map((view) => (
-            <CategoryBlock
+            <CategoryCard
               key={view.category.id}
               view={view}
-              expanded={expanded.has(view.category.id)}
-              onToggle={() => toggle(view.category.id)}
-              onOpenCategory={() => router.push(`/category/${view.category.id}`)}
-              onOpenLine={(id) => router.push(`/subcategory/${id}`)}
-              onAddSubcategory={() => setAddingToCategoryId(view.category.id)}
+              collapsed={collapsed.has(view.category.id)}
+              onToggleCollapsed={() => toggle(view.category.id)}
+              onOpenSettings={() => router.push(`/category/${view.category.id}`)}
+              onOpenBill={(id) => router.push(`/subcategory/${id}`)}
+              onAddBill={() => setAddingToCategoryId(view.category.id)}
             />
           ))}
         </View>
@@ -237,6 +286,294 @@ export default function ListScreen() {
   );
 }
 
+function SummaryStat({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <View style={{ gap: 1 }}>
+      <Label>{label}</Label>
+      <T variant="figureLarge" color={color}>
+        {value}
+      </T>
+    </View>
+  );
+}
+
+function ProgressBar({ pct, color, height = 8 }: { pct: number; color: string; height?: number }) {
+  const { colors, radius } = useTheme();
+  return (
+    <View
+      style={{
+        height,
+        borderRadius: radius.pill,
+        backgroundColor: colors.surfaceSunken,
+        overflow: 'hidden',
+      }}
+    >
+      <View
+        style={{
+          width: `${Math.max(0, Math.min(100, pct))}%`,
+          height: '100%',
+          borderRadius: radius.pill,
+          backgroundColor: color,
+        }}
+      />
+    </View>
+  );
+}
+
+/**
+ * A category as a card: tinted header (identity + transfer chip + amount),
+ * a paid-progress bar, then its bills as a tap-to-pay checklist ending in an
+ * "Add bill" row. The header's chevron collapses just the bills.
+ */
+function CategoryCard({
+  view,
+  collapsed,
+  onToggleCollapsed,
+  onOpenSettings,
+  onOpenBill,
+  onAddBill,
+}: {
+  view: CategoryView;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  onOpenSettings: () => void;
+  onOpenBill: (subcategoryId: string) => void;
+  onAddBill: () => void;
+}) {
+  const { colors, radius, space, mode } = useTheme();
+  const state = useAppStore();
+  const { category, card, summary, subcategories } = view;
+
+  const transferred = view.transferStatus === 'transferred';
+  const transferStyle = statusStyle('transferred', colors);
+  const paidPct =
+    summary.subcategoryCount > 0
+      ? Math.round((summary.counts.paid / summary.subcategoryCount) * 100)
+      : 0;
+
+  // A faint wash of the category colour ties the card to its identity without
+  // shouting; the header icon carries the full-strength colour.
+  const headerBg = mode === 'dark' ? colors.surfaceRaised : `${category.color}0D`;
+
+  return (
+    <Surface padded={false} style={{ overflow: 'hidden' }}>
+      {/* Header. */}
+      <View style={{ backgroundColor: headerBg, padding: space.lg, gap: space.md }}>
+        <Row gap={space.md}>
+          <View
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: radius.md,
+              backgroundColor: category.color,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Ionicons name={category.icon as never} size={22} color="#FFFFFF" />
+          </View>
+
+          <Pressable
+            onPress={onToggleCollapsed}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: !collapsed }}
+            style={{ flex: 1 }}
+          >
+            <T variant="bodyStrong" numberOfLines={1}>
+              {category.name}
+            </T>
+            <T variant="caption" tone="muted" numberOfLines={1}>
+              {summary.counts.paid}/{summary.subcategoryCount} paid
+              {card ? ` · ${card.name}` : ''}
+            </T>
+          </Pressable>
+
+          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+            <T variant="figureLarge">{formatMoney(summary.totalMinor, { compact: true })}</T>
+            <Pressable
+              onPress={onToggleCollapsed}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={collapsed ? 'Expand' : 'Collapse'}
+            >
+              <Ionicons
+                name={collapsed ? 'chevron-down' : 'chevron-up'}
+                size={18}
+                color={colors.inkMuted}
+              />
+            </Pressable>
+          </View>
+        </Row>
+
+        {/* Transfer toggle — the bulk salary→account move, one tap. */}
+        <Pressable
+          onPress={() => state.toggleCategoryTransfer(category.id)}
+          accessibilityRole="button"
+          accessibilityState={{ checked: transferred }}
+          accessibilityLabel={`Bulk transfer ${transferred ? 'done' : 'not done'}. Tap to toggle.`}
+          style={({ pressed }) => ({
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: space.sm,
+            paddingVertical: 9,
+            paddingHorizontal: space.md,
+            borderRadius: radius.md,
+            backgroundColor: transferred ? transferStyle.bg : colors.surface,
+            borderWidth: 1,
+            borderColor: transferred ? transferStyle.fg : colors.hairline,
+            opacity: pressed ? 0.85 : 1,
+          })}
+        >
+          <Ionicons
+            name={transferred ? 'checkmark-circle' : 'swap-horizontal'}
+            size={18}
+            color={transferred ? transferStyle.fg : colors.inkSecondary}
+          />
+          <T
+            variant="small"
+            color={transferred ? transferStyle.fg : colors.inkSecondary}
+            style={{ flex: 1, fontWeight: '600' }}
+          >
+            {transferred ? 'Money transferred to account' : 'Mark money transferred'}
+          </T>
+          {!transferred && summary.totalMinor > 0 ? (
+            <T variant="caption" tone="muted">
+              {formatMoney(summary.totalMinor, { compact: true })}
+            </T>
+          ) : null}
+        </Pressable>
+
+        <ProgressBar pct={paidPct} color={category.color} height={6} />
+      </View>
+
+      {/* Bills. */}
+      {!collapsed ? (
+        <View>
+          {subcategories.map((line, index) => {
+            const raw = view.rawSubcategories.find((s) => s.id === line.id);
+            const paid = line.status === 'paid';
+            const amount = line.actualMinor ?? line.plannedMinor;
+
+            return (
+              <View key={line.id}>
+                {index === 0 ? null : <Divider style={{ marginLeft: space.lg }} />}
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  {/* Big checkbox tap target: pay / unpay. */}
+                  <Pressable
+                    onPress={() => state.cycleStatus(line.id)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: paid }}
+                    accessibilityLabel={`${line.name}, ${paid ? 'paid' : 'not paid'}`}
+                    hitSlop={6}
+                    style={({ pressed }) => ({
+                      paddingLeft: space.lg,
+                      paddingRight: space.sm,
+                      paddingVertical: space.md,
+                      opacity: pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <View
+                      style={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: 13,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: paid ? colors.completed : 'transparent',
+                        borderWidth: paid ? 0 : 2,
+                        borderColor: colors.hairlineStrong,
+                      }}
+                    >
+                      {paid ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+                    </View>
+                  </Pressable>
+
+                  {/* Row body: open the bill's detail. */}
+                  <Pressable
+                    onPress={() => onOpenBill(line.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${line.name}, ${formatMoney(amount)}. Open detail.`}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingRight: space.lg,
+                      paddingVertical: space.md,
+                      gap: space.sm,
+                      backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                    })}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <T
+                        variant="body"
+                        numberOfLines={1}
+                        tone={paid ? 'muted' : 'ink'}
+                        style={paid ? { textDecorationLine: 'line-through' } : undefined}
+                      >
+                        {line.name}
+                      </T>
+                      <T variant="caption" tone="muted">
+                        Day {raw?.dueDay ?? category.dueDay}
+                        {raw?.frequency && raw.frequency !== 'monthly'
+                          ? ` · ${raw.frequency.replace('_', '-')}`
+                          : ''}
+                      </T>
+                    </View>
+                    <T variant="figure" tone={paid ? 'muted' : 'ink'}>
+                      {formatMoney(amount, { compact: true })}
+                    </T>
+                    <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
+
+          {subcategories.length > 0 ? <Divider style={{ marginLeft: space.lg }} /> : null}
+
+          {/* Add bill + settings, sharing one footer row. */}
+          <Row>
+            <Pressable
+              onPress={onAddBill}
+              accessibilityRole="button"
+              accessibilityLabel={`Add a bill to ${category.name}`}
+              style={({ pressed }) => ({
+                flex: 1,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                paddingVertical: space.md,
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Ionicons name="add-circle" size={17} color={colors.accent} />
+              <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+                Add bill
+              </T>
+            </Pressable>
+
+            <View style={{ width: 1, backgroundColor: colors.hairline }} />
+
+            <Pressable
+              onPress={onOpenSettings}
+              accessibilityRole="button"
+              accessibilityLabel={`${category.name} settings`}
+              style={({ pressed }) => ({
+                paddingVertical: space.md,
+                paddingHorizontal: space.lg,
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Ionicons name="settings-outline" size={17} color={colors.inkSecondary} />
+            </Pressable>
+          </Row>
+        </View>
+      ) : null}
+    </Surface>
+  );
+}
+
 const FREQUENCIES = [
   { key: 'monthly', label: 'Monthly' },
   { key: 'one_time', label: 'One-time' },
@@ -244,9 +581,12 @@ const FREQUENCIES = [
 ] as const;
 
 /**
- * Bottom-sheet for adding a subcategory to a known parent category. The parent
- * is fixed and shown in the header, so this only asks for what varies —
- * name, amount, day, cadence — and never makes the user re-pick the category.
+ * Bottom-sheet for adding a bill to a known parent category.
+ *
+ * Organised the way you'd fill it: the amount is the hero at the top, then
+ * what the bill is, which account pays it, and when. The parent category is
+ * fixed in the header so it's never re-picked, and the Add button is pinned to
+ * the bottom so it stays reachable above the keyboard on a long form.
  */
 function AddSubcategorySheet({
   category,
@@ -263,8 +603,9 @@ function AddSubcategorySheet({
   const [amount, setAmount] = useState('');
   const [dueDay, setDueDay] = useState(1);
   const [frequency, setFrequency] = useState<'monthly' | 'one_time' | 'yearly'>('monthly');
+  // null means "use the category's account"; a value overrides it for this bill.
+  const [cardId, setCardId] = useState<string | null>(null);
 
-  // Reset the form whenever the sheet opens for a (possibly different) category.
   const openFor = category?.id ?? null;
   React.useEffect(() => {
     if (openFor) {
@@ -272,6 +613,7 @@ function AddSubcategorySheet({
       setAmount('');
       setDueDay(category?.dueDay ?? 1);
       setFrequency('monthly');
+      setCardId(null);
     }
   }, [openFor, category?.dueDay]);
 
@@ -284,9 +626,14 @@ function AddSubcategorySheet({
       plannedMinor: parseAmount(amount) ?? 0,
       dueDay,
       frequency,
+      cardId,
     });
     onClose();
   }
+
+  // The account this bill will actually draw from, for the "uses category
+  // default" hint when nothing is overridden.
+  const effectiveCardId = resolveCardId(cardId, category?.cardId);
 
   return (
     <Modal visible={Boolean(category)} transparent animationType="slide" onRequestClose={onClose}>
@@ -302,369 +649,222 @@ function AddSubcategorySheet({
             backgroundColor: colors.canvas,
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
-            paddingTop: space.sm,
-            paddingBottom: insets.bottom + space.lg,
-            maxHeight: '90%',
+            // A tall fixed height (not max-height) gives the inner column real
+            // vertical space, so the ScrollView can flex and the footer pins to
+            // the bottom rather than floating up under short content.
+            height: '90%',
+            overflow: 'hidden',
           }}
         >
-          <View
-            style={{
-              alignSelf: 'center',
-              width: 40,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: colors.hairlineStrong,
-              marginBottom: space.sm,
-            }}
-          />
-
-          <ScrollView
-            contentContainerStyle={{ padding: space.lg, paddingTop: space.sm, gap: space.lg }}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ flex: 1 }}
           >
-            {/* Parent category, fixed — makes the relationship unmistakable. */}
-            <Row gap={space.md}>
+            {/* Fixed header: grab handle + parent category. */}
+            <View style={{ paddingTop: space.sm, paddingHorizontal: space.lg }}>
               <View
                 style={{
+                  alignSelf: 'center',
                   width: 40,
-                  height: 40,
-                  borderRadius: radius.md,
-                  backgroundColor: category?.color ?? colors.accent,
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: colors.hairlineStrong,
+                  marginBottom: space.md,
                 }}
-              >
-                <Ionicons name={(category?.icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <T variant="caption" tone="muted">
-                  ADD TO
-                </T>
-                <T variant="bodyStrong" numberOfLines={1}>
-                  {category?.name ?? ''}
-                </T>
-              </View>
-            </Row>
-
-            <Field label="Name" value={name} onChangeText={setName} placeholder="e.g. Rent" autoFocus />
-            <Field
-              label="Planned amount"
-              value={amount}
-              onChangeText={setAmount}
-              placeholder="0"
-              keyboardType="numeric"
-            />
-
-            <View style={{ gap: space.sm }}>
-              <Label>FREQUENCY</Label>
-              <Row gap={space.sm}>
-                {FREQUENCIES.map((f) => {
-                  const selected = frequency === f.key;
-                  return (
-                    <Pressable
-                      key={f.key}
-                      onPress={() => setFrequency(f.key)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => ({
-                        flex: 1,
-                        alignItems: 'center',
-                        paddingVertical: 10,
-                        borderRadius: radius.md,
-                        borderWidth: 1.5,
-                        borderColor: selected ? colors.accent : colors.hairline,
-                        backgroundColor: selected ? colors.accentSoft : colors.surface,
-                        opacity: pressed ? 0.75 : 1,
-                      })}
-                    >
-                      <T
-                        variant="small"
-                        color={selected ? colors.accentInk : colors.inkSecondary}
-                        style={{ fontWeight: selected ? '700' : '500' }}
-                      >
-                        {f.label}
-                      </T>
-                    </Pressable>
-                  );
-                })}
+              />
+              <Row gap={space.md} style={{ paddingBottom: space.md }}>
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: radius.md,
+                    backgroundColor: category?.color ?? colors.accent,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons
+                    name={(category?.icon ?? 'albums-outline') as never}
+                    size={20}
+                    color="#FFFFFF"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T variant="caption" tone="muted">
+                    NEW BILL IN
+                  </T>
+                  <T variant="bodyStrong" numberOfLines={1}>
+                    {category?.name ?? ''}
+                  </T>
+                </View>
+                <Pressable
+                  onPress={onClose}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                >
+                  <Ionicons name="close" size={24} color={colors.inkSecondary} />
+                </Pressable>
               </Row>
+              <Divider />
             </View>
 
-            <View style={{ gap: space.sm }}>
-              <Label>PAYMENT DAY</Label>
-              <DayGrid value={dueDay} onChange={setDueDay} />
-            </View>
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ padding: space.lg, gap: space.xl }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Amount hero. */}
+              <View style={{ alignItems: 'center', gap: 4 }}>
+                <Label>AMOUNT</Label>
+                <Row gap={space.xs} align="center">
+                  <T variant="title" tone="muted">
+                    {state.currency}
+                  </T>
+                  <TextInput
+                    value={amount}
+                    onChangeText={setAmount}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={colors.inkMuted}
+                    autoFocus
+                    accessibilityLabel="Amount"
+                    style={{
+                      fontSize: 42,
+                      fontWeight: '800',
+                      letterSpacing: -1.2,
+                      color: colors.ink,
+                      minWidth: 110,
+                      textAlign: 'center',
+                      padding: 0,
+                    }}
+                  />
+                </Row>
+              </View>
 
-            <GradientButton
-              label="Add subcategory"
-              icon="add"
-              onPress={handleAdd}
-              disabled={!name.trim()}
-            />
-          </ScrollView>
+              <Field
+                label="What is it?"
+                value={name}
+                onChangeText={setName}
+                placeholder="e.g. Rent, Electricity, Netflix"
+              />
+
+              {/* Paid from — override the category's account for this bill.
+                  Compact wrapping chips keep this to one or two rows. */}
+              {state.cards.length > 0 ? (
+                <View style={{ gap: space.sm }}>
+                  <Label>PAID FROM</Label>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+                    {state.cards.map((c) => {
+                      const brand = resolveBrand({
+                        bankId: c.bankId,
+                        bankName: c.bankName,
+                        name: c.name,
+                      });
+                      const selected = effectiveCardId === c.id;
+                      const isDefault = category?.cardId === c.id;
+                      return (
+                        <Pressable
+                          key={c.id}
+                          onPress={() => setCardId(selected ? null : c.id)}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          accessibilityLabel={`${c.name}${isDefault ? ', category default' : ''}`}
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 7,
+                            paddingVertical: 6,
+                            paddingLeft: 6,
+                            paddingRight: space.md,
+                            borderRadius: radius.pill,
+                            borderWidth: 1.5,
+                            borderColor: selected ? brand.color : colors.hairline,
+                            backgroundColor: selected ? `${brand.color}12` : colors.surface,
+                            opacity: pressed ? 0.8 : 1,
+                          })}
+                        >
+                          <BankLogo brand={brand} size={24} />
+                          <T
+                            variant="small"
+                            numberOfLines={1}
+                            style={{ fontWeight: selected ? '700' : '500' }}
+                          >
+                            {c.name}
+                          </T>
+                          {isDefault ? (
+                            <View
+                              style={{
+                                width: 5,
+                                height: 5,
+                                borderRadius: 3,
+                                backgroundColor: selected ? brand.color : colors.inkMuted,
+                              }}
+                            />
+                          ) : null}
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <T variant="caption" tone="muted">
+                    Uses the category’s account unless you pick another.
+                  </T>
+                </View>
+              ) : null}
+
+              {/* Frequency. */}
+              <View style={{ gap: space.sm }}>
+                <Label>HOW OFTEN?</Label>
+                <Row gap={space.sm}>
+                  {FREQUENCIES.map((f) => {
+                    const selected = frequency === f.key;
+                    return (
+                      <Pressable
+                        key={f.key}
+                        onPress={() => setFrequency(f.key)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        style={({ pressed }) => ({
+                          flex: 1,
+                          alignItems: 'center',
+                          paddingVertical: 11,
+                          borderRadius: radius.md,
+                          borderWidth: 1.5,
+                          borderColor: selected ? colors.accent : colors.hairline,
+                          backgroundColor: selected ? colors.accentSoft : colors.surface,
+                          opacity: pressed ? 0.75 : 1,
+                        })}
+                      >
+                        <T
+                          variant="small"
+                          color={selected ? colors.accentInk : colors.inkSecondary}
+                          style={{ fontWeight: selected ? '700' : '500' }}
+                        >
+                          {f.label}
+                        </T>
+                      </Pressable>
+                    );
+                  })}
+                </Row>
+              </View>
+
+              {/* Payment day. */}
+              <DayPicker value={dueDay} onChange={setDueDay} />
+            </ScrollView>
+
+            <PinnedFooter>
+              <GradientButton
+                label="Add bill"
+                icon="add"
+                onPress={handleAdd}
+                disabled={!name.trim()}
+              />
+            </PinnedFooter>
+          </KeyboardAvoidingView>
         </Pressable>
       </Pressable>
     </Modal>
   );
 }
 
-/** 1–31 calendar-style grid, 7 to a row — no horizontal scrolling. */
-function DayGrid({ value, onChange }: { value: number; onChange: (day: number) => void }) {
-  const { colors, radius, space } = useTheme();
-  const days = Array.from({ length: 31 }, (_, index) => index + 1);
-
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.xs }}>
-      {days.map((day) => {
-        const selected = day === value;
-        return (
-          <Pressable
-            key={day}
-            onPress={() => onChange(day)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={`Day ${day}`}
-            style={({ pressed }) => ({
-              width: '13.1%',
-              aspectRatio: 1,
-              borderRadius: radius.md,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: 1.5,
-              borderColor: selected ? colors.accent : colors.hairline,
-              backgroundColor: selected ? colors.accent : colors.surface,
-              opacity: pressed ? 0.7 : 1,
-            })}
-          >
-            <T
-              variant="small"
-              color={selected ? colors.inkInverse : colors.inkSecondary}
-              style={{ fontWeight: selected ? '800' : '500' }}
-            >
-              {day}
-            </T>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-/** One category: a summary header that expands to its lines. */
-function CategoryBlock({
-  view,
-  expanded,
-  onToggle,
-  onOpenCategory,
-  onOpenLine,
-  onAddSubcategory,
-}: {
-  view: CategoryView;
-  expanded: boolean;
-  onToggle: () => void;
-  onOpenCategory: () => void;
-  onOpenLine: (subcategoryId: string) => void;
-  onAddSubcategory: () => void;
-}) {
-  const { colors, radius, space } = useTheme();
-  const { category, card, summary } = view;
-
-  return (
-    <Surface padded={false} style={{ overflow: 'hidden' }}>
-      <Pressable
-        onPress={onToggle}
-        accessibilityRole="button"
-        accessibilityState={{ expanded }}
-        accessibilityLabel={`${category.name}, ${formatMoney(summary.totalMinor)}, ${summary.counts.paid} of ${summary.subcategoryCount} paid`}
-        style={({ pressed }) => ({ padding: space.lg, gap: space.md, opacity: pressed ? 0.8 : 1 })}
-      >
-        <Row gap={space.md}>
-          <View
-            style={{
-              width: 40,
-              height: 40,
-              borderRadius: radius.md,
-              backgroundColor: category.color,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name={category.icon as never} size={20} color="#FFFFFF" />
-          </View>
-
-          <View style={{ flex: 1, gap: 3 }}>
-            <T variant="bodyStrong" numberOfLines={1}>
-              {category.name}
-            </T>
-            <Row gap={space.xs}>
-              <TransferBadge transferred={view.transferStatus === 'transferred'} />
-              <T variant="caption" tone="muted" numberOfLines={1} style={{ flexShrink: 1 }}>
-                {card ? card.name : 'no account'}
-              </T>
-            </Row>
-          </View>
-
-          <View style={{ alignItems: 'flex-end' }}>
-            <T variant="figureLarge">{formatMoney(summary.totalMinor, { compact: true })}</T>
-            <T variant="caption" color={summary.isSettled ? colors.completed : colors.inkMuted}>
-              {summary.counts.paid}/{summary.subcategoryCount} paid
-            </T>
-          </View>
-
-          <Ionicons
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={17}
-            color={colors.inkMuted}
-          />
-        </Row>
-
-        <FundingBar
-          pct={
-            summary.subcategoryCount > 0
-              ? (summary.counts.paid / summary.subcategoryCount) * 100
-              : 0
-          }
-          color={category.color}
-          surplus={summary.isSettled}
-          height={5}
-        />
-      </Pressable>
-
-      {expanded ? (
-        <View>
-          <Divider />
-          <View style={{ paddingVertical: space.xs }}>
-            {view.subcategories.map((line) => {
-              const raw = view.rawSubcategories.find((s) => s.id === line.id);
-              const dueDay = raw?.dueDay ?? category.dueDay;
-              const style = statusStyle(line.status, colors);
-
-              return (
-                <Pressable
-                  key={line.id}
-                  onPress={() => onOpenLine(line.id)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${line.name}, ${style.label}, ${formatMoney(line.actualMinor ?? line.plannedMinor)}`}
-                  style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: space.md,
-                    paddingHorizontal: space.lg,
-                    paddingVertical: 11,
-                    opacity: pressed ? 0.65 : 1,
-                  })}
-                >
-                  <Ionicons
-                    name={(raw?.icon ?? 'pricetag-outline') as never}
-                    size={17}
-                    color={colors.inkMuted}
-                  />
-
-                  <View style={{ flex: 1 }}>
-                    <T
-                      variant="small"
-                      tone={line.status === 'paid' ? 'muted' : 'ink'}
-                      numberOfLines={1}
-                      style={{ fontWeight: '600' }}
-                    >
-                      {line.name}
-                    </T>
-                    <T variant="caption" tone="muted">
-                      Day {dueDay}
-                      {raw?.frequency && raw.frequency !== 'monthly'
-                        ? ` · ${raw.frequency.replace('_', '-')}`
-                        : ''}
-                    </T>
-                  </View>
-
-                  <StatusPill status={line.status} compact />
-
-                  <T
-                    variant="figure"
-                    tone={line.status === 'paid' ? 'muted' : 'ink'}
-                    style={{ minWidth: 76, textAlign: 'right' }}
-                  >
-                    {formatMoney(line.actualMinor ?? line.plannedMinor)}
-                  </T>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          <Divider />
-          <Row>
-            {/* Add a bill straight into this category — the parent is already
-                known, so this opens a focused sheet rather than a picker. */}
-            <Pressable
-              onPress={onAddSubcategory}
-              accessibilityRole="button"
-              accessibilityLabel={`Add subcategory to ${category.name}`}
-              style={({ pressed }) => ({
-                flex: 1,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                paddingVertical: space.md,
-                opacity: pressed ? 0.6 : 1,
-              })}
-            >
-              <Ionicons name="add-circle" size={16} color={colors.accent} />
-              <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
-                Add subcategory
-              </T>
-            </Pressable>
-
-            <View style={{ width: 1, backgroundColor: colors.hairline }} />
-
-            <Pressable
-              onPress={onOpenCategory}
-              accessibilityRole="button"
-              accessibilityLabel={`Edit ${category.name}`}
-              style={({ pressed }) => ({
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                paddingVertical: space.md,
-                paddingHorizontal: space.lg,
-                opacity: pressed ? 0.6 : 1,
-              })}
-            >
-              <Ionicons name="settings-outline" size={15} color={colors.inkSecondary} />
-              <T variant="small" tone="secondary" style={{ fontWeight: '600' }}>
-                Edit
-              </T>
-            </Pressable>
-          </Row>
-        </View>
-      ) : null}
-    </Surface>
-  );
-}
-
-/** Tiny pill for the category's bulk-transfer state — its own status, distinct
- *  from the per-bill paid counts beside it. */
-function TransferBadge({ transferred }: { transferred: boolean }) {
-  const { colors } = useTheme();
-  const style = statusStyle(transferred ? 'transferred' : 'pending', colors);
-  return (
-    <View
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 3,
-        paddingHorizontal: 7,
-        paddingVertical: 2,
-        borderRadius: 999,
-        backgroundColor: style.bg,
-      }}
-    >
-      <Ionicons name={style.icon as never} size={11} color={style.fg} />
-      <T variant="caption" color={style.fg} style={{ fontWeight: '700', fontSize: 10 }}>
-        {transferred ? 'Transferred' : 'Not moved'}
-      </T>
-    </View>
-  );
-}

@@ -11,6 +11,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { STATUS_ICON, statusStyle, type StatusKey } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
 
@@ -208,6 +209,41 @@ export function GradientButton({
         </Text>
       </LinearGradient>
     </Pressable>
+  );
+}
+
+/**
+ * The standard bottom action bar for a scrolling screen or sheet: a hairline
+ * top border, a surface fill, and safe-area-aware bottom padding, holding one
+ * or more actions (usually a single full-width GradientButton). Every screen
+ * with a fixed bottom button uses this, so the treatment stays identical.
+ *
+ * Place it as the last child of a flex column, after the ScrollView, so it
+ * pins to the bottom while the content scrolls above it. In a bottom-sheet,
+ * pass `flush` to drop the safe-area padding (the sheet already insets).
+ */
+export function PinnedFooter({
+  children,
+  flush = false,
+}: {
+  children: React.ReactNode;
+  flush?: boolean;
+}) {
+  const { colors, space } = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={{
+        paddingHorizontal: space.lg,
+        paddingTop: space.sm,
+        paddingBottom: (flush ? 0 : insets.bottom) + space.sm,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: colors.hairline,
+        backgroundColor: colors.surface,
+      }}
+    >
+      {children}
+    </View>
   );
 }
 

@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
-import { GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, STATUS_ORDER, type SubcategoryStatus } from '../../src/core/planning';
@@ -404,24 +404,14 @@ export default function NewTransactionScreen() {
         ) : null}
       </ScrollView>
 
-      {/* Fixed footer: the save action never scrolls out of reach. */}
-      <View
-        style={{
-          paddingHorizontal: space.lg,
-          paddingTop: space.sm,
-          paddingBottom: insets.bottom + space.sm,
-          borderTopWidth: 1,
-          borderTopColor: colors.hairline,
-          backgroundColor: colors.surface,
-        }}
-      >
+      <PinnedFooter>
         <GradientButton
           label="Save transaction"
           icon="checkmark"
           onPress={handleSave}
           disabled={!canSave}
         />
-      </View>
+      </PinnedFooter>
     </KeyboardAvoidingView>
   );
 }
