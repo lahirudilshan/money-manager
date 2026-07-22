@@ -255,7 +255,7 @@ export function StatusStrip({
   total,
   height = 6,
 }: {
-  counts: Record<StatusKey, number>;
+  counts: { pending: number; paid: number };
   total: number;
   height?: number;
 }) {
@@ -272,9 +272,8 @@ export function StatusStrip({
     );
   }
 
-  const segments: { key: StatusKey; count: number; color: string }[] = [
-    { key: 'completed', count: counts.completed, color: colors.completed },
-    { key: 'transferred', count: counts.transferred, color: colors.transferred },
+  const segments: { key: string; count: number; color: string }[] = [
+    { key: 'paid', count: counts.paid, color: colors.completed },
     { key: 'pending', count: counts.pending, color: colors.pending },
   ];
 

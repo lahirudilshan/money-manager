@@ -15,7 +15,7 @@ export default function OnboardingLayout() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="categories" />
-      <Stack.Screen name="sample" />
+      <Stack.Screen name="plan" />
       <Stack.Screen name="done" />
     </Stack>
   );

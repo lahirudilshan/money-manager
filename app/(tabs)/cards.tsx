@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Modal, ScrollView, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankCardTile } from '../../src/components/BankCardTile';
+import { BankLogo } from '../../src/components/BankLogo';
 import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
 import {
   Button,
@@ -12,12 +14,12 @@ import {
   GradientCard,
   Label,
   Row,
-  ScreenHeader,
   Surface,
   T,
 } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { formatMoney, parseAmount } from '../../src/core/money';
+import { BANKS, resolveBrand } from '../../src/data/banks';
 import { selectCardViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -30,11 +32,21 @@ const CARD_KINDS = [
 
 type CardKind = 'bank' | 'wallet' | 'savings' | 'goal';
 
-/** Cards are destinations: each shows what it holds and which groups draw on it. */
+/**
+ * Accounts & Cards.
+ *
+ * Two clear sections over one dataset: **Accounts** is the scannable list —
+ * where money sits, how much each holds, and what draws on it — and **Cards**
+ * shows the same accounts as their bank-branded card faces. The old screen
+ * stacked a card face and a stats block per account, which read as one long
+ * confusing column; splitting the two views makes each answer a single
+ * question.
+ */
 export default function CardsScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const state = useAppStore();
 
   const views = useMemo(() => selectCardViews(state), [state]);
@@ -42,7 +54,7 @@ export default function CardsScreen() {
   const [open, setOpen] = useState(false);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [bankName, setBankName] = useState('');
+  const [bankId, setBankId] = useState<string | null>(null);
   const [last4, setLast4] = useState('');
   const [kind, setKind] = useState<CardKind>('bank');
   const [opening, setOpening] = useState('');
@@ -52,7 +64,7 @@ export default function CardsScreen() {
 
   function resetForm() {
     setName('');
-    setBankName('');
+    setBankId(null);
     setLast4('');
     setOpening('');
     setTarget('');
@@ -70,7 +82,7 @@ export default function CardsScreen() {
     if (!card) return;
     setEditingCardId(card.id);
     setName(card.name);
-    setBankName(card.bankName ?? '');
+    setBankId(card.bankId ?? null);
     setLast4(card.last4 ?? '');
     setKind(card.kind as CardKind);
     setOpening(String(card.openingBalanceMinor / 100));
@@ -79,24 +91,23 @@ export default function CardsScreen() {
   }
 
   function handleSave() {
-    const trimmed = name.trim();
+    const brand = bankId ? BANKS.find((b) => b.id === bankId) : undefined;
+    const trimmed = name.trim() || brand?.shortName || '';
     if (!trimmed) return;
 
     const patch = {
       name: trimmed,
       kind,
-      bankName: bankName.trim() || null,
+      bankId,
+      bankName: brand?.name ?? null,
       last4: last4.trim() || null,
       icon: CARD_KINDS.find((k) => k.key === kind)?.icon ?? 'card-outline',
       openingBalanceMinor: parseAmount(opening) ?? 0,
       targetMinor: kind === 'goal' ? parseAmount(target) : null,
     };
 
-    if (editingCardId) {
-      state.updateCard(editingCardId, patch);
-    } else {
-      state.addCard({ ...patch, sortOrder: state.cards.length });
-    }
+    if (editingCardId) state.updateCard(editingCardId, patch);
+    else state.addCard({ ...patch, sortOrder: state.cards.length });
 
     resetForm();
     setOpen(false);
@@ -114,20 +125,36 @@ export default function CardsScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
-        <ScreenHeader
-          eyebrow="DESTINATIONS"
-          title="Cards"
-          action={{ icon: 'add', onPress: openCreate, label: 'Add card' }}
-        />
+        <Row justify="space-between" align="center">
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.ink} />
+          </Pressable>
+          <T variant="title">Accounts & Cards</T>
+          <Pressable
+            onPress={openCreate}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Add account"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Ionicons name="add-circle" size={28} color={colors.accent} />
+          </Pressable>
+        </Row>
 
         <GradientCard>
           <View style={{ gap: 2 }}>
-            <Label color="rgba(255,255,255,0.75)">TOTAL ACROSS CARDS</Label>
+            <Label color="rgba(255,255,255,0.75)">TOTAL ACROSS ACCOUNTS</Label>
             <T variant="hero" color="#FFFFFF">
               {formatMoney(totalHeld)}
             </T>
             <T variant="caption" color="rgba(255,255,255,0.65)">
-              Opening balances plus everything transferred this month
+              {views.length} account{views.length === 1 ? '' : 's'} · opening balances plus
+              transfers in
             </T>
           </View>
         </GradientCard>
@@ -135,15 +162,42 @@ export default function CardsScreen() {
         {views.length === 0 ? (
           <Empty
             icon="wallet-outline"
-            title="No cards yet"
-            message="Add the accounts your groups transfer money into."
-            actionLabel="Add a card"
+            title="No accounts yet"
+            message="Add the bank accounts and wallets your categories transfer money into."
+            actionLabel="Add an account"
             onAction={openCreate}
           />
         ) : (
-          views.map((view) => (
-            <CardRow key={view.card.id} view={view} onEdit={() => openEdit(view.card.id)} />
-          ))
+          <>
+            {/* Cards section — the branded faces, horizontal to keep them large. */}
+            <View style={{ gap: space.sm }}>
+              <Label>CARDS</Label>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: space.md, paddingRight: space.lg }}
+              >
+                {state.cards.map((card) => (
+                  <View key={card.id} style={{ width: 260 }}>
+                    <BankCardTile card={card} onPress={() => openEdit(card.id)} compact />
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Accounts section — the scannable ledger of what each holds. */}
+            <View style={{ gap: space.sm }}>
+              <Label>ACCOUNTS</Label>
+              <Surface padded={false} style={{ paddingVertical: space.xs }}>
+                {views.map((view, index) => (
+                  <View key={view.card.id}>
+                    {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+                    <AccountRow view={view} onEdit={() => openEdit(view.card.id)} />
+                  </View>
+                ))}
+              </Surface>
+            </View>
+          </>
         )}
       </ScrollView>
 
@@ -158,25 +212,24 @@ export default function CardsScreen() {
           contentContainerStyle={{ padding: space.lg, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <SheetHeader title={editingCardId ? 'Edit card' : 'New card'} onClose={() => setOpen(false)} />
+          <SheetHeader
+            title={editingCardId ? 'Edit account' : 'New account'}
+            onClose={() => setOpen(false)}
+          />
+
+          <BankPicker selectedId={bankId} onSelect={setBankId} />
+
           <Field
-            label="Name"
+            label="Account name"
             value={name}
             onChangeText={setName}
-            placeholder="e.g. HNB Savings"
-            autoFocus
+            placeholder="e.g. Salary account"
           />
           <PillSelect
             label="Type"
             options={CARD_KINDS}
             selectedKey={kind}
             onSelect={(key) => setKind(key as CardKind)}
-          />
-          <Field
-            label="Bank name (optional)"
-            value={bankName}
-            onChangeText={setBankName}
-            placeholder="e.g. HNB"
           />
           <Field
             label="Last 4 digits (optional)"
@@ -202,9 +255,9 @@ export default function CardsScreen() {
             />
           ) : null}
           <Button
-            label={editingCardId ? 'Save changes' : 'Create card'}
+            label={editingCardId ? 'Save changes' : 'Create account'}
             onPress={handleSave}
-            disabled={!name.trim()}
+            disabled={!name.trim() && !bankId}
           />
         </ScrollView>
       </Modal>
@@ -212,98 +265,148 @@ export default function CardsScreen() {
   );
 }
 
-function CardRow({ view, onEdit }: { view: CardView; onEdit: () => void }) {
+/** One compact account row: brand logo, name, what it holds, what draws on it. */
+function AccountRow({ view, onEdit }: { view: CardView; onEdit: () => void }) {
   const { colors, space } = useTheme();
   const state = useAppStore();
   const { card } = view;
 
+  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
   const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
-  const goalPct = hasGoal
-    ? Math.min(100, (view.balanceMinor / card.targetMinor!) * 100)
-    : 0;
+  const goalPct = hasGoal ? Math.min(100, (view.balanceMinor / card.targetMinor!) * 100) : 0;
 
   function confirmDelete() {
-    Alert.alert(`Delete ${card.name}?`, 'Categories pointing at it will need a new card.', [
+    Alert.alert(`Delete ${card.name}?`, 'Categories pointing at it will need a new account.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => state.deleteCard(card.id) },
     ]);
   }
 
   return (
-    <View style={{ gap: space.sm }}>
-      <BankCardTile card={card} onPress={onEdit} />
+    <Pressable
+      onPress={onEdit}
+      accessibilityRole="button"
+      accessibilityLabel={`${card.name}, ${formatMoney(view.balanceMinor)}`}
+      style={({ pressed }) => ({
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        gap: hasGoal ? space.sm : 0,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <Row gap={space.md}>
+        <BankLogo brand={brand} size={44} />
 
-      <Surface style={{ gap: space.md }}>
-        <Row>
-          <View style={{ flex: 1, gap: 1 }}>
-            <T variant="caption" tone="muted" numberOfLines={1}>
-              {view.categoryNames.length > 0
-                ? view.categoryNames.join(' · ')
-                : 'No categories assigned'}
+        <View style={{ flex: 1 }}>
+          <Row gap={space.xs}>
+            <T variant="bodyStrong" numberOfLines={1}>
+              {card.name}
             </T>
-          </View>
-          <Ionicons
-            name="create-outline"
-            size={18}
-            color={colors.inkMuted}
-            onPress={onEdit}
-            suppressHighlighting
-          />
-          <Ionicons
-            name="trash-outline"
-            size={18}
-            color={colors.inkMuted}
-            onPress={confirmDelete}
-            suppressHighlighting
-          />
-        </Row>
+            {card.last4 ? (
+              <T variant="caption" tone="muted">
+                ·{card.last4}
+              </T>
+            ) : null}
+          </Row>
+          <T variant="caption" tone="muted" numberOfLines={1}>
+            {view.categoryNames.length > 0
+              ? view.categoryNames.join(' · ')
+              : 'No categories assigned'}
+          </T>
+        </View>
 
-        <Row justify="space-between" align="flex-end">
-          <View style={{ gap: 1 }}>
-            <Label>BALANCE</Label>
-            <T variant="display">{formatMoney(view.balanceMinor)}</T>
-          </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <T variant="figureLarge">{formatMoney(view.balanceMinor, { compact: true })}</T>
           {view.committedMinor > 0 ? (
-            <View style={{ alignItems: 'flex-end', gap: 1 }}>
-              <Label>COMMITTED</Label>
-              <T variant="figure" color={colors.pending}>
-                {formatMoney(view.committedMinor, { compact: true })}
-              </T>
-            </View>
-          ) : null}
-        </Row>
+            <T variant="caption" color={colors.pending}>
+              {formatMoney(view.committedMinor, { compact: true })} to pay
+            </T>
+          ) : (
+            <T variant="caption" tone="muted">
+              balance
+            </T>
+          )}
+        </View>
 
-        {hasGoal ? (
-          <View style={{ gap: space.xs }}>
-            <FundingBar pct={goalPct} color={colors.accent} />
-            <Row justify="space-between">
-              <T variant="caption" tone="muted">
-                {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
-              </T>
-              <T variant="caption" tone="muted">
-                {formatMoney(Math.max(0, card.targetMinor! - view.balanceMinor), {
-                  compact: true,
-                })}{' '}
-                to go
-              </T>
-            </Row>
-          </View>
-        ) : null}
+        <Pressable
+          onPress={confirmDelete}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`Delete ${card.name}`}
+          style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1, paddingLeft: space.xs })}
+        >
+          <Ionicons name="ellipsis-vertical" size={16} color={colors.inkMuted} />
+        </Pressable>
+      </Row>
 
-        {view.fundedInMinor > 0 ? (
-          <>
-            <Divider />
-            <Row justify="space-between">
-              <T variant="caption" tone="muted">
-                Transferred in this month
+      {hasGoal ? (
+        <View style={{ gap: 3, paddingLeft: 44 + space.md }}>
+          <FundingBar pct={goalPct} color={colors.accent} height={5} />
+          <Row justify="space-between">
+            <T variant="caption" tone="muted">
+              {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
+            </T>
+            <T variant="caption" tone="muted">
+              {formatMoney(Math.max(0, card.targetMinor! - view.balanceMinor), { compact: true })}{' '}
+              to go
+            </T>
+          </Row>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+/** Horizontal strip of bank brands for choosing an account's bank. */
+function BankPicker({
+  selectedId,
+  onSelect,
+}: {
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Label>BANK</Label>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
+      >
+        {BANKS.map((brand) => {
+          const selected = selectedId === brand.id;
+          return (
+            <Pressable
+              key={brand.id}
+              onPress={() => onSelect(selected ? null : brand.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={brand.name}
+              style={({ pressed }) => ({
+                alignItems: 'center',
+                gap: 4,
+                padding: 4,
+                borderRadius: radius.md,
+                borderWidth: 2,
+                borderColor: selected ? colors.ink : 'transparent',
+                opacity: pressed ? 0.75 : 1,
+              })}
+            >
+              <BankLogo brand={brand} size={44} />
+              <T
+                variant="caption"
+                tone={selected ? 'ink' : 'muted'}
+                numberOfLines={1}
+                style={{ maxWidth: 56 }}
+              >
+                {brand.shortName}
               </T>
-              <T variant="figure" color={colors.completed}>
-                +{formatMoney(view.fundedInMinor)}
-              </T>
-            </Row>
-          </>
-        ) : null}
-      </Surface>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 }

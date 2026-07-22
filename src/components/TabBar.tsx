@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 // SDK 56+ forbids importing from `@react-navigation/*` in app code. expo-router
 // vendors those types; this is the path they are declared at.
 import type { BottomTabBarProps } from 'expo-router/build/react-navigation/bottom-tabs/types';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeProvider';
 import { T } from './ui';
@@ -26,10 +26,8 @@ const SIDE_INSET = 16;
 const ADD_BUTTON_SIZE = 40;
 
 const ICONS: Record<string, { active: string; inactive: string; label: string }> = {
-  index: { active: 'grid', inactive: 'grid-outline', label: 'Board' },
-  summary: { active: 'reader', inactive: 'reader-outline', label: 'Summary' },
-  cards: { active: 'wallet', inactive: 'wallet-outline', label: 'Cards' },
-  income: { active: 'trending-up', inactive: 'trending-up-outline', label: 'Income' },
+  index: { active: 'home', inactive: 'home-outline', label: 'Home' },
+  list: { active: 'list', inactive: 'list-outline', label: 'List' },
   loans: { active: 'pie-chart', inactive: 'pie-chart-outline', label: 'Loans' },
   settings: { active: 'settings', inactive: 'settings-outline', label: 'Settings' },
 };
@@ -44,12 +42,22 @@ export function useTabBarClearance(): number {
   return DOCK_HEIGHT + Math.max(insets.bottom, 12) + 28;
 }
 
-export function TabBar({ state, navigation }: BottomTabBarProps) {
+export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   const { colors, radius, shadow, space } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  const routes = state.routes;
+  // A custom tab bar must honour `href: null` itself — unlike the default bar,
+  // it won't skip hidden routes for us. expo-router consumes `href` before the
+  // tab bar sees the options, converting `href: null` into
+  // `tabBarItemStyle: { display: 'none' }` (see expo-router TabsClient), so
+  // that display flag — not `href` — is the reliable "hidden" signal.
+  const routes = state.routes.filter((route) => {
+    const itemStyle = StyleSheet.flatten(
+      descriptors[route.key]?.options?.tabBarItemStyle,
+    ) as { display?: string } | undefined;
+    return itemStyle?.display !== 'none';
+  });
 
   return (
     <View
@@ -78,8 +86,10 @@ export function TabBar({ state, navigation }: BottomTabBarProps) {
         ]}
       >
         <View style={{ flex: 1, flexDirection: 'row' }}>
-          {routes.map((route, index) => {
-            const focused = state.index === index;
+          {routes.map((route) => {
+            // Compare by key, not by position — filtering out hidden routes
+            // shifts array indices out of step with `state.index`.
+            const focused = state.routes[state.index]?.key === route.key;
             const meta = ICONS[route.name] ?? {
               active: 'ellipse',
               inactive: 'ellipse-outline',

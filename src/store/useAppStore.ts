@@ -3,22 +3,27 @@ import { buildSchedule, paymentsElapsed, remainingBalance } from '../core/amorti
 import { sumMinor, type Minor } from '../core/money';
 import {
   calculateRatios,
+  daysUntil,
+  dueDateFor,
   nextStatus,
   periodKey,
   resolveCardId,
   summariseBoard,
   summariseCategory,
+  urgencyFor,
   type BoardTotals,
-  type CategoryStatus,
   type CategorySummary,
+  type DueUrgency,
   type PlannedCategory,
   type Ratios,
+  type SubcategoryStatus,
 } from '../core/planning';
 import { groupColors } from '../theme';
 import { initialiseDatabase, resetDatabase } from '../db/client';
 import {
   cardRepo,
   categoryRepo,
+  categoryStateRepo,
   fundingRepo,
   incomeRepo,
   loanRepo,
@@ -32,6 +37,8 @@ import { cancelAllReminders } from '../services/notifications';
 import type {
   Card,
   Category,
+  CategoryFundingStatus,
+  CategoryState,
   Income,
   Loan,
   NewCard,
@@ -57,32 +64,48 @@ export interface AppState {
   categories: Category[];
   subcategories: Subcategory[];
   states: Map<string, SubcategoryState>;
+  /** Per-category bulk-transfer status for the current period. */
+  categoryStates: Map<string, CategoryState>;
   fundingTotals: Map<string, Minor>;
   incomes: Income[];
   loans: Loan[];
   currency: string;
+  usdRate: number;
+  /** 'system' follows the OS; 'light'/'dark' force a mode. */
+  themeMode: 'system' | 'light' | 'dark';
+  hapticsEnabled: boolean;
 
   initialise: () => Promise<void>;
   refresh: () => void;
   setPeriod: (period: string) => void;
+  setCurrency: (currency: string) => void;
+  setUsdRate: (rate: number) => void;
+  setThemeMode: (mode: 'system' | 'light' | 'dark') => void;
+  setHapticsEnabled: (enabled: boolean) => void;
   resetAllData: () => Promise<void>;
   seedDemoData: () => void;
   completeOnboarding: () => void;
-  applySampleTemplate: (existingCardId?: string | null) => void;
 
+  /** Toggle a bill between pending and paid. */
   cycleStatus: (subcategoryId: string) => void;
-  setStatus: (subcategoryId: string, status: CategoryStatus) => void;
+  setStatus: (subcategoryId: string, status: SubcategoryStatus) => void;
   setActual: (subcategoryId: string, actualMinor: Minor | null) => void;
   logTransaction: (
     subcategoryId: string,
     input: {
-      status: CategoryStatus;
+      status: SubcategoryStatus;
       actualMinor?: Minor | null;
       note?: string | null;
       imageUri?: string | null;
     },
   ) => void;
-  markCategory: (categoryId: string, status: CategoryStatus) => void;
+  /** Mark every bill in a category paid or pending at once. */
+  markCategory: (categoryId: string, status: SubcategoryStatus) => void;
+
+  /** Set the category's bulk-transfer status (the salary→account move). */
+  setCategoryTransfer: (categoryId: string, status: CategoryFundingStatus) => void;
+  /** Toggle the category's bulk-transfer status. */
+  toggleCategoryTransfer: (categoryId: string) => void;
 
   fundCategory: (categoryId: string, amountMinor: Minor, note?: string) => void;
   unfundCategory: (categoryId: string) => void;
@@ -132,10 +155,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   categories: [],
   subcategories: [],
   states: new Map(),
+  categoryStates: new Map(),
   fundingTotals: new Map(),
   incomes: [],
   loans: [],
   currency: 'LKR',
+  usdRate: 300,
+  themeMode: 'system',
+  hapticsEnabled: true,
 
   async initialise() {
     initialiseDatabase();
@@ -153,15 +180,40 @@ export const useAppStore = create<AppState>((set, get) => ({
       categories: categoryRepo.all(),
       subcategories: subcategoryRepo.all(),
       states: stateRepo.byPeriod(period),
+      categoryStates: categoryStateRepo.byPeriod(period),
       fundingTotals: fundingRepo.totalsByPeriod(period),
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
       currency: settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR',
+      usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
+      themeMode:
+        (settingsRepo.get(SETTINGS_KEYS.themeMode) as 'system' | 'light' | 'dark') ?? 'system',
+      hapticsEnabled: settingsRepo.get(SETTINGS_KEYS.haptics) !== 'false',
     });
   },
 
   setPeriod(period) {
     set({ period });
+    get().refresh();
+  },
+
+  setCurrency(currency) {
+    settingsRepo.set(SETTINGS_KEYS.currency, currency);
+    get().refresh();
+  },
+
+  setUsdRate(rate) {
+    settingsRepo.set(SETTINGS_KEYS.usdRate, String(rate));
+    get().refresh();
+  },
+
+  setThemeMode(mode) {
+    settingsRepo.set(SETTINGS_KEYS.themeMode, mode);
+    get().refresh();
+  },
+
+  setHapticsEnabled(enabled) {
+    settingsRepo.set(SETTINGS_KEYS.haptics, enabled ? 'true' : 'false');
     get().refresh();
   },
 
@@ -192,14 +244,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ needsOnboarding: false });
   },
 
-  applySampleTemplate(existingCardId) {
-    seedSampleTemplate(existingCardId);
-    get().refresh();
-  },
-
   cycleStatus(subcategoryId) {
     const { period, states } = get();
-    const current = states.get(subcategoryId)?.status ?? 'pending';
+    // Repo already normalises to pending/paid, so the cast is a formality.
+    const current = (states.get(subcategoryId)?.status as SubcategoryStatus) ?? 'pending';
     stateRepo.setStatus(subcategoryId, period, nextStatus(current));
     get().refresh();
   },
@@ -226,9 +274,25 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refresh();
   },
 
+  setCategoryTransfer(categoryId, status) {
+    categoryStateRepo.setStatus(categoryId, get().period, status);
+    get().refresh();
+  },
+
+  toggleCategoryTransfer(categoryId) {
+    const { period, categoryStates } = get();
+    const current = categoryStates.get(categoryId)?.status ?? 'pending';
+    categoryStateRepo.setStatus(
+      categoryId,
+      period,
+      current === 'transferred' ? 'pending' : 'transferred',
+    );
+    get().refresh();
+  },
+
   fundCategory(categoryId, amountMinor, note) {
     if (amountMinor <= 0) return;
-    const { period, categories, subcategories, states } = get();
+    const { period, categories } = get();
     const category = categories.find((c) => c.id === categoryId);
 
     fundingRepo.create({
@@ -240,20 +304,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       note: note ?? null,
     });
 
-    // Funding the category moves the money, so every still-pending
-    // subcategory in it becomes "transferred" — that is what the transfer means.
-    const pendingIds = subcategories
-      .filter(
-        (s) => s.categoryId === categoryId && (states.get(s.id)?.status ?? 'pending') === 'pending',
-      )
-      .map((s) => s.id);
-    stateRepo.setStatusForSubcategories(pendingIds, period, 'transferred');
+    // Recording the bulk money onto the account *is* the category transfer;
+    // it does not touch any individual bill's paid/pending state.
+    categoryStateRepo.setStatus(categoryId, period, 'transferred');
 
     get().refresh();
   },
 
   unfundCategory(categoryId) {
-    fundingRepo.clearForCategory(categoryId, get().period);
+    const { period } = get();
+    fundingRepo.clearForCategory(categoryId, period);
+    categoryStateRepo.setStatus(categoryId, period, 'pending');
     get().refresh();
   },
 
@@ -343,13 +404,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 // ------------------------------------------------------------- selectors
 
-/** A category with its subcategories, flattened and ready for status-cycling UI. */
+/** A category with its subcategories, flattened and ready for status UI. */
 export interface CategoryView {
   category: Category;
   card: Card | undefined;
   subcategories: PlannedCategory[];
   rawSubcategories: Subcategory[];
   summary: CategorySummary;
+  /** Whether the category's bulk money has been transferred this period. */
+  transferStatus: CategoryFundingStatus;
 }
 
 function toPlanned(subcategory: Subcategory, state: SubcategoryState | undefined): PlannedCategory {
@@ -358,7 +421,7 @@ function toPlanned(subcategory: Subcategory, state: SubcategoryState | undefined
     name: subcategory.name,
     plannedMinor: subcategory.plannedMinor,
     actualMinor: state?.actualMinor ?? null,
-    status: state?.status ?? 'pending',
+    status: (state?.status as SubcategoryStatus) ?? 'pending',
   };
 }
 
@@ -374,6 +437,7 @@ export function selectCategoryViews(state: AppState): CategoryView[] {
       subcategories: planned,
       rawSubcategories: subs,
       summary: summariseCategory(planned, funded),
+      transferStatus: state.categoryStates.get(category.id)?.status ?? 'pending',
     };
   });
 }
@@ -442,7 +506,7 @@ export function selectCardViews(state: AppState): CardView[] {
         const planned = view.subcategories.find((p) => p.id === sub.id);
         if (!planned) continue;
         const amount = planned.actualMinor ?? planned.plannedMinor;
-        if (planned.status !== 'completed') committed += amount;
+        if (planned.status !== 'paid') committed += amount;
       }
     }
 
@@ -454,6 +518,130 @@ export function selectCardViews(state: AppState): CardView[] {
       categoryNames: attachedCategories.map((view) => view.category.name),
     };
   });
+}
+
+/**
+ * What one account needs to receive this month: the sum of every planned line
+ * that draws from it and has not yet been transferred.
+ *
+ * This is the dashboard's "move this much to each account" answer. It resolves
+ * per leaf (a subcategory can override its category's card), and counts only
+ * lines still awaiting money — once a line is transferred or completed, its
+ * cash is already sitting on the card.
+ */
+export interface AccountTransferView {
+  card: Card;
+  /** Still to move onto this card. */
+  toTransferMinor: Minor;
+  /** Everything planned against this card this month, moved or not. */
+  plannedMinor: Minor;
+  /** Already moved (transferred or completed). */
+  movedMinor: Minor;
+  /** Number of lines still awaiting a transfer. */
+  pendingCount: number;
+  /** Category names drawing from this card, for the row's subtitle. */
+  categoryNames: string[];
+}
+
+export function selectAccountTransfers(state: AppState): AccountTransferView[] {
+  const views = selectCategoryViews(state);
+
+  return state.cards
+    .map((card) => {
+      let toTransfer = 0;
+      let planned = 0;
+      let moved = 0;
+      let pendingCount = 0;
+      const categoryNames = new Set<string>();
+
+      for (const view of views) {
+        for (const sub of view.rawSubcategories) {
+          if (resolveCardId(sub.cardId, view.category.cardId) !== card.id) continue;
+
+          const line = view.subcategories.find((p) => p.id === sub.id);
+          if (!line) continue;
+          // Income lands *in* an account rather than being moved out to it.
+          if (sub.type === 'income') continue;
+
+          const amount = line.actualMinor ?? line.plannedMinor;
+          planned += amount;
+          categoryNames.add(view.category.name);
+
+          if (line.status === 'pending') {
+            toTransfer += amount;
+            pendingCount += 1;
+          } else {
+            moved += amount;
+          }
+        }
+      }
+
+      return {
+        card,
+        toTransferMinor: toTransfer,
+        plannedMinor: planned,
+        movedMinor: moved,
+        pendingCount,
+        categoryNames: [...categoryNames],
+      };
+    })
+    .filter((view) => view.plannedMinor > 0)
+    .sort((a, b) => b.toTransferMinor - a.toTransferMinor);
+}
+
+/**
+ * An unpaid line surfaced on the dashboard, with how close its due date is.
+ * Overdue first, then soonest — the order the user should act in.
+ */
+export interface ReminderView {
+  subcategory: Subcategory;
+  categoryName: string;
+  categoryColor: string;
+  card: Card | undefined;
+  amountMinor: Minor;
+  status: SubcategoryStatus;
+  /** Whether the bulk money for this bill's category has landed. */
+  categoryTransferred: boolean;
+  dueDate: Date;
+  daysUntil: number;
+  urgency: DueUrgency;
+}
+
+export function selectReminders(state: AppState, today = new Date()): ReminderView[] {
+  const reminders: ReminderView[] = [];
+
+  for (const category of state.categories) {
+    const subs = state.subcategories.filter((s) => s.categoryId === category.id);
+    const categoryTransferred =
+      (state.categoryStates.get(category.id)?.status ?? 'pending') === 'transferred';
+
+    for (const sub of subs) {
+      if (sub.type === 'income') continue;
+
+      const status: SubcategoryStatus =
+        (state.states.get(sub.id)?.status as SubcategoryStatus) ?? 'pending';
+      // Paid means done — nothing left to remind about.
+      if (status === 'paid') continue;
+
+      const dueDate = dueDateFor(state.period, sub.dueDay ?? category.dueDay);
+      reminders.push({
+        subcategory: sub,
+        categoryName: category.name,
+        categoryColor: category.color,
+        card: state.cards.find(
+          (c) => c.id === resolveCardId(sub.cardId, category.cardId),
+        ),
+        amountMinor: state.states.get(sub.id)?.actualMinor ?? sub.plannedMinor,
+        status,
+        categoryTransferred,
+        dueDate,
+        daysUntil: daysUntil(dueDate, today),
+        urgency: urgencyFor(dueDate, today),
+      });
+    }
+  }
+
+  return reminders.sort((a, b) => a.daysUntil - b.daysUntil);
 }
 
 export interface LoanView {

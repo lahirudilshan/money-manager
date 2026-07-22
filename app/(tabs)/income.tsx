@@ -1,22 +1,25 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Modal, ScrollView, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
+import { BankLogo } from '../../src/components/BankLogo';
 import {
   Button,
   Divider,
   Empty,
-  Glyph,
+  GradientButton,
   GradientCard,
+  Glyph,
   Label,
   Row,
-  ScreenHeader,
   Surface,
   T,
 } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
+import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
   selectTotalIncome,
@@ -29,6 +32,7 @@ export default function IncomeScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const state = useAppStore();
 
   const total = useMemo(() => selectTotalIncome(state), [state]);
@@ -79,11 +83,18 @@ export default function IncomeScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
-        <ScreenHeader
-          eyebrow="EARNINGS"
-          title="Income"
-          action={{ icon: 'add', onPress: () => setOpen(true), label: 'Add income' }}
-        />
+        <Row justify="space-between" align="center">
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.ink} />
+          </Pressable>
+          <T variant="title">Income</T>
+          <View style={{ width: 24 }} />
+        </Row>
 
         <GradientCard>
           <View style={{ gap: space.lg }}>
@@ -167,6 +178,14 @@ export default function IncomeScreen() {
             ))}
           </Surface>
         )}
+
+        {state.incomes.length > 0 ? (
+          <GradientButton
+            label="Add income source"
+            icon="add"
+            onPress={() => setOpen(true)}
+          />
+        ) : null}
       </ScrollView>
 
       <Modal
@@ -221,16 +240,44 @@ export default function IncomeScreen() {
             </>
           ) : null}
           {state.cards.length > 0 ? (
-            <PillSelect
-              label="Paid into"
-              options={state.cards.map((card) => ({
-                key: card.id,
-                label: card.name,
-                color: card.color,
-              }))}
-              selectedKey={cardId}
-              onSelect={setCardId}
-            />
+            <View style={{ gap: space.sm }}>
+              <Label>PAID INTO</Label>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+                {state.cards.map((card) => {
+                  const brand = resolveBrand({
+                    bankId: card.bankId,
+                    bankName: card.bankName,
+                    name: card.name,
+                  });
+                  const selected = cardId === card.id;
+                  return (
+                    <Pressable
+                      key={card.id}
+                      onPress={() => setCardId(card.id)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: space.sm,
+                        paddingVertical: 7,
+                        paddingHorizontal: space.md,
+                        borderRadius: 999,
+                        borderWidth: 1.5,
+                        borderColor: selected ? brand.color : colors.hairline,
+                        backgroundColor: selected ? `${brand.color}14` : colors.surface,
+                        opacity: pressed ? 0.75 : 1,
+                      })}
+                    >
+                      <BankLogo brand={brand} size={20} />
+                      <T variant="small" style={{ fontWeight: selected ? '700' : '500' }}>
+                        {card.name}
+                      </T>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
           ) : null}
           <Button
             label="Add income"

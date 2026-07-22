@@ -3,6 +3,7 @@ import { db } from './client';
 import {
   cards,
   categories,
+  categoryStates,
   fundings,
   incomes,
   loans,
@@ -11,7 +12,8 @@ import {
   subcategoryStates,
   type Card,
   type Category,
-  type CategoryStatus,
+  type CategoryFundingStatus,
+  type CategoryState,
   type Funding,
   type Income,
   type Loan,
@@ -23,7 +25,22 @@ import {
   type NewSubcategory,
   type Subcategory,
   type SubcategoryState,
+  type SubcategoryStatus,
 } from './schema';
+
+/**
+ * Collapse a stored subcategory status to the 2-value model used everywhere
+ * above the DB. Old rows can hold `transferred`/`completed` from the previous
+ * 3-state design; both mean the bill is settled, so both read as `paid`.
+ */
+function normaliseSubStatus(stored: string): SubcategoryStatus {
+  return stored === 'pending' ? 'pending' : 'paid';
+}
+
+/** A subcategory state row with its status collapsed to pending/paid. */
+function readSubState(row: SubcategoryState): SubcategoryState {
+  return { ...row, status: normaliseSubStatus(row.status) };
+}
 
 /** Collision-resistant id without a uuid dependency. */
 export function createId(): string {
@@ -148,34 +165,29 @@ export const subcategoryRepo = {
 };
 
 export const stateRepo = {
-  /** All subcategory states for a period, keyed by subcategoryId for O(1) lookup. */
+  /**
+   * All subcategory states for a period, keyed by subcategoryId. Statuses are
+   * collapsed to pending/paid so no caller sees a legacy value.
+   */
   byPeriod(period: string): Map<string, SubcategoryState> {
     const rows = db
       .select()
       .from(subcategoryStates)
       .where(eq(subcategoryStates.period, period))
       .all();
-    return new Map(rows.map((row) => [row.subcategoryId, row]));
+    return new Map(rows.map((row) => [row.subcategoryId, readSubState(row)]));
   },
 
   /**
-   * Set a subcategory's status for a period, creating the row on first touch.
-   * Upsert keyed on (subcategoryId, period), which has a unique index.
+   * Set a bill's status for a period, creating the row on first touch. Upsert
+   * keyed on (subcategoryId, period), which has a unique index.
    */
-  setStatus(subcategoryId: string, period: string, status: CategoryStatus): void {
-    const timestamps = {
-      transferredAt: status === 'pending' ? null : now(),
-      completedAt: status === 'completed' ? now() : null,
-    };
+  setStatus(subcategoryId: string, period: string, status: SubcategoryStatus): void {
+    // `completedAt` records when the bill was paid, reused for the 2-state model.
+    const timestamps = { completedAt: status === 'paid' ? now() : null };
 
     db.insert(subcategoryStates)
-      .values({
-        id: createId(),
-        subcategoryId,
-        period,
-        status,
-        ...timestamps,
-      })
+      .values({ id: createId(), subcategoryId, period, status, ...timestamps })
       .onConflictDoUpdate({
         target: [subcategoryStates.subcategoryId, subcategoryStates.period],
         set: { status, ...timestamps, updatedAt: now() },
@@ -203,16 +215,13 @@ export const stateRepo = {
     subcategoryId: string,
     period: string,
     input: {
-      status: CategoryStatus;
+      status: SubcategoryStatus;
       actualMinor?: number | null;
       note?: string | null;
       imageUri?: string | null;
     },
   ): void {
-    const statusTimestamps = {
-      transferredAt: input.status === 'pending' ? null : now(),
-      completedAt: input.status === 'completed' ? now() : null,
-    };
+    const statusTimestamps = { completedAt: input.status === 'paid' ? now() : null };
 
     const patch: Partial<typeof subcategoryStates.$inferInsert> = {
       status: input.status,
@@ -241,15 +250,39 @@ export const stateRepo = {
       .run();
   },
 
-  /** Bulk-set every subcategory in a category — powers "mark all transferred". */
+  /** Bulk-set every bill in a category — powers "mark all paid". */
   setStatusForSubcategories(
     subcategoryIds: readonly string[],
     period: string,
-    status: CategoryStatus,
+    status: SubcategoryStatus,
   ): void {
     for (const subcategoryId of subcategoryIds) {
       stateRepo.setStatus(subcategoryId, period, status);
     }
+  },
+};
+
+export const categoryStateRepo = {
+  /** All category bulk-transfer states for a period, keyed by categoryId. */
+  byPeriod(period: string): Map<string, CategoryState> {
+    const rows = db
+      .select()
+      .from(categoryStates)
+      .where(eq(categoryStates.period, period))
+      .all();
+    return new Map(rows.map((row) => [row.categoryId, row]));
+  },
+
+  /** Set a category's bulk-transfer status for a period (upsert). */
+  setStatus(categoryId: string, period: string, status: CategoryFundingStatus): void {
+    const transferredAt = status === 'transferred' ? now() : null;
+    db.insert(categoryStates)
+      .values({ id: createId(), categoryId, period, status, transferredAt })
+      .onConflictDoUpdate({
+        target: [categoryStates.categoryId, categoryStates.period],
+        set: { status, transferredAt, updatedAt: now() },
+      })
+      .run();
   },
 };
 
@@ -370,4 +403,6 @@ export const SETTINGS_KEYS = {
   currency: 'currency',
   usdRate: 'usd_rate',
   onboarded: 'onboarded',
+  themeMode: 'theme_mode',
+  haptics: 'haptics',
 } as const;

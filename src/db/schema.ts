@@ -29,6 +29,12 @@ export const cards = sqliteTable('cards', {
   kind: text('kind', { enum: ['bank', 'wallet', 'savings', 'goal'] })
     .notNull()
     .default('bank'),
+  /**
+   * Id from the bank catalog (src/data/banks.ts) when the account was picked
+   * from the list — drives the card's brand colour and monogram. Null for
+   * hand-typed accounts, which fall back to name matching.
+   */
+  bankId: text('bank_id'),
   /** Real bank/institution name, e.g. "HNB" — shown on the card face. */
   bankName: text('bank_name'),
   /** Last 4 digits of the account/card number, for a masked "•••• 1234" look. */
@@ -106,11 +112,15 @@ export const subcategories = sqliteTable(
 );
 
 /**
- * Per-month status of one subcategory — the heart of the app.
+ * Per-month status of one subcategory (a single bill) — the heart of the app.
  *
- * pending      money not yet moved
- * transferred  money is on the card, bill not yet paid
- * completed    paid and done
+ * pending  not yet paid this month
+ * paid     paid out of its account
+ *
+ * The legacy `transferred`/`completed` values still validate here so old rows
+ * load; the repository maps them to `paid` on read, and only ever writes
+ * `pending`/`paid`. Whether the *bulk* money has moved is a separate,
+ * category-level fact (see `categoryStates`).
  *
  * Keyed by (subcategoryId, period) where period is "YYYY-MM", so each month
  * has an independent checklist and history is preserved.
@@ -124,7 +134,7 @@ export const subcategoryStates = sqliteTable(
       .references(() => subcategories.id, { onDelete: 'cascade' }),
     /** "YYYY-MM". */
     period: text('period').notNull(),
-    status: text('status', { enum: ['pending', 'transferred', 'completed'] })
+    status: text('status', { enum: ['pending', 'paid', 'transferred', 'completed'] })
       .notNull()
       .default('pending'),
     /** Actual amount if it differed from the plan; null means "as planned". */
@@ -140,6 +150,35 @@ export const subcategoryStates = sqliteTable(
     index('subcategory_states_period_idx').on(t.period),
     index('subcategory_states_lookup_idx').on(t.subcategoryId, t.period),
   ],
+);
+
+/**
+ * Per-month status of a whole category's *bulk* transfer.
+ *
+ * pending      the bulk money (e.g. salary) has not yet been moved to the
+ *              category's account this month
+ * transferred  it has — the account now holds the money the bills draw on
+ *
+ * Independent of subcategory (bill) status: marking a category transferred
+ * does not pay any bill, and it can be toggled back if it was a mis-tap.
+ * Keyed by (categoryId, period).
+ */
+export const categoryStates = sqliteTable(
+  'category_states',
+  {
+    id: text('id').primaryKey(),
+    categoryId: text('category_id')
+      .notNull()
+      .references(() => categories.id, { onDelete: 'cascade' }),
+    /** "YYYY-MM". */
+    period: text('period').notNull(),
+    status: text('status', { enum: ['pending', 'transferred'] })
+      .notNull()
+      .default('pending'),
+    transferredAt: integer('transferred_at', { mode: 'timestamp_ms' }),
+    ...timestamps,
+  },
+  (t) => [index('category_states_lookup_idx').on(t.categoryId, t.period)],
 );
 
 /**
@@ -192,6 +231,8 @@ export const loans = sqliteTable('loans', {
   kind: text('kind', { enum: ['personal', 'lease', 'mortgage', 'other'] })
     .notNull()
     .default('personal'),
+  /** Lending institution, from the bank catalog — drives the loan card's brand. */
+  bankId: text('bank_id'),
   principalMinor: integer('principal_minor').notNull(),
   /** Annual nominal rate as a percentage, e.g. 11.5 for 11.50%. */
   annualRatePct: real('annual_rate_pct').notNull(),
@@ -219,6 +260,8 @@ export type Subcategory = typeof subcategories.$inferSelect;
 export type NewSubcategory = typeof subcategories.$inferInsert;
 export type SubcategoryState = typeof subcategoryStates.$inferSelect;
 export type NewSubcategoryState = typeof subcategoryStates.$inferInsert;
+export type CategoryState = typeof categoryStates.$inferSelect;
+export type NewCategoryState = typeof categoryStates.$inferInsert;
 export type Funding = typeof fundings.$inferSelect;
 export type NewFunding = typeof fundings.$inferInsert;
 export type Income = typeof incomes.$inferSelect;
@@ -234,10 +277,14 @@ export const SUBCATEGORY_FREQUENCIES: SubcategoryFrequency[] = [
   'yearly',
 ];
 
-/** The three states a planned subcategory moves through in a month. */
-export type CategoryStatus = SubcategoryState['status'];
-export const CATEGORY_STATUSES: CategoryStatus[] = [
-  'pending',
-  'transferred',
-  'completed',
-];
+/**
+ * The two states a bill (subcategory) moves through in a month, as seen above
+ * the DB layer. The stored column still permits the legacy `transferred`/
+ * `completed` values for old rows; the repository maps them to `paid` on read.
+ */
+export type SubcategoryStatus = 'pending' | 'paid';
+export const SUBCATEGORY_STATUSES: SubcategoryStatus[] = ['pending', 'paid'];
+
+/** The two states a category's bulk transfer moves through in a month. */
+export type CategoryFundingStatus = CategoryState['status'];
+export const CATEGORY_FUNDING_STATUSES: CategoryFundingStatus[] = ['pending', 'transferred'];

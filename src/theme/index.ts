@@ -209,27 +209,72 @@ export function buildTheme(mode: ThemeMode): Theme {
   };
 }
 
-export type StatusKey = 'pending' | 'transferred' | 'completed';
+/** Every status value across both levels, so shared components can take any. */
+export type StatusKey = 'pending' | 'paid' | 'transferred';
 
-/** Colour pair + label for a status. Status is never encoded by colour alone. */
-export function statusStyle(status: StatusKey, colors: ThemeColors) {
+interface StatusVisual {
+  fg: string;
+  bg: string;
+  label: string;
+  icon: string;
+}
+
+/**
+ * Colour pair + label + icon for a status. Status is never encoded by colour
+ * alone — the icon and word always ride along.
+ *
+ * Two levels share this: a subcategory (bill) is pending/paid; a category
+ * (bulk transfer) is pending/transferred. `paid` reuses the green "completed"
+ * role, `transferred` the blue one.
+ */
+export function statusStyle(status: StatusKey, colors: ThemeColors): StatusVisual {
   switch (status) {
-    case 'completed':
-      return { fg: colors.completed, bg: colors.completedSoft, label: 'Done' };
+    case 'paid':
+      return { fg: colors.completed, bg: colors.completedSoft, label: 'Paid', icon: 'checkmark-circle' };
     case 'transferred':
-      return { fg: colors.transferred, bg: colors.transferredSoft, label: 'Transferred' };
+      return {
+        fg: colors.transferred,
+        bg: colors.transferredSoft,
+        label: 'Transferred',
+        icon: 'arrow-forward-circle',
+      };
     default:
-      return { fg: colors.pending, bg: colors.pendingSoft, label: 'Pending' };
+      return { fg: colors.pending, bg: colors.pendingSoft, label: 'Pending', icon: 'ellipse-outline' };
   }
 }
 
 export const STATUS_ICON: Record<StatusKey, string> = {
   pending: 'ellipse-outline',
+  paid: 'checkmark-circle',
   transferred: 'arrow-forward-circle',
-  completed: 'checkmark-circle',
 };
 
 /** Tinted tile background for a group colour, falling back to a neutral. */
 export function tintFor(color: string, colors: ThemeColors): string {
   return groupTints[color] ?? colors.surfaceSunken;
+}
+
+/**
+ * Lighten (positive amount) or darken (negative) a #RRGGBB hex toward the
+ * corresponding extreme. Bank brands carry a single hue, so this derives the
+ * second gradient stop and the soft tints from it rather than storing a pair.
+ */
+export function shadeHex(hex: string, amount: number): string {
+  const normalized = hex.replace('#', '');
+  if (normalized.length !== 6) return hex;
+
+  const channels = [0, 2, 4].map((offset) => {
+    const value = Number.parseInt(normalized.slice(offset, offset + 2), 16);
+    if (!Number.isFinite(value)) return 0;
+    const target = amount < 0 ? 0 : 255;
+    const shifted = Math.round(value + (target - value) * Math.abs(amount));
+    return Math.max(0, Math.min(255, shifted));
+  });
+
+  return `#${channels.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** Low-alpha wash of a brand colour, for tinted row/section backgrounds. */
+export function washFor(color: string, mode: ThemeMode): string {
+  return shadeHex(color, mode === 'dark' ? -0.72 : 0.86);
 }

@@ -254,12 +254,12 @@ export default function CategoryDetailScreen() {
             <Label>SUBCATEGORIES</Label>
             <Row gap={space.md}>
               <Pressable
-                onPress={() => state.markCategory(category.id, 'completed')}
+                onPress={() => state.markCategory(category.id, 'paid')}
                 hitSlop={8}
                 accessibilityRole="button"
               >
                 <T variant="caption" tone="accent">
-                  Mark all done
+                  Mark all paid
                 </T>
               </Pressable>
               <Pressable
@@ -320,10 +320,8 @@ export default function CategoryDetailScreen() {
                             borderColor: colors.hairlineStrong,
                           }}
                         >
-                          {subcategory.status === 'completed' ? (
+                          {subcategory.status === 'paid' ? (
                             <Ionicons name="checkmark" size={15} color="#FFFFFF" />
-                          ) : subcategory.status === 'transferred' ? (
-                            <Ionicons name="arrow-down" size={14} color="#FFFFFF" />
                           ) : null}
                         </View>
                       </Pressable>
@@ -346,11 +344,11 @@ export default function CategoryDetailScreen() {
                             variant="body"
                             numberOfLines={1}
                             style={
-                              subcategory.status === 'completed'
+                              subcategory.status === 'paid'
                                 ? { textDecorationLine: 'line-through' }
                                 : undefined
                             }
-                            tone={subcategory.status === 'completed' ? 'muted' : 'ink'}
+                            tone={subcategory.status === 'paid' ? 'muted' : 'ink'}
                           >
                             {subcategory.name}
                           </T>
@@ -359,7 +357,7 @@ export default function CategoryDetailScreen() {
 
                         <T
                           variant="figure"
-                          tone={subcategory.status === 'completed' ? 'muted' : 'ink'}
+                          tone={subcategory.status === 'paid' ? 'muted' : 'ink'}
                         >
                           {formatMoney(amount)}
                         </T>

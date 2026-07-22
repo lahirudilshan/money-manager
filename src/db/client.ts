@@ -28,6 +28,7 @@ const DDL = [
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'bank',
+    bank_id TEXT,
     bank_name TEXT,
     last4 TEXT,
     color TEXT NOT NULL DEFAULT '#6366F1',
@@ -43,6 +44,7 @@ const DDL = [
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'personal',
+    bank_id TEXT,
     principal_minor INTEGER NOT NULL,
     annual_rate_pct REAL NOT NULL,
     term_months INTEGER NOT NULL,
@@ -96,6 +98,15 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+  `CREATE TABLE IF NOT EXISTS category_states (
+    id TEXT PRIMARY KEY NOT NULL,
+    category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    period TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    transferred_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
   `CREATE TABLE IF NOT EXISTS fundings (
     id TEXT PRIMARY KEY NOT NULL,
     category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
@@ -131,6 +142,8 @@ const DDL = [
   `CREATE INDEX IF NOT EXISTS subcategory_states_period_idx ON subcategory_states(period)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS subcategory_states_lookup_idx
      ON subcategory_states(subcategory_id, period)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS category_states_lookup_idx
+     ON category_states(category_id, period)`,
   `CREATE INDEX IF NOT EXISTS fundings_lookup_idx ON fundings(category_id, period)`,
 ];
 
@@ -490,6 +503,14 @@ function ensureAdditiveColumns(): void {
   if (hasCards) {
     ensureColumn('cards', 'bank_name', 'bank_name TEXT');
     ensureColumn('cards', 'last4', 'last4 TEXT');
+    ensureColumn('cards', 'bank_id', 'bank_id TEXT');
+  }
+
+  const hasLoans = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='loans'`,
+  );
+  if (hasLoans) {
+    ensureColumn('loans', 'bank_id', 'bank_id TEXT');
   }
 
   const hasSubcategoryStates = expoDb.getFirstSync(

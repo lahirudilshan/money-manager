@@ -1,13 +1,25 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Image, Modal, Pressable, ScrollView, View } from 'react-native';
+import {
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
-import { Button, Divider, Row, StatusPill, Surface, T } from '../../src/components/ui';
+import { Field, SheetHeader } from '../../src/components/forms';
+import { Button, Divider, GradientButton, Row, Surface, T } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { STATUS_ORDER } from '../../src/core/planning';
+import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
+import { resolveBrand } from '../../src/data/banks';
+import { BankLogo } from '../../src/components/BankLogo';
 import { useAppStore } from '../../src/store/useAppStore';
+import { statusStyle } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /** Edit one subcategory: its plan, its actual cost, and its status this month. */
@@ -23,6 +35,14 @@ export default function SubcategoryScreen() {
     [state.subcategories, id],
   );
   const stateRow = id ? state.states.get(id) : undefined;
+  const category = useMemo(
+    () => state.categories.find((c) => c.id === subcategory?.categoryId),
+    [state.categories, subcategory?.categoryId],
+  );
+  const fundingCard = useMemo(() => {
+    const cardId = resolveCardId(subcategory?.cardId, category?.cardId);
+    return state.cards.find((c) => c.id === cardId);
+  }, [state.cards, subcategory?.cardId, category?.cardId]);
 
   const [name, setName] = useState(subcategory?.name ?? '');
   const [planned, setPlanned] = useState(
@@ -50,7 +70,8 @@ export default function SubcategoryScreen() {
     );
   }
 
-  const status = stateRow?.status ?? 'pending';
+  // The repo already collapses legacy values, so this is pending/paid.
+  const status: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
 
   function handleSave() {
     const trimmed = name.trim();
@@ -82,96 +103,214 @@ export default function SubcategoryScreen() {
     ]);
   }
 
-  return (
-    <>
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
-      contentContainerStyle={{
-        paddingTop: insets.top + space.md,
-        paddingBottom: space.xxxl,
-        paddingHorizontal: space.lg,
-        gap: space.lg,
-      }}
-      keyboardShouldPersistTaps="handled"
-    >
-      <SheetHeader title="Subcategory" onClose={() => router.back()} />
+  const brand = fundingCard
+    ? resolveBrand({
+        bankId: fundingCard.bankId,
+        bankName: fundingCard.bankName,
+        name: fundingCard.name,
+      })
+    : undefined;
+  const style = statusStyle(status, colors);
+  const paid = status === 'paid';
 
-      <Surface style={{ gap: space.md }}>
-        <Row justify="space-between">
-          <T variant="heading">{subcategory.name}</T>
-          <StatusPill status={status} />
-        </Row>
-        <Divider />
-        <Row justify="space-between">
-          <T variant="small" tone="secondary">
-            Planned
-          </T>
-          <T variant="figure">{formatMoney(subcategory.plannedMinor)}</T>
-        </Row>
-        {stateRow?.actualMinor != null ? (
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={{ flex: 1, backgroundColor: colors.canvas }}
+    >
+      <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
+        <SheetHeader title="Subcategory" onClose={() => router.back()} />
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: space.md,
+          paddingBottom: space.xl,
+          paddingHorizontal: space.lg,
+          gap: space.lg,
+        }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Hero: identity, amount, and where it's paid from at a glance. */}
+        <Surface style={{ gap: space.md }}>
+          <Row gap={space.md}>
+            <View
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: 15,
+                backgroundColor: `${category?.color ?? colors.accent}1F`,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Ionicons
+                name={(subcategory.icon ?? 'pricetag-outline') as never}
+                size={22}
+                color={category?.color ?? colors.accent}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <T variant="heading" numberOfLines={1}>
+                {subcategory.name}
+              </T>
+              <T variant="caption" tone="muted" numberOfLines={1}>
+                {category?.name ?? 'Category'}
+                {subcategory.frequency !== 'monthly'
+                  ? ` · ${subcategory.frequency.replace('_', '-')}`
+                  : ''}
+              </T>
+            </View>
+          </Row>
+
+          <Divider />
+
           <Row justify="space-between">
             <T variant="small" tone="secondary">
-              Actual
+              Planned
             </T>
-            <T variant="figure">{formatMoney(stateRow.actualMinor)}</T>
+            <T variant="figureLarge">{formatMoney(subcategory.plannedMinor)}</T>
           </Row>
-        ) : null}
-        {stateRow?.note ? (
-          <>
-            <Divider />
-            <View style={{ gap: 2 }}>
+          {stateRow?.actualMinor != null ? (
+            <Row justify="space-between">
               <T variant="small" tone="secondary">
-                Note
+                Actual
               </T>
-              <T variant="body">{stateRow.note}</T>
-            </View>
-          </>
+              <T variant="figure" color={colors.accent}>
+                {formatMoney(stateRow.actualMinor)}
+              </T>
+            </Row>
+          ) : null}
+
+          {fundingCard && brand ? (
+            <>
+              <Divider />
+              <Row gap={space.sm}>
+                <BankLogo brand={brand} size={26} />
+                <T variant="small" tone="secondary" style={{ flex: 1 }}>
+                  Paid from {fundingCard.name}
+                </T>
+              </Row>
+            </>
+          ) : null}
+        </Surface>
+
+        {/* Status toggle — one big tap for the whole point of the screen:
+            has this bill been paid. */}
+        <Pressable
+          onPress={() => state.cycleStatus(subcategory.id)}
+          accessibilityRole="button"
+          accessibilityLabel={`Mark as ${paid ? 'pending' : 'paid'}. Currently ${style.label}.`}
+          style={({ pressed }) => ({
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: space.md,
+            padding: space.lg,
+            borderRadius: 16,
+            borderWidth: 1.5,
+            borderColor: style.fg,
+            backgroundColor: style.bg,
+            opacity: pressed ? 0.85 : 1,
+          })}
+        >
+          <Ionicons name={style.icon as never} size={26} color={style.fg} />
+          <View style={{ flex: 1 }}>
+            <T variant="bodyStrong" color={style.fg}>
+              {paid ? 'Paid this month' : 'Not paid yet'}
+            </T>
+            <T variant="caption" color={style.fg} style={{ opacity: 0.85 }}>
+              Tap to mark as {paid ? 'pending' : 'paid'}
+            </T>
+          </View>
+        </Pressable>
+
+        {/* Note & photo, when a transaction was logged. */}
+        {stateRow?.note || stateRow?.imageUri ? (
+          <Surface style={{ gap: space.md }}>
+            {stateRow?.note ? (
+              <View style={{ gap: 2 }}>
+                <T variant="label" tone="muted">
+                  NOTE
+                </T>
+                <T variant="body">{stateRow.note}</T>
+              </View>
+            ) : null}
+            {stateRow?.imageUri ? (
+              <Pressable
+                onPress={() => setImageViewerOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="View photo"
+              >
+                <Image
+                  source={{ uri: stateRow.imageUri }}
+                  style={{ width: 80, height: 80, borderRadius: 12 }}
+                />
+              </Pressable>
+            ) : null}
+          </Surface>
         ) : null}
-        {stateRow?.imageUri ? (
+
+        {/* Editable plan. */}
+        <View style={{ gap: space.md }}>
+          <T variant="label" tone="muted">
+            EDIT
+          </T>
+          <Field label="Name" value={name} onChangeText={setName} />
+          <Field
+            label="Planned amount"
+            value={planned}
+            onChangeText={setPlanned}
+            keyboardType="numeric"
+            placeholder="0"
+          />
+          <Field
+            label="Actual amount (optional)"
+            value={actual}
+            onChangeText={setActual}
+            keyboardType="numeric"
+            placeholder="Leave empty if it matched the plan"
+          />
+
           <Pressable
-            onPress={() => setImageViewerOpen(true)}
+            onPress={confirmDelete}
             accessibilityRole="button"
-            accessibilityLabel="View photo"
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              paddingVertical: space.md,
+              opacity: pressed ? 0.6 : 1,
+            })}
           >
-            <Image
-              source={{ uri: stateRow.imageUri }}
-              style={{ width: 64, height: 64, borderRadius: 10 }}
-            />
+            <Ionicons name="trash-outline" size={16} color={colors.danger} />
+            <T variant="small" color={colors.danger} style={{ fontWeight: '600' }}>
+              Delete subcategory
+            </T>
           </Pressable>
-        ) : null}
-      </Surface>
+        </View>
+      </ScrollView>
 
-      <PillSelect
-        label="Status this month"
-        options={STATUS_ORDER.map((key) => ({
-          key,
-          label: key === 'transferred' ? 'Transferred' : key === 'completed' ? 'Done' : 'Pending',
-        }))}
-        selectedKey={status}
-        onSelect={(key) => state.setStatus(subcategory.id, key as never)}
-      />
-
-      <Field label="Name" value={name} onChangeText={setName} />
-
-      <Field
-        label="Planned amount"
-        value={planned}
-        onChangeText={setPlanned}
-        keyboardType="numeric"
-        placeholder="0"
-      />
-
-      <Field
-        label="Actual amount (optional)"
-        value={actual}
-        onChangeText={setActual}
-        keyboardType="numeric"
-        placeholder="Leave empty if it matched the plan"
-      />
-
-      <Button label="Save" onPress={handleSave} disabled={!name.trim()} />
-      <Button label="Delete subcategory" variant="danger" icon="trash-outline" onPress={confirmDelete} />
-    </ScrollView>
+      {/* Fixed footer: Save never scrolls out of reach. */}
+      <View
+        style={{
+          paddingHorizontal: space.lg,
+          paddingTop: space.sm,
+          paddingBottom: insets.bottom + space.sm,
+          borderTopWidth: 1,
+          borderTopColor: colors.hairline,
+          backgroundColor: colors.surface,
+        }}
+      >
+        <GradientButton
+          label="Save changes"
+          icon="checkmark"
+          onPress={handleSave}
+          disabled={!name.trim()}
+        />
+      </View>
 
     {stateRow?.imageUri ? (
       <Modal
@@ -208,6 +347,6 @@ export default function SubcategoryScreen() {
         </View>
       </Modal>
     ) : null}
-    </>
+    </KeyboardAvoidingView>
   );
 }

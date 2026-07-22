@@ -116,12 +116,19 @@ function RootNavigator() {
   );
 }
 
+/** Status bar contrast follows the *resolved* theme, not the OS, so a forced
+ *  light/dark mode still gets legible status-bar icons. */
+function ThemedStatusBar() {
+  const theme = useTheme();
+  return <StatusBar style={theme.mode === 'dark' ? 'light' : 'dark'} />;
+}
+
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <ThemeProvider>
-          <StatusBar style="auto" />
+          <ThemedStatusBar />
           <RootNavigator />
         </ThemeProvider>
       </SafeAreaProvider>

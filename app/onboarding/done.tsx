@@ -7,7 +7,7 @@ import { Button, T } from '../../src/components/ui';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
-/** Onboarding step 3: confirmation, then hand off to the board. */
+/** Final onboarding screen: confirmation, then hand off to the dashboard. */
 export default function OnboardingDoneScreen() {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
@@ -48,10 +48,10 @@ export default function OnboardingDoneScreen() {
         You're set up
       </T>
       <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 280 }}>
-        Your accounts and plan are ready. From the board you can transfer money,
-        tick off bills, and add more as you go.
+        Your accounts and plan are ready. The dashboard shows what's due, how
+        much to move to each account, and your month at a glance.
       </T>
-      <Button label="Go to Board" onPress={handleFinish} style={{ width: '100%' }} />
+      <Button label="Go to Dashboard" onPress={handleFinish} style={{ width: '100%' }} />
     </View>
   );
 }

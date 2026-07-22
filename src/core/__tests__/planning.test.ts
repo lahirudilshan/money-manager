@@ -2,16 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   amountToFund,
   calculateRatios,
+  daysUntil,
   disposableIncome,
+  dueDateFor,
   effectiveAmount,
   formatPeriod,
-  isFunded,
+  isPaid,
   nextStatus,
   periodKey,
   periodToDate,
   shiftPeriod,
   summariseBoard,
   summariseCategory,
+  urgencyFor,
   type CategoryStatus,
   type PlannedCategory,
 } from '../planning';
@@ -32,31 +35,26 @@ function cat(
 }
 
 describe('nextStatus', () => {
-  it('advances pending to transferred', () => {
-    expect(nextStatus('pending')).toBe('transferred');
+  it('toggles pending to paid', () => {
+    expect(nextStatus('pending')).toBe('paid');
   });
 
-  it('advances transferred to completed', () => {
-    expect(nextStatus('transferred')).toBe('completed');
+  it('toggles paid back to pending, so a mis-tap can be undone', () => {
+    expect(nextStatus('paid')).toBe('pending');
   });
 
-  it('wraps completed back to pending so a mis-tap can be undone', () => {
-    expect(nextStatus('completed')).toBe('pending');
-  });
-
-  it('returns to the start after three taps', () => {
-    expect(nextStatus(nextStatus(nextStatus('pending')))).toBe('pending');
+  it('returns to the start after two taps', () => {
+    expect(nextStatus(nextStatus('pending'))).toBe('pending');
   });
 });
 
-describe('isFunded', () => {
+describe('isPaid', () => {
   it('is false while pending', () => {
-    expect(isFunded('pending')).toBe(false);
+    expect(isPaid('pending')).toBe(false);
   });
 
-  it('is true once transferred or completed', () => {
-    expect(isFunded('transferred')).toBe(true);
-    expect(isFunded('completed')).toBe(true);
+  it('is true once paid', () => {
+    expect(isPaid('paid')).toBe(true);
   });
 });
 
@@ -66,18 +64,18 @@ describe('effectiveAmount', () => {
   });
 
   it('prefers the actual amount when recorded', () => {
-    expect(effectiveAmount(cat(15_000, 'completed', 17_500))).toBe(toMinor(17_500));
+    expect(effectiveAmount(cat(15_000, 'paid', 17_500))).toBe(toMinor(17_500));
   });
 
   it('treats an explicit zero actual as zero, not missing', () => {
-    expect(effectiveAmount(cat(15_000, 'completed', 0))).toBe(0);
+    expect(effectiveAmount(cat(15_000, 'paid', 0))).toBe(0);
   });
 });
 
 describe('summariseCategory', () => {
   const homeExpenses = [
-    cat(15_000, 'completed'),
-    cat(10_000, 'transferred'),
+    cat(15_000, 'paid'),
+    cat(10_000, 'pending'),
     cat(8_000, 'pending'),
     cat(35_000, 'pending'),
   ];
@@ -89,7 +87,7 @@ describe('summariseCategory', () => {
 
   it('counts each status', () => {
     const summary = summariseCategory(homeExpenses, 0);
-    expect(summary.counts).toEqual({ pending: 2, transferred: 1, completed: 1 });
+    expect(summary.counts).toEqual({ pending: 3, paid: 1 });
   });
 
   it('reports a shortfall when underfunded', () => {
@@ -117,15 +115,15 @@ describe('summariseCategory', () => {
     expect(summary.fundedPct).toBe(100);
   });
 
-  it('sums only completed value into completedMinor', () => {
+  it('sums only paid value into paidMinor', () => {
     const summary = summariseCategory(homeExpenses, 0);
-    expect(summary.completedMinor).toBe(toMinor(15_000));
+    expect(summary.paidMinor).toBe(toMinor(15_000));
     expect(summary.outstandingMinor).toBe(toMinor(53_000));
   });
 
-  it('is settled only when every category is completed', () => {
+  it('is settled only when every bill is paid', () => {
     expect(summariseCategory(homeExpenses, 0).isSettled).toBe(false);
-    const allDone = [cat(100, 'completed'), cat(200, 'completed')];
+    const allDone = [cat(100, 'paid'), cat(200, 'paid')];
     expect(summariseCategory(allDone, 0).isSettled).toBe(true);
   });
 
@@ -141,7 +139,7 @@ describe('summariseCategory', () => {
   });
 
   it('uses actual amounts in the total when present', () => {
-    const summary = summariseCategory([cat(10_000, 'completed', 12_000)], 0);
+    const summary = summariseCategory([cat(10_000, 'paid', 12_000)], 0);
     expect(summary.totalMinor).toBe(toMinor(12_000));
   });
 });
@@ -160,13 +158,13 @@ describe('amountToFund', () => {
 
 describe('summariseBoard', () => {
   it('rolls up totals across groups', () => {
-    const a = summariseCategory([cat(50_000, 'completed')], toMinor(50_000));
+    const a = summariseCategory([cat(50_000, 'paid')], toMinor(50_000));
     const b = summariseCategory([cat(30_000, 'pending')], toMinor(10_000));
     const board = summariseBoard([a, b]);
 
     expect(board.plannedMinor).toBe(toMinor(80_000));
     expect(board.fundedMinor).toBe(toMinor(60_000));
-    expect(board.completedMinor).toBe(toMinor(50_000));
+    expect(board.paidMinor).toBe(toMinor(50_000));
     expect(board.outstandingMinor).toBe(toMinor(30_000));
     expect(board.categoryCount).toBe(2);
     expect(board.settledCategoryCount).toBe(1);
@@ -237,5 +235,50 @@ describe('period helpers', () => {
 
   it('formats a period for display', () => {
     expect(formatPeriod('2026-07')).toMatch(/2026/);
+  });
+});
+
+describe('dueDateFor', () => {
+  it('resolves a normal due day within the period', () => {
+    const date = dueDateFor('2026-07', 15);
+    expect(date.getFullYear()).toBe(2026);
+    expect(date.getMonth()).toBe(6); // July, 0-indexed
+    expect(date.getDate()).toBe(15);
+  });
+
+  it('clamps a day beyond the month length to the last day', () => {
+    // February 2026 has 28 days; "due on the 31st" must not roll into March.
+    const date = dueDateFor('2026-02', 31);
+    expect(date.getMonth()).toBe(1);
+    expect(date.getDate()).toBe(28);
+  });
+
+  it('clamps a day below 1 up to the first', () => {
+    expect(dueDateFor('2026-07', 0).getDate()).toBe(1);
+  });
+});
+
+describe('urgencyFor / daysUntil', () => {
+  const today = new Date(2026, 6, 15);
+
+  it('flags a past date as overdue', () => {
+    expect(urgencyFor(new Date(2026, 6, 10), today)).toBe('overdue');
+  });
+
+  it('flags a date within a week as due soon', () => {
+    expect(urgencyFor(new Date(2026, 6, 20), today)).toBe('due_soon');
+  });
+
+  it('flags today as due soon, not overdue', () => {
+    expect(urgencyFor(new Date(2026, 6, 15), today)).toBe('due_soon');
+  });
+
+  it('flags a date more than a week out as upcoming', () => {
+    expect(urgencyFor(new Date(2026, 6, 25), today)).toBe('upcoming');
+  });
+
+  it('counts whole days, negative once past due', () => {
+    expect(daysUntil(new Date(2026, 6, 20), today)).toBe(5);
+    expect(daysUntil(new Date(2026, 6, 10), today)).toBe(-5);
   });
 });

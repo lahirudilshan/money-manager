@@ -3,15 +3,34 @@ import { percentOf, sumMinor, type Minor } from './money';
 /**
  * The funding-board domain logic, as pure functions.
  *
- * A category holds subcategories. The category is assigned a card, its
- * total is transferred onto that card, and each subcategory is then walked
- * through pending -> transferred -> completed.
+ * Status lives at two independent levels, mirroring how the money actually
+ * moves:
+ *
+ *   Category  pending -> transferred   the *bulk* money (e.g. salary) landing
+ *                                       in the assigned account. Marked once.
+ *   Subcategory  pending -> paid        each individual bill (rent, utilities)
+ *                                       being paid out of that account.
+ *
+ * The two do not derive from each other: transferring the bulk money does not
+ * pay any bill, and paying bills does not imply the bulk transfer happened.
  */
 
-export type CategoryStatus = 'pending' | 'transferred' | 'completed';
+/** Per-bill state — has this individual line been paid this month. */
+export type SubcategoryStatus = 'pending' | 'paid';
 
-/** Canonical order — also the order the status chip cycles through. */
-export const STATUS_ORDER: CategoryStatus[] = ['pending', 'transferred', 'completed'];
+/** Per-category state — has the bulk money been moved to its account. */
+export type CategoryFundingStatus = 'pending' | 'transferred';
+
+/**
+ * Back-compat alias. The stored column still uses the old 3-value enum; it is
+ * mapped down to the 2-value `SubcategoryStatus` at the repository boundary
+ * (`transferred`/`completed` both read as `paid`), so nothing above the DB
+ * layer sees the legacy values.
+ */
+export type CategoryStatus = SubcategoryStatus;
+
+/** The two subcategory states, in cycle order. */
+export const STATUS_ORDER: SubcategoryStatus[] = ['pending', 'paid'];
 
 export interface PlannedCategory {
   id: string;
@@ -19,7 +38,7 @@ export interface PlannedCategory {
   plannedMinor: Minor;
   /** Overrides plannedMinor when the real amount differed. */
   actualMinor?: Minor | null;
-  status: CategoryStatus;
+  status: SubcategoryStatus;
 }
 
 /** Amount that actually counts for a category — actual if set, else planned. */
@@ -27,18 +46,14 @@ export function effectiveAmount(category: PlannedCategory): Minor {
   return category.actualMinor ?? category.plannedMinor;
 }
 
-/**
- * Advance a status one step. Completed is terminal under tapping, so it wraps
- * back to pending — the user needs a way to undo a mis-tap without a menu.
- */
-export function nextStatus(current: CategoryStatus): CategoryStatus {
-  const index = STATUS_ORDER.indexOf(current);
-  return STATUS_ORDER[(index + 1) % STATUS_ORDER.length];
+/** Toggle a bill between pending and paid — the only two states it has. */
+export function nextStatus(current: SubcategoryStatus): SubcategoryStatus {
+  return current === 'paid' ? 'pending' : 'paid';
 }
 
-/** True once money has been moved, whether or not the bill is paid. */
-export function isFunded(status: CategoryStatus): boolean {
-  return status === 'transferred' || status === 'completed';
+/** True once a bill is paid. */
+export function isPaid(status: SubcategoryStatus): boolean {
+  return status === 'paid';
 }
 
 export interface CategorySummary {
@@ -52,13 +67,13 @@ export interface CategorySummary {
   surplusMinor: Minor;
   /** 0-100, clamped — safe for progress bars. */
   fundedPct: number;
-  /** Value of subcategories marked completed. */
-  completedMinor: Minor;
-  /** Value still awaiting payment (pending + transferred). */
+  /** Value of subcategories marked paid. */
+  paidMinor: Minor;
+  /** Value still awaiting payment. */
   outstandingMinor: Minor;
-  counts: Record<CategoryStatus, number>;
+  counts: Record<SubcategoryStatus, number>;
   subcategoryCount: number;
-  /** True when every subcategory is completed (and there is at least one). */
+  /** True when every subcategory is paid (and there is at least one). */
   isSettled: boolean;
   /** True when transfers cover the full plan. */
   isFullyFunded: boolean;
@@ -70,16 +85,12 @@ export function summariseCategory(
 ): CategorySummary {
   const total = sumMinor(subcategories.map(effectiveAmount));
 
-  const counts: Record<CategoryStatus, number> = {
-    pending: 0,
-    transferred: 0,
-    completed: 0,
-  };
+  const counts: Record<SubcategoryStatus, number> = { pending: 0, paid: 0 };
 
-  let completed = 0;
+  let paid = 0;
   for (const subcategory of subcategories) {
     counts[subcategory.status] += 1;
-    if (subcategory.status === 'completed') completed += effectiveAmount(subcategory);
+    if (subcategory.status === 'paid') paid += effectiveAmount(subcategory);
   }
 
   const difference = fundedMinor - total;
@@ -90,11 +101,11 @@ export function summariseCategory(
     shortfallMinor: Math.max(0, -difference),
     surplusMinor: Math.max(0, difference),
     fundedPct: total > 0 ? Math.min(100, Math.max(0, percentOf(fundedMinor, total))) : 0,
-    completedMinor: completed,
-    outstandingMinor: total - completed,
+    paidMinor: paid,
+    outstandingMinor: total - paid,
     counts,
     subcategoryCount: subcategories.length,
-    isSettled: subcategories.length > 0 && counts.completed === subcategories.length,
+    isSettled: subcategories.length > 0 && counts.paid === subcategories.length,
     isFullyFunded: total > 0 && fundedMinor >= total,
   };
 }
@@ -123,7 +134,7 @@ export function resolveCardId(
 export interface BoardTotals {
   plannedMinor: Minor;
   fundedMinor: Minor;
-  completedMinor: Minor;
+  paidMinor: Minor;
   outstandingMinor: Minor;
   categoryCount: number;
   settledCategoryCount: number;
@@ -134,14 +145,14 @@ export interface BoardTotals {
 export function summariseBoard(summaries: readonly CategorySummary[]): BoardTotals {
   let planned = 0;
   let funded = 0;
-  let completed = 0;
+  let paid = 0;
   let settled = 0;
   let fullyFunded = 0;
 
   for (const summary of summaries) {
     planned += summary.totalMinor;
     funded += summary.fundedMinor;
-    completed += summary.completedMinor;
+    paid += summary.paidMinor;
     if (summary.isSettled) settled += 1;
     if (summary.isFullyFunded) fullyFunded += 1;
   }
@@ -149,8 +160,8 @@ export function summariseBoard(summaries: readonly CategorySummary[]): BoardTota
   return {
     plannedMinor: planned,
     fundedMinor: funded,
-    completedMinor: completed,
-    outstandingMinor: planned - completed,
+    paidMinor: paid,
+    outstandingMinor: planned - paid,
     categoryCount: summaries.length,
     settledCategoryCount: settled,
     fullyFundedCategoryCount: fullyFunded,
@@ -219,4 +230,40 @@ export function formatPeriod(period: string): string {
     month: 'long',
     year: 'numeric',
   });
+}
+
+/**
+ * The actual calendar date a due-day falls on within a period. Days beyond the
+ * month's length clamp to its last day, so "due on the 31st" still resolves in
+ * February rather than rolling into March.
+ */
+export function dueDateFor(period: string, dueDay: number): Date {
+  const base = periodToDate(period);
+  const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  return new Date(base.getFullYear(), base.getMonth(), Math.min(Math.max(1, dueDay), lastDay));
+}
+
+/**
+ * How a still-unpaid line sits relative to today: already overdue, due within
+ * the next week, or simply upcoming. Drives the dashboard's reminder list,
+ * which is the product's reason to exist — the user forgets whether a payment
+ * went out.
+ */
+export type DueUrgency = 'overdue' | 'due_soon' | 'upcoming';
+
+export function urgencyFor(dueDate: Date, today: Date): DueUrgency {
+  const startOfDay = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+
+  const days = Math.round((startOfDay(dueDate) - startOfDay(today)) / 86_400_000);
+  if (days < 0) return 'overdue';
+  if (days <= 7) return 'due_soon';
+  return 'upcoming';
+}
+
+/** Whole days from `today` to `dueDate`; negative once past due. */
+export function daysUntil(dueDate: Date, today: Date): number {
+  const startOfDay = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return Math.round((startOfDay(dueDate) - startOfDay(today)) / 86_400_000);
 }
