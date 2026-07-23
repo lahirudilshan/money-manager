@@ -62,6 +62,7 @@ const DDL = [
     color TEXT NOT NULL DEFAULT '#6366F1',
     icon TEXT NOT NULL DEFAULT 'albums-outline',
     due_day INTEGER NOT NULL DEFAULT 1,
+    default_frequency TEXT NOT NULL DEFAULT 'monthly',
     sort_order INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -511,6 +512,17 @@ function ensureAdditiveColumns(): void {
   );
   if (hasLoans) {
     ensureColumn('loans', 'bank_id', 'bank_id TEXT');
+  }
+
+  const hasCategories = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='categories'`,
+  );
+  if (hasCategories) {
+    ensureColumn(
+      'categories',
+      'default_frequency',
+      "default_frequency TEXT NOT NULL DEFAULT 'monthly'",
+    );
   }
 
   const hasSubcategoryStates = expoDb.getFirstSync(

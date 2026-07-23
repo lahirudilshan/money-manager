@@ -17,6 +17,14 @@ const CATEGORY_ICONS = [
   { key: 'albums-outline', label: 'Other', icon: 'albums-outline' as const },
 ];
 
+const FREQUENCIES = [
+  { key: 'monthly', label: 'Monthly' },
+  { key: 'yearly', label: 'Yearly' },
+  { key: 'one_time', label: 'One-time' },
+] as const;
+
+type Frequency = 'monthly' | 'one_time' | 'yearly';
+
 export default function EditCategoryScreen() {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
@@ -30,6 +38,7 @@ export default function EditCategoryScreen() {
   const [icon, setIcon] = useState(category?.icon ?? CATEGORY_ICONS[0].key);
   const [cardId, setCardId] = useState<string | null>(category?.cardId ?? null);
   const [dueDay, setDueDay] = useState(category?.dueDay ?? 1);
+  const [frequency, setFrequency] = useState<Frequency>(category?.defaultFrequency ?? 'monthly');
 
   if (!category) {
     return (
@@ -57,6 +66,7 @@ export default function EditCategoryScreen() {
       cardId,
       icon,
       dueDay: Math.min(31, Math.max(1, dueDay)),
+      defaultFrequency: frequency,
     });
     router.back();
   }
@@ -93,6 +103,13 @@ export default function EditCategoryScreen() {
           }))}
           selectedKey={cardId}
           onSelect={setCardId}
+        />
+
+        <PillSelect
+          label="Default frequency for new bills"
+          options={FREQUENCIES.map((f) => ({ key: f.key, label: f.label }))}
+          selectedKey={frequency}
+          onSelect={(key) => setFrequency(key as Frequency)}
         />
 
         <DayPicker value={dueDay} onChange={setDueDay} />

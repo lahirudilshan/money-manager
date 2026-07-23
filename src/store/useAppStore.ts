@@ -345,7 +345,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       type: input.type ?? 'expense',
       categoryId: input.categoryId,
       plannedMinor: input.plannedMinor,
-      frequency: input.frequency ?? 'monthly',
+      // Fall back to the category's default cadence, not a blanket "monthly".
+      frequency: input.frequency ?? category?.defaultFrequency ?? 'monthly',
       dueDay: input.dueDay ?? null,
       icon: input.icon ?? 'pricetag-outline',
       color: category?.color ?? nextColor(siblings.length),

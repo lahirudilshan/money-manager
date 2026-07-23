@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -14,7 +14,6 @@ import {
   Label,
   PinnedFooter,
   Row,
-  ScreenHeader,
   Surface,
   T,
 } from '../../src/components/ui';
@@ -90,6 +89,13 @@ export default function LoansScreen() {
     setOpen(false);
   }
 
+  function confirmDeleteLoan(loanName: string, loanId: string) {
+    Alert.alert(`Delete ${loanName}?`, 'This removes the loan and its schedule.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => state.deleteLoan(loanId) },
+    ]);
+  }
+
   return (
     <>
       <ScrollView
@@ -102,11 +108,34 @@ export default function LoansScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
-        <ScreenHeader
-          eyebrow="DEBT"
-          title="Loans"
-          action={{ icon: 'add', onPress: () => setOpen(true), label: 'Add loan' }}
-        />
+        <Row justify="space-between" align="center">
+          <View style={{ gap: 1 }}>
+            <Label>DEBT</Label>
+            <T variant="title">Loans</T>
+          </View>
+          {views.length > 0 ? (
+            <Pressable
+              onPress={() => setOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel="Add loan"
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 4,
+                paddingVertical: 8,
+                paddingHorizontal: space.md,
+                borderRadius: 999,
+                backgroundColor: colors.pending,
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Ionicons name="add" size={16} color="#FFFFFF" />
+              <T variant="caption" color="#FFFFFF" style={{ fontWeight: '700' }}>
+                Loan
+              </T>
+            </Pressable>
+          ) : null}
+        </Row>
 
         {views.length === 0 ? (
           <Empty
@@ -119,37 +148,43 @@ export default function LoansScreen() {
         ) : (
           <>
             {/*
-              Debt gets its own warm tint rather than the app's blue/teal
-              gradient — that gradient reads as "your money, your plan";
-              borrowing is a different kind of number and should not borrow
-              that identity.
+              Summary hero focused on the two numbers that matter — what you
+              still owe (the headline) and what leaves your account each month.
+              Debt keeps its own warm hue rather than the app's brand gradient,
+              which reads as "your money"; borrowing is a different kind of
+              number and shouldn't wear that identity.
             */}
-            <Surface style={{ gap: space.lg, backgroundColor: colors.pendingSoft, borderColor: colors.pending }}>
-              <Row justify="space-between" align="flex-start">
-                <View style={{ gap: 2 }}>
-                  <Label color={colors.pending}>MONTHLY</Label>
-                  <T variant="display">{formatMoney(totals.monthly)}</T>
-                </View>
-              </Row>
+            <Surface
+              style={{
+                gap: space.lg,
+                backgroundColor: colors.pendingSoft,
+                borderColor: colors.pending,
+              }}
+            >
+              <View style={{ gap: 2 }}>
+                <Label color={colors.pending}>TOTAL OUTSTANDING</Label>
+                <T variant="hero">{formatMoney(totals.outstanding)}</T>
+              </View>
               <Divider style={{ backgroundColor: colors.hairlineStrong }} />
               <Row justify="space-between">
-                <View style={{ gap: 2 }}>
-                  <Label color={colors.pending}>OUTSTANDING</Label>
-                  <T variant="figureLarge">
-                    {formatMoney(totals.outstanding, { compact: true })}
-                  </T>
-                </View>
-                <View style={{ alignItems: 'flex-end', gap: 2 }}>
-                  <Label color={colors.pending}>LIFETIME INTEREST</Label>
-                  <T variant="figureLarge" color={colors.pending}>
-                    {formatMoney(totals.interest, { compact: true })}
-                  </T>
-                </View>
+                <SummaryStat label="Per month" value={formatMoney(totals.monthly)} />
+                <SummaryStat
+                  label="Lifetime interest"
+                  value={formatMoney(totals.interest, { compact: true })}
+                  color={colors.pending}
+                  align="flex-end"
+                />
               </Row>
             </Surface>
 
+            <Label>{views.length} ACTIVE LOAN{views.length === 1 ? '' : 'S'}</Label>
+
             {views.map((view) => (
-              <LoanCard key={view.loan.id} view={view} />
+              <LoanCard
+                key={view.loan.id}
+                view={view}
+                onDelete={() => confirmDeleteLoan(view.loan.name, view.loan.id)}
+              />
             ))}
           </>
         )}
@@ -165,12 +200,14 @@ export default function LoansScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, backgroundColor: colors.canvas }}
         >
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
+          <SheetHeader title="New loan" onClose={() => setOpen(false)} />
+        </View>
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
+          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <SheetHeader title="New loan" onClose={() => setOpen(false)} />
           <Field label="Name" value={name} onChangeText={setName} autoFocus />
           <PillSelect
             label="Type"
@@ -228,7 +265,7 @@ const LOAN_KIND_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
   other: 'ellipsis-horizontal',
 };
 
-function LoanCard({ view }: { view: LoanView }) {
+function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) {
   const { colors, radius, space } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const { loan } = view;
@@ -331,56 +368,97 @@ function LoanCard({ view }: { view: LoanView }) {
       </LinearGradient>
 
       <View style={{ padding: space.lg, gap: space.md }}>
-        {/* Key figures as a clean 2x2 grid, so the loan's shape reads at a
-            glance rather than as a run-on caption. */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          <KeyFigure
-            label="Borrowed"
-            value={formatMoney(loan.principalMinor, { compact: true })}
-          />
-          <KeyFigure label="Rate" value={`${loan.annualRatePct}%`} />
-          <KeyFigure label="Term" value={`${loan.termMonths / 12} yr`} />
-          <KeyFigure
-            label="Total interest"
-            value={formatMoney(view.totalInterestMinor, { compact: true })}
-            color={accent}
-          />
-        </View>
-
-        <Divider />
-
+        {/* The three facts that define the loan, on one clean line. */}
         <Row justify="space-between">
-          <T variant="small" tone="secondary">
-            Total repayable
-          </T>
-          <T variant="figure">
-            {formatMoney(loan.principalMinor + view.totalInterestMinor)}
-          </T>
+          <CardStat label="Borrowed" value={formatMoney(loan.principalMinor, { compact: true })} />
+          <CardStat label="Rate" value={`${loan.annualRatePct}%`} align="center" />
+          <CardStat label="Term" value={`${loan.termMonths / 12} yr`} align="flex-end" />
         </Row>
 
-        {/* One tap reveals the amortization schedule — hidden by default. */}
-        <Pressable
-          onPress={() => setExpanded(!expanded)}
-          accessibilityRole="button"
-          accessibilityState={{ expanded }}
-          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        {/* Repayable breakdown — principal + interest, so the cost of
+            borrowing is explicit rather than buried. */}
+        <View
+          style={{
+            backgroundColor: colors.surfaceSunken,
+            borderRadius: radius.md,
+            padding: space.md,
+            gap: space.xs,
+          }}
         >
-          <Row gap={4} justify="center">
+          <Row justify="space-between">
+            <T variant="caption" tone="muted">
+              Principal
+            </T>
+            <T variant="caption" tone="secondary">
+              {formatMoney(loan.principalMinor)}
+            </T>
+          </Row>
+          <Row justify="space-between">
+            <T variant="caption" tone="muted">
+              Interest
+            </T>
+            <T variant="caption" color={accent}>
+              +{formatMoney(view.totalInterestMinor)}
+            </T>
+          </Row>
+          <Divider />
+          <Row justify="space-between">
+            <T variant="small" style={{ fontWeight: '700' }}>
+              Total repayable
+            </T>
+            <T variant="figure">
+              {formatMoney(loan.principalMinor + view.totalInterestMinor)}
+            </T>
+          </Row>
+        </View>
+
+        {/* Schedule toggle + delete share one footer row. */}
+        <Row>
+          <Pressable
+            onPress={() => setExpanded(!expanded)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded }}
+            style={({ pressed }) => ({
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 4,
+              paddingVertical: space.xs,
+              opacity: pressed ? 0.6 : 1,
+            })}
+          >
+            <Ionicons
+              name={expanded ? 'chevron-up' : 'calendar-outline'}
+              size={14}
+              color={colors.accent}
+            />
             <T variant="caption" tone="accent" style={{ fontWeight: '700' }}>
               {expanded ? 'Hide schedule' : 'Payment schedule'}
             </T>
-            <Ionicons
-              name={expanded ? 'chevron-up' : 'chevron-down'}
-              size={13}
-              color={colors.accent}
-            />
-          </Row>
-        </Pressable>
+          </Pressable>
+
+          <View style={{ width: 1, backgroundColor: colors.hairline, marginHorizontal: space.sm }} />
+
+          <Pressable
+            onPress={onDelete}
+            accessibilityRole="button"
+            accessibilityLabel={`Delete ${loan.name}`}
+            hitSlop={8}
+            style={({ pressed }) => ({
+              paddingHorizontal: space.sm,
+              paddingVertical: space.xs,
+              opacity: pressed ? 0.5 : 1,
+            })}
+          >
+            <Ionicons name="trash-outline" size={16} color={colors.inkMuted} />
+          </Pressable>
+        </Row>
 
         {expanded ? (
-          <View style={{ gap: 2 }}>
+          <View style={{ gap: 4 }}>
             <Divider />
-            <Row justify="space-between">
+            <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>
               <T variant="caption" tone="muted" style={{ width: 28 }}>
                 #
               </T>
@@ -394,35 +472,34 @@ function LoanCard({ view }: { view: LoanView }) {
                 BALANCE
               </T>
             </Row>
-            <Divider />
-            {schedule.map((row) => (
-              <Row key={row.period} justify="space-between" style={{ paddingVertical: 2 }}>
-                <T variant="caption" tone="muted" style={{ width: 28 }}>
+            {schedule.map((row, index) => (
+              <Row
+                key={row.period}
+                justify="space-between"
+                style={{
+                  paddingVertical: 5,
+                  paddingHorizontal: space.xs,
+                  borderRadius: radius.sm,
+                  backgroundColor: index % 2 === 0 ? colors.surfaceSunken : 'transparent',
+                }}
+              >
+                <T variant="caption" tone="secondary" style={{ width: 28, fontWeight: '700' }}>
                   {row.period}
                 </T>
-                <T
-                  variant="caption"
-                  color={colors.completed}
-                  style={{ flex: 1, textAlign: 'right' }}
-                >
+                <T variant="caption" color={colors.completed} style={{ flex: 1, textAlign: 'right' }}>
                   {formatMoney(row.principalMinor, { showCurrency: false, compact: true })}
                 </T>
-                <T
-                  variant="caption"
-                  color={accent}
-                  style={{ flex: 1, textAlign: 'right' }}
-                >
+                <T variant="caption" color={accent} style={{ flex: 1, textAlign: 'right' }}>
                   {formatMoney(row.interestMinor, { showCurrency: false, compact: true })}
                 </T>
-                <T
-                  variant="caption"
-                  tone="secondary"
-                  style={{ flex: 1.2, textAlign: 'right' }}
-                >
+                <T variant="caption" tone="secondary" style={{ flex: 1.2, textAlign: 'right' }}>
                   {formatMoney(row.balanceMinor, { showCurrency: false, compact: true })}
                 </T>
               </Row>
             ))}
+            <T variant="caption" tone="muted" style={{ textAlign: 'center', paddingTop: space.xs }}>
+              First 12 months
+            </T>
           </View>
         ) : null}
       </View>
@@ -430,21 +507,41 @@ function LoanCard({ view }: { view: LoanView }) {
   );
 }
 
-/** A labelled figure occupying half the row — the loan key-figures grid cell. */
-function KeyFigure({
+/** A labelled figure in a loan card's stat row. */
+function CardStat({
+  label,
+  value,
+  align = 'flex-start',
+}: {
+  label: string;
+  value: string;
+  align?: 'flex-start' | 'center' | 'flex-end';
+}) {
+  return (
+    <View style={{ gap: 2, alignItems: align }}>
+      <Label>{label}</Label>
+      <T variant="figure">{value}</T>
+    </View>
+  );
+}
+
+/** A labelled figure in the loans summary hero. */
+function SummaryStat({
   label,
   value,
   color,
+  align = 'flex-start',
 }: {
   label: string;
   value: string;
   color?: string;
+  align?: 'flex-start' | 'flex-end';
 }) {
-  const { space } = useTheme();
+  const { colors } = useTheme();
   return (
-    <View style={{ width: '50%', paddingVertical: space.xs, gap: 1 }}>
-      <Label>{label}</Label>
-      <T variant="figure" color={color}>
+    <View style={{ gap: 2, alignItems: align }}>
+      <Label color={colors.pending}>{label}</Label>
+      <T variant="figureLarge" color={color}>
         {value}
       </T>
     </View>

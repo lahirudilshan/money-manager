@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, SheetHeader } from '../../src/components/forms';
 import {
@@ -9,7 +9,9 @@ import {
   Divider,
   FundingBar,
   Glyph,
+  GradientButton,
   Label,
+  PinnedFooter,
   Row,
   Surface,
   T,
@@ -285,13 +287,18 @@ export default function CategoryDetailScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setFundOpen(false)}
       >
-        <ScrollView
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, backgroundColor: colors.canvas }}
-          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
+        >
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
+          <SheetHeader title="Log transfer" onClose={() => setFundOpen(false)} />
+        </View>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <SheetHeader title="Log transfer" onClose={() => setFundOpen(false)} />
-
           <Surface style={{ gap: space.sm }}>
             <Row>
               <Glyph icon={category.icon as never} color={category.color} />
@@ -331,13 +338,17 @@ export default function CategoryDetailScreen() {
             transferred. It doesn’t pay any bill — tick those off on the List.
           </T>
 
-          <Button
+        </ScrollView>
+
+        <PinnedFooter>
+          <GradientButton
             label={`Log ${formatMoney(parseAmount(fundAmount) ?? 0)}`}
             icon="swap-horizontal"
             onPress={handleFund}
             disabled={!parseAmount(fundAmount)}
           />
-        </ScrollView>
+        </PinnedFooter>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );

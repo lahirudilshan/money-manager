@@ -212,15 +212,17 @@ export default function CardsScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, backgroundColor: colors.canvas }}
         >
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
-          keyboardShouldPersistTaps="handled"
-        >
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
           <SheetHeader
             title={editingCardId ? 'Edit account' : 'New account'}
             onClose={() => setOpen(false)}
           />
+        </View>
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
+          keyboardShouldPersistTaps="handled"
+        >
 
           <BankPicker selectedId={bankId} onSelect={setBankId} />
 

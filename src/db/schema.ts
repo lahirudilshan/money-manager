@@ -66,6 +66,16 @@ export const categories = sqliteTable(
     icon: text('icon').notNull().default('albums-outline'),
     /** Day of month the category is normally funded — drives "due" ordering. */
     dueDay: integer('due_day').notNull().default(1),
+    /**
+     * Default cadence applied to new bills added under this category. Each
+     * bill keeps its own `frequency` and can differ; this only seeds the
+     * picker so a "yearly" category doesn't default every bill to monthly.
+     */
+    defaultFrequency: text('default_frequency', {
+      enum: ['monthly', 'one_time', 'yearly'],
+    })
+      .notNull()
+      .default('monthly'),
     sortOrder: integer('sort_order').notNull().default(0),
     archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
     ...timestamps,

@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ScrollView } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DayPicker } from '../../src/components/DayPicker';
 import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
-import { Button, T } from '../../src/components/ui';
+import { GradientButton, PinnedFooter, T } from '../../src/components/ui';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -16,6 +17,14 @@ const CATEGORY_ICONS = [
   { key: 'albums-outline', label: 'Other', icon: 'albums-outline' as const },
 ];
 
+const FREQUENCIES = [
+  { key: 'monthly', label: 'Monthly' },
+  { key: 'yearly', label: 'Yearly' },
+  { key: 'one_time', label: 'One-time' },
+] as const;
+
+type Frequency = 'monthly' | 'one_time' | 'yearly';
+
 export default function NewCategoryScreen() {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
@@ -25,82 +34,85 @@ export default function NewCategoryScreen() {
   const [name, setName] = useState('');
   const [icon, setIcon] = useState(CATEGORY_ICONS[0].key);
   const [cardId, setCardId] = useState<string | null>(state.cards[0]?.id ?? null);
-  const [dueDay, setDueDay] = useState('1');
+  const [dueDay, setDueDay] = useState(1);
+  const [frequency, setFrequency] = useState<Frequency>('monthly');
 
   function handleCreate() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
-    const parsedDueDay = Math.min(31, Math.max(1, Number.parseInt(dueDay, 10) || 1));
-
     state.addCategory({
       name: trimmed,
       cardId,
       icon,
-      dueDay: parsedDueDay,
+      dueDay,
+      defaultFrequency: frequency,
       sortOrder: state.categories.length,
     });
     router.back();
   }
 
   return (
-    <ScrollView
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={{ flex: 1, backgroundColor: colors.canvas }}
-      contentContainerStyle={{
-        paddingTop: insets.top + space.md,
-        paddingBottom: space.xxxl,
-        paddingHorizontal: space.lg,
-        gap: space.lg,
-      }}
-      keyboardShouldPersistTaps="handled"
     >
-      <SheetHeader title="New category" onClose={() => router.back()} />
+      <View style={{ paddingTop: insets.top + space.md, paddingHorizontal: space.lg }}>
+        <SheetHeader title="New category" onClose={() => router.back()} />
+      </View>
 
-      <Field
-        label="Name"
-        value={name}
-        onChangeText={setName}
-        placeholder="e.g. Home Expenses"
-        autoFocus
-      />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: space.md,
+          paddingBottom: space.xl,
+          paddingHorizontal: space.lg,
+          gap: space.lg,
+        }}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Field
+          label="Name"
+          value={name}
+          onChangeText={setName}
+          placeholder="e.g. Home Expenses"
+          autoFocus
+        />
 
-      <PillSelect
-        label="Icon"
-        options={CATEGORY_ICONS}
-        selectedKey={icon}
-        onSelect={setIcon}
-      />
+        <PillSelect label="Icon" options={CATEGORY_ICONS} selectedKey={icon} onSelect={setIcon} />
 
-      {state.cards.length > 0 ? (
-        <>
+        {state.cards.length > 0 ? (
           <PillSelect
             label="Transfer money to"
-            options={state.cards.map((card) => ({
-              key: card.id,
-              label: card.name,
-            }))}
+            options={state.cards.map((card) => ({ key: card.id, label: card.name }))}
             selectedKey={cardId}
             onSelect={setCardId}
           />
-          <T variant="caption" tone="muted">
-            This category's total gets transferred to that card each month.
+        ) : (
+          <T variant="small" tone="muted">
+            Add an account first to choose where this category's money goes.
           </T>
-        </>
-      ) : (
-        <T variant="small" tone="muted">
-          Add a card first to choose where this category's money goes.
-        </T>
-      )}
+        )}
 
-      <Field
-        label="Due day (1–31)"
-        value={dueDay}
-        onChangeText={setDueDay}
-        placeholder="1"
-        keyboardType="numeric"
-      />
+        <PillSelect
+          label="Default frequency for new bills"
+          options={FREQUENCIES.map((f) => ({ key: f.key, label: f.label }))}
+          selectedKey={frequency}
+          onSelect={(key) => setFrequency(key as Frequency)}
+        />
 
-      <Button label="Create category" onPress={handleCreate} disabled={!name.trim()} />
-    </ScrollView>
+        <DayPicker value={dueDay} onChange={setDueDay} />
+      </ScrollView>
+
+      <PinnedFooter>
+        <GradientButton
+          label="Create category"
+          icon="checkmark"
+          onPress={handleCreate}
+          disabled={!name.trim()}
+        />
+      </PinnedFooter>
+    </KeyboardAvoidingView>
   );
 }

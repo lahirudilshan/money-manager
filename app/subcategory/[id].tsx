@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
@@ -12,8 +13,9 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, SheetHeader } from '../../src/components/forms';
-import { Button, Divider, GradientButton, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
+import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
+import { Button, Divider, GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
+import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
@@ -51,6 +53,12 @@ export default function SubcategoryScreen() {
   const [actual, setActual] = useState(
     stateRow?.actualMinor != null ? String(stateRow.actualMinor / 100) : '',
   );
+  const [note, setNote] = useState(stateRow?.note ?? '');
+  const [frequency, setFrequency] = useState<'monthly' | 'one_time' | 'yearly'>(
+    subcategory?.frequency ?? 'monthly',
+  );
+  const [imageUri, setImageUri] = useState<string | null>(stateRow?.imageUri ?? null);
+  const [imageBusy, setImageBusy] = useState(false);
   const [imageViewerOpen, setImageViewerOpen] = useState(false);
 
   if (!subcategory) {
@@ -73,6 +81,35 @@ export default function SubcategoryScreen() {
   // The repo already collapses legacy values, so this is pending/paid.
   const status: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
 
+  async function pickImage(source: 'camera' | 'library') {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ quality: 0.6 })
+        : await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
+    if (result.canceled || !result.assets[0]) return;
+
+    setImageBusy(true);
+    try {
+      setImageUri(await persistPickedImage(result.assets[0].uri));
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  function removeImage() {
+    // Only delete the file if it's a newly-picked one; the saved slip is
+    // cleared from the row on save, and deleting it here would break the
+    // stored record if the user then backs out without saving.
+    if (imageUri && imageUri !== stateRow?.imageUri) deletePersistedImage(imageUri);
+    setImageUri(null);
+  }
+
   function handleSave() {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -80,11 +117,18 @@ export default function SubcategoryScreen() {
     state.updateSubcategory(subcategory!.id, {
       name: trimmed,
       plannedMinor: parseAmount(planned) ?? 0,
+      frequency,
     });
 
-    // Empty actual means "as planned" rather than zero.
+    // Persist this month's slip, note and actual in one write, keeping the
+    // current paid/pending status. Empty actual means "as planned".
     const parsedActual = actual.trim() === '' ? null : parseAmount(actual);
-    state.setActual(subcategory!.id, parsedActual);
+    state.logTransaction(subcategory!.id, {
+      status,
+      actualMinor: parsedActual,
+      note: note.trim() || null,
+      imageUri,
+    });
 
     router.back();
   }
@@ -226,37 +270,61 @@ export default function SubcategoryScreen() {
           </View>
         </Pressable>
 
-        {/* Note & photo, when a transaction was logged. */}
-        {stateRow?.note || stateRow?.imageUri ? (
-          <Surface style={{ gap: space.md }}>
-            {stateRow?.note ? (
-              <View style={{ gap: 2 }}>
-                <T variant="label" tone="muted">
-                  NOTE
-                </T>
-                <T variant="body">{stateRow.note}</T>
-              </View>
-            ) : null}
-            {stateRow?.imageUri ? (
+        {/* Slip / receipt — attach or replace the photo for this month. */}
+        <View style={{ gap: space.sm }}>
+          <Label>SLIP / RECEIPT</Label>
+          {imageUri ? (
+            <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
               <Pressable
                 onPress={() => setImageViewerOpen(true)}
                 accessibilityRole="button"
-                accessibilityLabel="View photo"
+                accessibilityLabel="View slip"
               >
                 <Image
-                  source={{ uri: stateRow.imageUri }}
-                  style={{ width: 80, height: 80, borderRadius: 12 }}
+                  source={{ uri: imageUri }}
+                  style={{ width: 140, height: 140, borderRadius: 14 }}
                 />
               </Pressable>
-            ) : null}
-          </Surface>
-        ) : null}
+              <Pressable
+                onPress={removeImage}
+                accessibilityRole="button"
+                accessibilityLabel="Remove slip"
+                style={{
+                  position: 'absolute',
+                  top: -8,
+                  right: -8,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  backgroundColor: colors.danger,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ionicons name="close" size={16} color="#FFFFFF" />
+              </Pressable>
+            </View>
+          ) : (
+            <Row gap={space.sm}>
+              <UploadButton
+                icon="camera-outline"
+                label="Camera"
+                busy={imageBusy}
+                onPress={() => pickImage('camera')}
+              />
+              <UploadButton
+                icon="image-outline"
+                label="Upload"
+                busy={imageBusy}
+                onPress={() => pickImage('library')}
+              />
+            </Row>
+          )}
+        </View>
 
         {/* Editable plan. */}
         <View style={{ gap: space.md }}>
-          <T variant="label" tone="muted">
-            EDIT
-          </T>
+          <Label>DETAILS</Label>
           <Field label="Name" value={name} onChangeText={setName} />
           <Field
             label="Planned amount"
@@ -271,6 +339,23 @@ export default function SubcategoryScreen() {
             onChangeText={setActual}
             keyboardType="numeric"
             placeholder="Leave empty if it matched the plan"
+          />
+          <PillSelect
+            label="Frequency"
+            options={[
+              { key: 'monthly', label: 'Monthly' },
+              { key: 'yearly', label: 'Yearly' },
+              { key: 'one_time', label: 'One-time' },
+            ]}
+            selectedKey={frequency}
+            onSelect={(key) => setFrequency(key as typeof frequency)}
+          />
+          <Field
+            label="Note (optional)"
+            value={note}
+            onChangeText={setNote}
+            placeholder="What was this for?"
+            multiline
           />
 
           <Pressable
@@ -302,7 +387,7 @@ export default function SubcategoryScreen() {
         />
       </PinnedFooter>
 
-    {stateRow?.imageUri ? (
+    {imageUri ? (
       <Modal
         visible={imageViewerOpen}
         animationType="fade"
@@ -329,14 +414,52 @@ export default function SubcategoryScreen() {
           >
             <Ionicons name="close" size={20} color="#FFFFFF" />
           </Pressable>
-          <Image
-            source={{ uri: stateRow.imageUri }}
-            style={{ flex: 1 }}
-            resizeMode="contain"
-          />
+          <Image source={{ uri: imageUri }} style={{ flex: 1 }} resizeMode="contain" />
         </View>
       </Modal>
     ) : null}
     </KeyboardAvoidingView>
+  );
+}
+
+/** A dashed upload affordance for attaching a slip photo. */
+function UploadButton({
+  icon,
+  label,
+  busy,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  busy: boolean;
+  onPress: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => ({
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 7,
+        paddingVertical: 18,
+        borderRadius: radius.lg,
+        borderWidth: 1.5,
+        borderStyle: 'dashed',
+        borderColor: colors.hairlineStrong,
+        backgroundColor: colors.surface,
+        opacity: pressed || busy ? 0.6 : 1,
+      })}
+    >
+      <Ionicons name={icon} size={19} color={colors.accent} />
+      <T variant="small" tone="secondary" style={{ fontWeight: '600' }}>
+        {label}
+      </T>
+    </Pressable>
   );
 }

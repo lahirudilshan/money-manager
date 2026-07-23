@@ -349,11 +349,11 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                 </View>
                 <Pressable
                   onPress={onClose}
-                  hitSlop={10}
+                  hitSlop={12}
                   accessibilityRole="button"
-                  accessibilityLabel="Done"
+                  accessibilityLabel="Close"
                 >
-                  <Ionicons name="checkmark-circle" size={28} color={colors.accent} />
+                  <Ionicons name="close" size={25} color={colors.inkSecondary} />
                 </Pressable>
               </Row>
 

@@ -22,6 +22,7 @@ import {
   selectAccountTransfers,
   selectBoardTotals,
   selectCategoryViews,
+  selectLoanViews,
   selectRatios,
   selectReminders,
   selectTotalIncome,
@@ -51,13 +52,24 @@ export default function DashboardScreen() {
   const income = useMemo(() => selectTotalIncome(state), [state]);
   const accounts = useMemo(() => selectAccountTransfers(state), [state]);
   const reminders = useMemo(() => selectReminders(state), [state]);
+  const loanViews = useMemo(() => selectLoanViews(state), [state]);
 
   const overdue = reminders.filter((r) => r.urgency === 'overdue');
   const dueSoon = reminders.filter((r) => r.urgency === 'due_soon');
-  const actionable = [...overdue, ...dueSoon].slice(0, 6);
+  const actionable = [...overdue, ...dueSoon].slice(0, 5);
 
   const totalToTransfer = accounts.reduce((sum, a) => sum + a.toTransferMinor, 0);
   const paidCount = totals.categoryCount > 0 ? totals.settledCategoryCount : 0;
+
+  const loanMonthly = loanViews.reduce((sum, l) => sum + l.installmentMinor, 0);
+  const loanOutstanding = loanViews.reduce((sum, l) => sum + l.remainingMinor, 0);
+
+  const greeting = (() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  })();
 
   return (
     <ScrollView
@@ -70,9 +82,14 @@ export default function DashboardScreen() {
       }}
       showsVerticalScrollIndicator={false}
     >
-      {/* Month switcher — everything below is scoped to this period. */}
+      {/* Greeting + month switcher — everything below is scoped to this period. */}
       <Row justify="space-between" align="center">
-        <Label>DASHBOARD</Label>
+        <View style={{ gap: 1 }}>
+          <T variant="caption" tone="muted">
+            {greeting}
+          </T>
+          <T variant="title">Dashboard</T>
+        </View>
         <Row
           gap={2}
           style={{
@@ -88,7 +105,7 @@ export default function DashboardScreen() {
             label="Previous month"
             onPress={() => state.setPeriod(shiftPeriod(state.period, -1))}
           />
-          <View style={{ minWidth: 132, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ minWidth: 116, alignItems: 'center', justifyContent: 'center' }}>
             <T variant="bodyStrong" numberOfLines={1}>
               {formatPeriod(state.period)}
             </T>
@@ -151,6 +168,30 @@ export default function DashboardScreen() {
           </View>
         </View>
       </GradientCard>
+
+      {/* Quick actions — the things you reach for most, one tap from home. */}
+      <Row gap={space.sm}>
+        <QuickAction
+          icon="add-circle-outline"
+          label="Transaction"
+          onPress={() => router.push('/transaction/new')}
+        />
+        <QuickAction
+          icon="albums-outline"
+          label="Category"
+          onPress={() => router.push('/category/new')}
+        />
+        <QuickAction
+          icon="list-outline"
+          label="Plan"
+          onPress={() => router.push('/(tabs)/list')}
+        />
+        <QuickAction
+          icon="wallet-outline"
+          label="Accounts"
+          onPress={() => router.push('/(tabs)/cards')}
+        />
+      </Row>
 
       {views.length === 0 ? (
         <Empty
@@ -279,6 +320,38 @@ export default function DashboardScreen() {
         </View>
       ) : null}
 
+      {/* Debt snapshot — a quick read on loans without leaving home. */}
+      {loanViews.length > 0 ? (
+        <Surface
+          onPress={() => router.push('/(tabs)/loans')}
+          style={{ gap: space.md, backgroundColor: colors.pendingSoft, borderColor: colors.pending }}
+        >
+          <Row justify="space-between" align="center">
+            <Row gap={space.sm}>
+              <Ionicons name="trending-down" size={18} color={colors.pending} />
+              <Label color={colors.pending}>DEBT</Label>
+            </Row>
+            <Ionicons name="chevron-forward" size={16} color={colors.pending} />
+          </Row>
+          <Row justify="space-between">
+            <View style={{ gap: 2 }}>
+              <T variant="caption" tone="muted">
+                Outstanding
+              </T>
+              <T variant="figureLarge">{formatMoney(loanOutstanding, { compact: true })}</T>
+            </View>
+            <View style={{ alignItems: 'flex-end', gap: 2 }}>
+              <T variant="caption" tone="muted">
+                Per month
+              </T>
+              <T variant="figureLarge" color={colors.pending}>
+                {formatMoney(loanMonthly, { compact: true })}
+              </T>
+            </View>
+          </Row>
+        </Surface>
+      ) : null}
+
       {/* This month at a glance. */}
       {views.length > 0 ? (
         <Surface style={{ gap: space.md }}>
@@ -344,6 +417,53 @@ function HeroStat({ label, value }: { label: string; value: string }) {
         {value}
       </T>
     </View>
+  );
+}
+
+/** One tappable quick-action tile in the dashboard's action row. */
+function QuickAction({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => ({
+        flex: 1,
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: space.md,
+        borderRadius: radius.lg,
+        backgroundColor: colors.surface,
+        borderWidth: 1,
+        borderColor: colors.hairline,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 38,
+          height: 38,
+          borderRadius: 12,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.accentSoft,
+        }}
+      >
+        <Ionicons name={icon} size={19} color={colors.accent} />
+      </View>
+      <T variant="caption" tone="secondary" numberOfLines={1} style={{ fontWeight: '600' }}>
+        {label}
+      </T>
+    </Pressable>
   );
 }
 

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
+import { SheetHeader } from '../../src/components/forms';
 import { GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
@@ -148,11 +149,11 @@ export default function NewTransactionScreen() {
         style={{
           flex: 1,
           backgroundColor: colors.canvas,
-          paddingTop: insets.top,
+          paddingTop: insets.top + space.sm,
           paddingHorizontal: space.lg,
         }}
       >
-        <CloseHeader onClose={() => router.back()} />
+        <SheetHeader title="Add transaction" onClose={() => router.back()} />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md }}>
           <Ionicons name="albums-outline" size={48} color={colors.inkMuted} />
           <T variant="heading">No categories yet</T>
@@ -175,7 +176,7 @@ export default function NewTransactionScreen() {
       style={{ flex: 1, backgroundColor: colors.canvas }}
     >
       <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
-        <CloseHeader onClose={() => router.back()} />
+        <SheetHeader title="Add transaction" onClose={() => router.back()} />
       </View>
 
       <ScrollView
@@ -413,19 +414,6 @@ export default function NewTransactionScreen() {
         />
       </PinnedFooter>
     </KeyboardAvoidingView>
-  );
-}
-
-function CloseHeader({ onClose }: { onClose: () => void }) {
-  const { colors } = useTheme();
-  return (
-    <Row justify="space-between" align="center">
-      <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
-        <Ionicons name="close" size={26} color={colors.ink} />
-      </Pressable>
-      <T variant="title">Add transaction</T>
-      <View style={{ width: 26 }} />
-    </Row>
   );
 }
 

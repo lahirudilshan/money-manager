@@ -198,12 +198,14 @@ export default function IncomeScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={{ flex: 1, backgroundColor: colors.canvas }}
         >
+        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
+          <SheetHeader title="New income" onClose={() => setOpen(false)} />
+        </View>
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
+          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <SheetHeader title="New income" onClose={() => setOpen(false)} />
           <Field
             label="Name"
             value={name}

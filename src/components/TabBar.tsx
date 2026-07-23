@@ -27,7 +27,7 @@ const SIDE_INSET = 16;
 const SLOT = 48;
 
 const ICONS: Record<string, { active: string; inactive: string; label: string }> = {
-  index: { active: 'home', inactive: 'home-outline', label: 'Home' },
+  index: { active: 'grid', inactive: 'grid-outline', label: 'Dashboard' },
   list: { active: 'list', inactive: 'list-outline', label: 'List' },
   loans: { active: 'pie-chart', inactive: 'pie-chart-outline', label: 'Loans' },
   settings: { active: 'settings', inactive: 'settings-outline', label: 'Settings' },
