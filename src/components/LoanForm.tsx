@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { buildSchedule } from '../core/amortization';
@@ -26,6 +27,8 @@ export interface LoanDraft {
   amount: string;
   rate: string;
   years: string;
+  /** How many installments have already been paid (0 = brand new loan). */
+  paidInstallments: string;
 }
 
 export const emptyLoanDraft: LoanDraft = {
@@ -35,6 +38,7 @@ export const emptyLoanDraft: LoanDraft = {
   amount: '',
   rate: '',
   years: '5',
+  paidInstallments: '0',
 };
 
 /**
@@ -72,14 +76,25 @@ export function isLoanDraftValid(draft: LoanDraft): boolean {
 
 /** Convert a validated draft into the shape `addLoan` expects. */
 export function loanDraftToInput(draft: LoanDraft, fallbackColor: string): Omit<NewLoan, 'id'> {
+  const termMonths = Math.round(Number.parseFloat(draft.years) * 12);
+  // Clamp paid count to [0, term]; a blank field means a brand-new loan.
+  const paid = Math.max(0, Math.min(termMonths, Math.round(Number.parseFloat(draft.paidInstallments) || 0)));
   return {
     name: draft.name.trim(),
     kind: draft.kind,
     bankId: draft.bankId,
     principalMinor: parseAmount(draft.amount) ?? 0,
     annualRatePct: Number.parseFloat(draft.rate),
-    termMonths: Math.round(Number.parseFloat(draft.years) * 12),
-    startDate: new Date(),
+    termMonths,
+    // Back-date the start so "paid installments" months have already elapsed —
+    // this keeps the schedule's paid/remaining split correct without a separate
+    // per-installment ledger.
+    startDate: (() => {
+      const start = new Date();
+      start.setMonth(start.getMonth() - paid);
+      return start;
+    })(),
+    paidInstallments: paid,
     color: fallbackColor,
     isActive: true,
   };
@@ -169,6 +184,16 @@ export function LoanForm({
         />
       </Row>
 
+      {/* How far along the loan already is, so the schedule shows real progress
+          rather than assuming it starts today. */}
+      <Field
+        label="Installments already paid"
+        value={draft.paidInstallments}
+        onChangeText={(paidInstallments) => update({ paidInstallments })}
+        placeholder="0 for a new loan"
+        keyboardType="numeric"
+      />
+
       <LoanPreview amount={draft.amount} rate={draft.rate} years={draft.years} />
     </>
   );
@@ -184,14 +209,26 @@ export function BankPicker({
 }) {
   const { colors, radius, space } = useTheme();
   const banks = BANKS.filter((bank) => bank.kind === 'bank');
+  const selectedBank = banks.find((b) => b.id === selectedId);
 
   return (
     <View style={{ gap: space.sm }}>
-      <Label>LENDER</Label>
+      <Row justify="space-between" align="center">
+        <Label>Lender</Label>
+        {selectedBank ? (
+          <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+            {selectedBank.name}
+          </T>
+        ) : (
+          <T variant="caption" tone="muted">
+            Choose a bank
+          </T>
+        )}
+      </Row>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
+        contentContainerStyle={{ gap: space.sm, paddingRight: space.lg, paddingVertical: 2 }}
       >
         {banks.map((brand) => {
           const selected = selectedId === brand.id;
@@ -203,17 +240,46 @@ export function BankPicker({
               accessibilityState={{ selected }}
               accessibilityLabel={brand.name}
               style={({ pressed }) => ({
+                width: 72,
                 alignItems: 'center',
-                gap: 4,
-                padding: 4,
-                borderRadius: radius.md,
-                borderWidth: 2,
-                borderColor: selected ? colors.ink : 'transparent',
-                opacity: pressed ? 0.75 : 1,
+                gap: 6,
+                paddingVertical: space.sm,
+                paddingHorizontal: 4,
+                borderRadius: radius.lg,
+                borderWidth: 1.5,
+                borderColor: selected ? brand.color : colors.hairline,
+                backgroundColor: selected ? `${brand.color}12` : colors.surface,
+                opacity: pressed ? 0.8 : 1,
               })}
             >
-              <BankLogo brand={brand} size={44} />
-              <T variant="caption" tone={selected ? 'ink' : 'muted'} numberOfLines={1}>
+              <View>
+                <BankLogo brand={brand} size={40} />
+                {selected ? (
+                  <View
+                    style={{
+                      position: 'absolute',
+                      top: -4,
+                      right: -4,
+                      width: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      backgroundColor: brand.color,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderWidth: 2,
+                      borderColor: colors.surface,
+                    }}
+                  >
+                    <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                  </View>
+                ) : null}
+              </View>
+              <T
+                variant="caption"
+                color={selected ? colors.ink : colors.inkMuted}
+                numberOfLines={1}
+                style={{ fontWeight: selected ? '700' : '500' }}
+              >
                 {brand.shortName}
               </T>
             </Pressable>

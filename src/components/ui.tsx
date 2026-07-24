@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -287,6 +288,102 @@ export function PinnedFooter({
     >
       {children}
     </View>
+  );
+}
+
+/**
+ * A sheet that slides up from the bottom, with a grab handle, a tap-to-dismiss
+ * backdrop, and safe-area-aware bottom padding. Rounded top corners and a
+ * capped height keep it reading as a sheet rather than a full page. Content is
+ * whatever children are passed; a `title` renders a header row with a close
+ * button. Prefer this over a centered dialog for pickers and short forms —
+ * it's thumb-reachable and feels native on iOS.
+ */
+export function BottomSheet({
+  visible,
+  onClose,
+  title,
+  children,
+  maxHeightPct = 0.85,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  title?: string;
+  children: React.ReactNode;
+  /** Cap on the sheet's height as a fraction of the screen. */
+  maxHeightPct?: number;
+}) {
+  const { colors, radius, space } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      {/* Backdrop — tap outside the sheet to dismiss. */}
+      <Pressable
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+        style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}
+      >
+        {/* Swallow taps on the sheet body so they don't close it. */}
+        <Pressable
+          onPress={() => {}}
+          style={{
+            backgroundColor: colors.surface,
+            borderTopLeftRadius: radius.xl,
+            borderTopRightRadius: radius.xl,
+            paddingBottom: insets.bottom + space.md,
+            maxHeight: `${Math.round(maxHeightPct * 100)}%`,
+          }}
+        >
+          {/* Grab handle. */}
+          <View style={{ alignItems: 'center', paddingTop: space.sm, paddingBottom: space.xs }}>
+            <View
+              style={{
+                width: 40,
+                height: 5,
+                borderRadius: 999,
+                backgroundColor: colors.hairlineStrong,
+              }}
+            />
+          </View>
+
+          {title ? (
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                paddingLeft: space.lg,
+                paddingRight: space.lg - space.xs,
+                paddingTop: space.xs,
+                // Same breathing room below the header as SheetHeader.
+                paddingBottom: space.md,
+              }}
+            >
+              <T variant="title">{title}</T>
+              <Pressable
+                onPress={onClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                style={({ pressed }) => ({
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                })}
+              >
+                <Ionicons name="close" size={24} color={colors.inkSecondary} />
+              </Pressable>
+            </View>
+          ) : null}
+
+          {children}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 

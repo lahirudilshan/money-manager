@@ -435,7 +435,7 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                     }
                   }}
                   placeholder="0"
-                  placeholderTextColor={colors.inkMuted}
+                  placeholderTextColor={colors.inkFaint}
                   keyboardType="numeric"
                   autoFocus
                   style={{

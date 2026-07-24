@@ -39,7 +39,12 @@ export function DayPicker({
   onChange: (day: number) => void;
   label?: string;
 }) {
-  const { colors, radius, space } = useTheme();
+  const { colors, radius, space, mode } = useTheme();
+  const today = new Date().getDate();
+  // A soft yellow wash marks today's date in the grid, so the calendar always
+  // orients the user to "now" without competing with the accent selection.
+  const todayTint = mode === 'dark' ? 'rgba(224,168,80,0.28)' : 'rgba(245,200,66,0.35)';
+  const todayInk = mode === 'dark' ? '#E7C06A' : '#8A6D0F';
 
   return (
     <View style={{ gap: space.sm }}>
@@ -111,6 +116,7 @@ export function DayPicker({
           <View key={weekIndex} style={{ flexDirection: 'row', gap: 6 }}>
             {week.map((day) => {
               const selected = day === value;
+              const isToday = day === today;
               // The 29th–31st don't exist every month; the app clamps them to
               // the month's last day, so hint that rather than hide them.
               const clamps = day > 28;
@@ -120,14 +126,19 @@ export function DayPicker({
                   onPress={() => onChange(day)}
                   accessibilityRole="button"
                   accessibilityState={{ selected }}
-                  accessibilityLabel={`Day ${day}`}
+                  accessibilityLabel={`Day ${day}${isToday ? ', today' : ''}`}
                   style={({ pressed }) => ({
                     flex: 1,
                     aspectRatio: 1,
                     borderRadius: radius.md,
                     alignItems: 'center',
                     justifyContent: 'center',
-                    backgroundColor: selected ? colors.accent : colors.surfaceSunken,
+                    // Selected wins; otherwise today gets its yellow wash.
+                    backgroundColor: selected
+                      ? colors.accent
+                      : isToday
+                        ? todayTint
+                        : colors.surfaceSunken,
                     opacity: pressed ? 0.7 : 1,
                   })}
                 >
@@ -136,11 +147,13 @@ export function DayPicker({
                     color={
                       selected
                         ? colors.inkInverse
-                        : clamps
-                          ? colors.inkMuted
-                          : colors.inkSecondary
+                        : isToday
+                          ? todayInk
+                          : clamps
+                            ? colors.inkMuted
+                            : colors.inkSecondary
                     }
-                    style={{ fontWeight: selected ? '800' : '500' }}
+                    style={{ fontWeight: selected || isToday ? '800' : '500' }}
                   >
                     {day}
                   </T>

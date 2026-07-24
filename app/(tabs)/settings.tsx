@@ -4,9 +4,10 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Button, Divider, Glyph, Label, Row, ScreenHeader, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, Divider, Glyph, Label, Row, ScreenHeader, Surface, T } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { syncCategoryReminders, unavailableReason } from '../../src/services/notifications';
+import { confirmWithBiometrics } from '../../src/services/biometrics';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -15,7 +16,20 @@ import {
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 const CONFIRM_WORD = 'DELETE';
-const CURRENCIES = ['LKR', 'USD', 'EUR', 'GBP', 'INR', 'AUD'];
+
+/** Currencies offered, with a symbol and full name for the richer picker. */
+const CURRENCIES: { code: string; symbol: string; name: string; flag: string }[] = [
+  { code: 'LKR', symbol: 'Rs', name: 'Sri Lankan Rupee', flag: '🇱🇰' },
+  { code: 'USD', symbol: '$', name: 'US Dollar', flag: '🇺🇸' },
+  { code: 'EUR', symbol: '€', name: 'Euro', flag: '🇪🇺' },
+  { code: 'GBP', symbol: '£', name: 'British Pound', flag: '🇬🇧' },
+  { code: 'INR', symbol: '₹', name: 'Indian Rupee', flag: '🇮🇳' },
+  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', flag: '🇦🇺' },
+  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham', flag: '🇦🇪' },
+  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', flag: '🇸🇬' },
+  { code: 'JPY', symbol: '¥', name: 'Japanese Yen', flag: '🇯🇵' },
+  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', flag: '🇨🇦' },
+];
 
 /**
  * The one screen that isn't the plan itself: preferences, the things you
@@ -43,6 +57,30 @@ export default function SettingsScreen() {
   const [rateOpen, setRateOpen] = useState(false);
   const [rateText, setRateText] = useState(String(state.usdRate));
   const [syncing, setSyncing] = useState(false);
+  const [currencyOpen, setCurrencyOpen] = useState(false);
+  const [currencyQuery, setCurrencyQuery] = useState('');
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [fetchingRate, setFetchingRate] = useState(false);
+
+  /** Fetch the live USD→currency rate. Uses a free, key-less endpoint; on any
+   * failure the user can still type the rate by hand. */
+  async function fetchRate() {
+    setFetchingRate(true);
+    try {
+      const res = await fetch(`https://open.er-api.com/v6/latest/USD`);
+      const data = await res.json();
+      const rate = data?.rates?.[state.currency];
+      if (typeof rate === 'number' && rate > 0) {
+        setRateText(String(Math.round(rate * 100) / 100));
+      } else {
+        Alert.alert('Could not fetch', `No rate available for ${state.currency}. Enter it manually.`);
+      }
+    } catch {
+      Alert.alert('Could not fetch', 'Check your connection, or enter the rate manually.');
+    } finally {
+      setFetchingRate(false);
+    }
+  }
 
   async function handleSyncReminders() {
     const blocked = unavailableReason();
@@ -107,7 +145,16 @@ export default function SettingsScreen() {
       'This permanently deletes every card, category, subcategory, income, loan, and history on this device. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Continue', style: 'destructive', onPress: () => setConfirmOpen(true) },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: async () => {
+            // Gate the destructive path behind Face ID / passcode before even
+            // showing the type-to-confirm step.
+            const ok = await confirmWithBiometrics('Confirm it is you to clear all data');
+            if (ok) setConfirmOpen(true);
+          },
+        },
       ],
     );
   }
@@ -129,11 +176,6 @@ export default function SettingsScreen() {
     } finally {
       setClearing(false);
     }
-  }
-
-  function cycleCurrency() {
-    const index = CURRENCIES.indexOf(state.currency);
-    state.setCurrency(CURRENCIES[(index + 1) % CURRENCIES.length]);
   }
 
   return (
@@ -196,7 +238,7 @@ export default function SettingsScreen() {
             title="Currency"
             subtitle="Symbol shown on every amount"
             valueLabel={state.currency}
-            onPress={cycleCurrency}
+            onPress={() => setCurrencyOpen(true)}
           />
           <Divider />
           <SettingRow
@@ -223,26 +265,16 @@ export default function SettingsScreen() {
 
         {/* Appearance & feedback. */}
         <Section title="APPEARANCE">
-          <View style={{ padding: space.lg, gap: space.sm }}>
-            <Row gap={space.md}>
-              <Glyph icon="contrast-outline" color={colors.accent} />
-              <View style={{ flex: 1 }}>
-                <T variant="bodyStrong">Theme</T>
-                <T variant="caption" tone="muted">
-                  Light, dark, or follow the device
-                </T>
-              </View>
-            </Row>
-            <Segmented
-              options={[
-                { key: 'system', label: 'System' },
-                { key: 'light', label: 'Light' },
-                { key: 'dark', label: 'Dark' },
-              ]}
-              selectedKey={state.themeMode}
-              onSelect={(key) => state.setThemeMode(key as 'system' | 'light' | 'dark')}
-            />
-          </View>
+          <SettingRow
+            icon="contrast-outline"
+            color={colors.accent}
+            title="Theme"
+            subtitle="Light, dark, or follow the device"
+            valueLabel={
+              state.themeMode === 'system' ? 'System' : state.themeMode === 'light' ? 'Light' : 'Dark'
+            }
+            onPress={() => setThemeOpen(true)}
+          />
           <Divider />
           <ToggleRow
             icon="phone-portrait-outline"
@@ -289,45 +321,195 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
 
-      {/* USD rate editor. */}
-      <Modal visible={rateOpen} transparent animationType="fade" onRequestClose={() => setRateOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', padding: space.lg }}>
-          <Surface style={{ gap: space.md }}>
-            <T variant="heading">USD exchange rate</T>
-            <T variant="caption" tone="muted">
-              How many {state.currency} one US dollar is worth. Used to convert foreign-currency
-              income.
+      {/* USD exchange-rate editor — a bottom sheet with a live rate display, a
+          one-tap fetch, and a conversion preview. */}
+      <BottomSheet visible={rateOpen} onClose={() => setRateOpen(false)} title="USD exchange rate">
+        <ScrollView
+          contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.md, gap: space.md }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <T variant="caption" tone="muted">
+            How many {state.currency} one US dollar is worth — used to convert foreign-currency
+            income.
+          </T>
+
+          {/* Big live rate. */}
+          <Surface style={{ alignItems: 'center', gap: 2, backgroundColor: colors.accentSoft }}>
+            <Label color={colors.accent}>1 USD =</Label>
+            <T variant="display" color={colors.accent}>
+              {state.currency} {parseFloat(rateText) || 0}
             </T>
+          </Surface>
+
+          <View style={{ gap: space.sm }}>
+            <Label>SET RATE</Label>
             <TextInput
               value={rateText}
               onChangeText={setRateText}
               keyboardType="decimal-pad"
-              autoFocus
               placeholder="300"
-              placeholderTextColor={colors.inkMuted}
+              placeholderTextColor={colors.inkFaint}
               style={{
                 borderWidth: 1,
                 borderColor: colors.hairlineStrong,
-                borderRadius: 10,
+                borderRadius: 12,
                 paddingHorizontal: space.md,
-                paddingVertical: 12,
+                paddingVertical: 13,
                 color: colors.ink,
-                fontSize: 18,
+                fontSize: 20,
                 fontWeight: '700',
+                textAlign: 'center',
               }}
             />
-            <Row gap={space.sm}>
-              <Button
-                label="Cancel"
-                variant="secondary"
-                onPress={() => setRateOpen(false)}
-                style={{ flex: 1 }}
-              />
-              <Button label="Save" onPress={handleSaveRate} style={{ flex: 1 }} />
-            </Row>
-          </Surface>
+          </View>
+
+          <Button
+            label={fetchingRate ? 'Fetching today’s rate…' : `Fetch live USD → ${state.currency}`}
+            icon="cloud-download-outline"
+            variant="secondary"
+            loading={fetchingRate}
+            onPress={fetchRate}
+          />
+
+          {/* Conversion preview: what $100 becomes. */}
+          <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>
+            <T variant="small" tone="muted">
+              $100 becomes
+            </T>
+            <T variant="figure">
+              {state.currency} {((parseFloat(rateText) || 0) * 100).toLocaleString()}
+            </T>
+          </Row>
+
+          <Button label="Save rate" icon="checkmark" onPress={handleSaveRate} />
+        </ScrollView>
+      </BottomSheet>
+
+      {/* Currency picker — a bottom sheet listing each currency with its symbol,
+          flag and full name. */}
+      <BottomSheet
+        visible={currencyOpen}
+        onClose={() => {
+          setCurrencyOpen(false);
+          setCurrencyQuery('');
+        }}
+        title="Currency"
+      >
+        <View style={{ paddingHorizontal: space.lg, paddingBottom: space.sm }}>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.sm,
+              backgroundColor: colors.surfaceSunken,
+              borderRadius: 12,
+              paddingHorizontal: space.md,
+            }}
+          >
+            <Ionicons name="search" size={16} color={colors.inkMuted} />
+            <TextInput
+              value={currencyQuery}
+              onChangeText={setCurrencyQuery}
+              placeholder="Search currency…"
+              placeholderTextColor={colors.inkFaint}
+              autoCapitalize="characters"
+              style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
+            />
+          </View>
         </View>
-      </Modal>
+        <ScrollView
+          contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.md }}
+          keyboardShouldPersistTaps="handled"
+        >
+          {CURRENCIES.filter((c) => {
+            const q = currencyQuery.trim().toLowerCase();
+            return !q || c.code.toLowerCase().includes(q) || c.name.toLowerCase().includes(q);
+          }).map((c) => {
+            const selected = c.code === state.currency;
+            return (
+              <Pressable
+                key={c.code}
+                onPress={() => {
+                  state.setCurrency(c.code);
+                  setCurrencyOpen(false);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: space.md,
+                  paddingVertical: space.md,
+                  paddingHorizontal: space.md,
+                  borderRadius: 14,
+                  backgroundColor: selected ? colors.accentSoft : pressed ? colors.surfaceSunken : 'transparent',
+                })}
+              >
+                <T variant="title" style={{ fontSize: 24 }}>
+                  {c.flag}
+                </T>
+                <View style={{ flex: 1 }}>
+                  <T variant="bodyStrong" color={selected ? colors.accent : colors.ink}>
+                    {c.code} · {c.symbol}
+                  </T>
+                  <T variant="caption" tone="muted">
+                    {c.name}
+                  </T>
+                </View>
+                {selected ? <Ionicons name="checkmark-circle" size={22} color={colors.accent} /> : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </BottomSheet>
+
+      {/* Theme picker — a bottom sheet with an icon and description per option. */}
+      <BottomSheet visible={themeOpen} onClose={() => setThemeOpen(false)} title="Appearance">
+        <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md, gap: space.xs }}>
+          {(
+            [
+              { key: 'system', label: 'Automatic', desc: 'Follow the device setting', icon: 'phone-portrait-outline' },
+              { key: 'light', label: 'Light', desc: 'Always light', icon: 'sunny-outline' },
+              { key: 'dark', label: 'Dark', desc: 'Always dark', icon: 'moon-outline' },
+            ] as const
+          ).map((opt) => {
+            const selected = opt.key === state.themeMode;
+            return (
+              <Pressable
+                key={opt.key}
+                onPress={() => {
+                  state.setThemeMode(opt.key);
+                  setThemeOpen(false);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: space.md,
+                  paddingVertical: space.md,
+                  paddingHorizontal: space.md,
+                  borderRadius: 14,
+                  borderWidth: 1.5,
+                  borderColor: selected ? colors.accent : colors.hairline,
+                  backgroundColor: selected ? colors.accentSoft : pressed ? colors.surfaceSunken : colors.surface,
+                })}
+              >
+                <Ionicons name={opt.icon} size={22} color={selected ? colors.accent : colors.inkSecondary} />
+                <View style={{ flex: 1 }}>
+                  <T variant="bodyStrong" color={selected ? colors.accent : colors.ink}>
+                    {opt.label}
+                  </T>
+                  <T variant="caption" tone="muted">
+                    {opt.desc}
+                  </T>
+                </View>
+                {selected ? <Ionicons name="checkmark-circle" size={22} color={colors.accent} /> : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      </BottomSheet>
 
       {/* Clear-all confirmation. */}
       <Modal visible={confirmOpen} transparent animationType="fade" onRequestClose={closeConfirm}>
@@ -347,7 +529,7 @@ export default function SettingsScreen() {
               value={confirmText}
               onChangeText={setConfirmText}
               placeholder={CONFIRM_WORD}
-              placeholderTextColor={colors.inkMuted}
+              placeholderTextColor={colors.inkFaint}
               autoCapitalize="characters"
               autoCorrect={false}
               editable={!clearing}
@@ -386,6 +568,7 @@ export default function SettingsScreen() {
     </>
   );
 }
+
 
 /** A titled group of setting rows in one surface. */
 function Section({
@@ -454,59 +637,6 @@ function ToggleRow({
         thumbColor="#FFFFFF"
         accessibilityLabel={title}
       />
-    </View>
-  );
-}
-
-/** A segmented control — the row of mutually-exclusive pills used for theme. */
-function Segmented({
-  options,
-  selectedKey,
-  onSelect,
-}: {
-  options: { key: string; label: string }[];
-  selectedKey: string;
-  onSelect: (key: string) => void;
-}) {
-  const { colors, radius, space } = useTheme();
-  return (
-    <View
-      style={{
-        flexDirection: 'row',
-        backgroundColor: colors.surfaceSunken,
-        borderRadius: radius.md,
-        padding: 3,
-        gap: 3,
-      }}
-    >
-      {options.map((option) => {
-        const selected = selectedKey === option.key;
-        return (
-          <Pressable
-            key={option.key}
-            onPress={() => onSelect(option.key)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            style={({ pressed }) => ({
-              flex: 1,
-              alignItems: 'center',
-              paddingVertical: 9,
-              borderRadius: radius.sm,
-              backgroundColor: selected ? colors.surface : 'transparent',
-              opacity: pressed ? 0.8 : 1,
-              ...(selected ? { borderWidth: 1, borderColor: colors.hairline } : {}),
-            })}
-          >
-            <T
-              variant="small"
-              color={selected ? colors.ink : colors.inkSecondary}
-              style={{ fontWeight: selected ? '700' : '500' }}
-            >
-              {option.label}
-            </T>
-          </Pressable>
-        );
-      })}
     </View>
   );
 }

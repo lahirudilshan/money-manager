@@ -1,25 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, SheetHeader } from '../../src/components/forms';
 import {
   Button,
   Divider,
   FundingBar,
   Glyph,
-  GradientButton,
   Label,
-  PinnedFooter,
   Row,
   Surface,
   T,
 } from '../../src/components/ui';
+import { AccountPickerSheet } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
-import { formatMoney, parseAmount } from '../../src/core/money';
-import { dueDateFor, formatPeriod } from '../../src/core/planning';
-import { resolveBrand } from '../../src/data/banks';
+import { formatMoney } from '../../src/core/money';
+import { formatPeriod } from '../../src/core/planning';
+import { accountLabel, resolveBrand } from '../../src/data/banks';
 import { selectCategoryView, useAppStore } from '../../src/store/useAppStore';
 import { statusStyle } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -39,9 +37,7 @@ export default function CategoryDetailScreen() {
 
   const state = useAppStore();
   const view = useMemo(() => selectCategoryView(state, id!), [state, id]);
-
-  const [fundOpen, setFundOpen] = useState(false);
-  const [fundAmount, setFundAmount] = useState('');
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
 
   if (!view) {
     return (
@@ -66,20 +62,23 @@ export default function CategoryDetailScreen() {
   const brand = card
     ? resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name })
     : undefined;
-  const dueDate = dueDateFor(state.period, category.dueDay);
 
-  function openFundSheet() {
-    setFundAmount(summary.shortfallMinor > 0 ? String(summary.shortfallMinor / 100) : '');
-    setFundOpen(true);
-  }
-
-  function handleFund() {
-    const amount = parseAmount(fundAmount);
-    if (!amount || amount <= 0) return;
-    state.fundCategory(category.id, amount);
-    setFundOpen(false);
-    setFundAmount('');
-  }
+  // A short summary of how this category's bills recur — e.g. "3 monthly · 1
+  // yearly". Shown on the summary card so the cadence reads at a glance.
+  const frequencyLabel = (() => {
+    const labels: Record<string, string> = {
+      monthly: 'monthly',
+      yearly: 'yearly',
+      one_time: 'one-time',
+      unplanned: 'unplanned',
+    };
+    const counts = new Map<string, number>();
+    for (const sub of view.rawSubcategories) {
+      counts.set(sub.frequency, (counts.get(sub.frequency) ?? 0) + 1);
+    }
+    const parts = [...counts.entries()].map(([freq, n]) => `${n} ${labels[freq] ?? freq}`);
+    return parts.join(' · ');
+  })();
 
   function confirmDelete() {
     Alert.alert(`Delete ${category.name}?`, 'Its bills will be removed too.', [
@@ -183,6 +182,19 @@ export default function CategoryDetailScreen() {
               </T>
             </Row>
           </View>
+
+          {/* Frequency mix — how this category's bills recur, at a glance. */}
+          {frequencyLabel ? (
+            <>
+              <Divider />
+              <Row gap={6}>
+                <Ionicons name="repeat-outline" size={14} color={colors.inkMuted} />
+                <T variant="caption" tone="secondary">
+                  {frequencyLabel}
+                </T>
+              </Row>
+            </>
+          ) : null}
         </Surface>
 
         {/* Bulk transfer — the salary→account move. Income categories skip it:
@@ -230,29 +242,6 @@ export default function CategoryDetailScreen() {
             </View>
           </Pressable>
 
-          {/* Record an exact partial amount, for when it wasn't the full plan. */}
-          <Row gap={space.sm}>
-            <Button
-              label="Log exact amount"
-              icon="cash-outline"
-              variant="secondary"
-              onPress={openFundSheet}
-              style={{ flex: 1 }}
-            />
-            {summary.fundedMinor > 0 ? (
-              <Button
-                label="Undo"
-                icon="arrow-undo-outline"
-                variant="secondary"
-                onPress={() => state.unfundCategory(category.id)}
-              />
-            ) : null}
-          </Row>
-          {summary.fundedMinor > 0 ? (
-            <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
-              {formatMoney(summary.fundedMinor)} logged this month
-            </T>
-          ) : null}
         </View>
         )}
 
@@ -262,15 +251,9 @@ export default function CategoryDetailScreen() {
           <Surface padded={false}>
             <SettingRow
               label="Funded to"
-              value={card?.name ?? 'No account'}
+              value={card ? accountLabel(card).primary : 'No account'}
               leading={brand ? <BankLogo brand={brand} size={28} /> : undefined}
-              onPress={() => router.push(`/category/edit/${category.id}`)}
-            />
-            <Divider style={{ marginHorizontal: space.lg }} />
-            <SettingRow
-              label="Payment day"
-              value={dueDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-              onPress={() => router.push(`/category/edit/${category.id}`)}
+              onPress={() => setAccountPickerOpen(true)}
             />
           </Surface>
         </View>
@@ -283,76 +266,18 @@ export default function CategoryDetailScreen() {
         />
       </ScrollView>
 
-      {/* Log-exact-amount sheet. */}
-      <Modal
-        visible={fundOpen}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setFundOpen(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={{ flex: 1, backgroundColor: colors.canvas }}
-        >
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
-          <SheetHeader title="Log transfer" onClose={() => setFundOpen(false)} />
-        </View>
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Surface style={{ gap: space.sm }}>
-            <Row>
-              <Glyph icon={category.icon as never} color={category.color} />
-              <View style={{ flex: 1 }}>
-                <T variant="bodyStrong">{category.name}</T>
-                <T variant="caption" tone="muted">
-                  to {card?.name ?? 'no account assigned'}
-                </T>
-              </View>
-            </Row>
-            <Divider />
-            <Row justify="space-between">
-              <T variant="small" tone="secondary">
-                Needed
-              </T>
-              <T variant="figure">{formatMoney(summary.totalMinor)}</T>
-            </Row>
-            <Row justify="space-between">
-              <T variant="small" tone="secondary">
-                Already logged
-              </T>
-              <T variant="figure">{formatMoney(summary.fundedMinor)}</T>
-            </Row>
-          </Surface>
-
-          <Field
-            label="Amount transferred"
-            value={fundAmount}
-            onChangeText={setFundAmount}
-            placeholder="0"
-            keyboardType="numeric"
-            autoFocus
-          />
-
-          <T variant="caption" tone="muted">
-            This records the money as moved to the account and marks the category
-            transferred. It doesn’t pay any bill — tick those off on the List.
-          </T>
-
-        </ScrollView>
-
-        <PinnedFooter>
-          <GradientButton
-            label={`Log ${formatMoney(parseAmount(fundAmount) ?? 0)}`}
-            icon="swap-horizontal"
-            onPress={handleFund}
-            disabled={!parseAmount(fundAmount)}
-          />
-        </PinnedFooter>
-        </KeyboardAvoidingView>
-      </Modal>
+      {/* Reassign the funding account inline, using the shared picker. */}
+      <AccountPickerSheet
+        visible={accountPickerOpen}
+        cards={state.cards}
+        selectedId={category.cardId}
+        allowNone
+        onSelect={(cardId) => {
+          state.updateCategory(category.id, { cardId });
+          setAccountPickerOpen(false);
+        }}
+        onClose={() => setAccountPickerOpen(false)}
+      />
     </>
   );
 }

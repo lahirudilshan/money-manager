@@ -23,6 +23,9 @@ export const palette = {
     ink: '#101828',
     inkSecondary: '#5B6472',
     inkMuted: '#8A93A0',
+    // Fainter than muted — for input placeholders, so they read as hint text
+    // rather than competing with muted labels.
+    inkFaint: '#B4BBC6',
     inkInverse: '#FFFFFF',
 
     // Gradient accent — the two stops driving the hero card, chips and the
@@ -62,6 +65,7 @@ export const palette = {
     ink: '#F3F6FA',
     inkSecondary: '#A7B1C2',
     inkMuted: '#6B7688',
+    inkFaint: '#525C6D',
     inkInverse: '#0B1220',
 
     accent: '#4A9BF5',

@@ -21,7 +21,7 @@ export { expoDb, DATABASE_NAME };
  * files: for a local-only app this removes a codegen step while staying
  * explicit. `user_version` gates destructive upgrades.
  */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 6;
 
 const DDL = [
   `CREATE TABLE IF NOT EXISTS cards (
@@ -33,6 +33,13 @@ const DDL = [
     last4 TEXT,
     color TEXT NOT NULL DEFAULT '#6366F1',
     icon TEXT NOT NULL DEFAULT 'card-outline',
+    is_card INTEGER NOT NULL DEFAULT 0,
+    card_number TEXT,
+    cvv TEXT,
+    expiry TEXT,
+    account_number TEXT,
+    branch TEXT,
+    bank_code TEXT,
     target_minor INTEGER,
     opening_balance_minor INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
@@ -103,6 +110,19 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+  // Individual entries under an `unplanned` subcategory — see schema.ts.
+  `CREATE TABLE IF NOT EXISTS transactions (
+    id TEXT PRIMARY KEY NOT NULL,
+    subcategory_id TEXT NOT NULL REFERENCES subcategories(id) ON DELETE CASCADE,
+    period TEXT NOT NULL,
+    name TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    date INTEGER NOT NULL,
+    note TEXT,
+    image_uri TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
   `CREATE TABLE IF NOT EXISTS category_states (
     id TEXT PRIMARY KEY NOT NULL,
     category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
@@ -150,6 +170,8 @@ const DDL = [
   `CREATE UNIQUE INDEX IF NOT EXISTS category_states_lookup_idx
      ON category_states(category_id, period)`,
   `CREATE INDEX IF NOT EXISTS fundings_lookup_idx ON fundings(category_id, period)`,
+  `CREATE INDEX IF NOT EXISTS transactions_sub_idx ON transactions(subcategory_id)`,
+  `CREATE INDEX IF NOT EXISTS transactions_lookup_idx ON transactions(subcategory_id, period)`,
 ];
 
 /**
@@ -509,6 +531,13 @@ function ensureAdditiveColumns(): void {
     ensureColumn('cards', 'bank_name', 'bank_name TEXT');
     ensureColumn('cards', 'last4', 'last4 TEXT');
     ensureColumn('cards', 'bank_id', 'bank_id TEXT');
+    ensureColumn('cards', 'is_card', 'is_card INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('cards', 'card_number', 'card_number TEXT');
+    ensureColumn('cards', 'cvv', 'cvv TEXT');
+    ensureColumn('cards', 'expiry', 'expiry TEXT');
+    ensureColumn('cards', 'account_number', 'account_number TEXT');
+    ensureColumn('cards', 'branch', 'branch TEXT');
+    ensureColumn('cards', 'bank_code', 'bank_code TEXT');
   }
 
   const hasLoans = expoDb.getFirstSync(
@@ -516,6 +545,7 @@ function ensureAdditiveColumns(): void {
   );
   if (hasLoans) {
     ensureColumn('loans', 'bank_id', 'bank_id TEXT');
+    ensureColumn('loans', 'paid_installments', 'paid_installments INTEGER NOT NULL DEFAULT 0');
   }
 
   const hasCategories = expoDb.getFirstSync(
@@ -667,6 +697,7 @@ export function initialiseDatabase(): void {
  */
 export function resetDatabase(): void {
   const tables = [
+    'transactions',
     'subcategory_states',
     'fundings',
     'subcategories',

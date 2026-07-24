@@ -37,10 +37,12 @@ import {
   settingsRepo,
   stateRepo,
   subcategoryRepo,
+  transactionRepo,
   SETTINGS_KEYS,
 } from '../db/repositories';
 import { seedSampleTemplate } from '../db/seed';
 import { cancelAllReminders } from '../services/notifications';
+import { supportsSavingPlan } from '../db/schema';
 import type {
   Card,
   Category,
@@ -53,8 +55,10 @@ import type {
   NewIncome,
   NewLoan,
   NewSubcategory,
+  NewTransaction,
   Subcategory,
   SubcategoryState,
+  Transaction,
 } from '../db/schema';
 
 /**
@@ -74,6 +78,8 @@ export interface AppState {
   /** Per-category bulk-transfer status for the current period. */
   categoryStates: Map<string, CategoryState>;
   fundingTotals: Map<string, Minor>;
+  /** SUM of child transactions per unplanned subcategory, for the period. */
+  transactionTotals: Map<string, Minor>;
   incomes: Income[];
   loans: Loan[];
   currency: string;
@@ -147,6 +153,20 @@ export interface AppState {
   }) => Subcategory;
   updateSubcategory: (id: string, patch: Partial<Subcategory>) => void;
   deleteSubcategory: (id: string) => void;
+  /** Move a subcategory under a different parent category. */
+  changeSubcategoryParent: (id: string, newCategoryId: string) => void;
+
+  /** Add an entry to an unplanned subcategory. Period is derived from `date`. */
+  addTransaction: (input: {
+    subcategoryId: string;
+    name: string;
+    amountMinor: Minor;
+    date: Date;
+    note?: string | null;
+    imageUri?: string | null;
+  }) => void;
+  updateTransaction: (id: string, patch: Partial<NewTransaction>) => void;
+  deleteTransaction: (id: string) => void;
 
   addCard: (input: Omit<NewCard, 'id' | 'color'>) => Card;
   updateCard: (id: string, patch: Partial<NewCard>) => void;
@@ -196,6 +216,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   states: new Map(),
   categoryStates: new Map(),
   fundingTotals: new Map(),
+  transactionTotals: new Map(),
   incomes: [],
   loans: [],
   currency: 'LKR',
@@ -222,6 +243,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       states: stateRepo.byPeriod(period),
       categoryStates: categoryStateRepo.byPeriod(period),
       fundingTotals: fundingRepo.totalsByPeriod(period),
+      transactionTotals: transactionRepo.totalsByPeriod(period),
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
       currency: settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR',
@@ -401,11 +423,50 @@ export const useAppStore = create<AppState>((set, get) => ({
     return created;
   },
   updateSubcategory(id, patch) {
-    subcategoryRepo.update(id, patch);
+    // Saving plans belong only to yearly lines (product rule). If this edit
+    // moves the line off yearly, wipe the plan fields so no stale sinking-fund
+    // data lingers on a monthly/one-time/unplanned line.
+    const nextFrequency = patch.frequency ?? get().subcategories.find((s) => s.id === id)?.frequency;
+    const clearPlan =
+      nextFrequency !== undefined && !supportsSavingPlan(nextFrequency)
+        ? { planTargetMinor: null, planDueDate: null, planStartDate: null }
+        : {};
+    subcategoryRepo.update(id, { ...patch, ...clearPlan });
     get().refresh();
   },
   deleteSubcategory(id) {
     subcategoryRepo.remove(id);
+    get().refresh();
+  },
+
+  /** Move a subcategory under a different parent category, appending it to the
+   * end of the target's list so ordering stays sensible. */
+  changeSubcategoryParent(id, newCategoryId) {
+    const siblings = get().subcategories.filter((s) => s.categoryId === newCategoryId);
+    subcategoryRepo.update(id, { categoryId: newCategoryId, sortOrder: siblings.length });
+    get().refresh();
+  },
+
+  addTransaction(input) {
+    transactionRepo.create({
+      subcategoryId: input.subcategoryId,
+      period: periodKey(input.date),
+      name: input.name,
+      amountMinor: input.amountMinor,
+      date: input.date,
+      note: input.note ?? null,
+      imageUri: input.imageUri ?? null,
+    });
+    get().refresh();
+  },
+  updateTransaction(id, patch) {
+    // Keep the period in sync if the date moved to another month.
+    const next = patch.date ? { ...patch, period: periodKey(patch.date) } : patch;
+    transactionRepo.update(id, next);
+    get().refresh();
+  },
+  deleteTransaction(id) {
+    transactionRepo.remove(id);
     get().refresh();
   },
 
@@ -477,12 +538,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!subcategoryId) return;
 
     const amountMinor = overrides?.amountMinor ?? draft.amountMinor;
+    const target = get().subcategories.find((s) => s.id === subcategoryId);
 
-    stateRepo.logTransaction(subcategoryId, period, {
-      status: 'paid',
-      actualMinor: amountMinor,
-      note: overrides?.note ?? `From SMS: ${draft.parsed.raw}`,
-    });
+    if (target && target.frequency === 'unplanned') {
+      // An unplanned line accumulates individual entries, so a confirmed SMS
+      // becomes one transaction rather than the month's single "actual".
+      transactionRepo.create({
+        subcategoryId,
+        period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
+        name: draft.parsed.merchant || 'SMS transaction',
+        amountMinor,
+        date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
+        note: overrides?.note ?? draft.parsed.raw,
+      });
+    } else {
+      stateRepo.logTransaction(subcategoryId, period, {
+        status: 'paid',
+        actualMinor: amountMinor,
+        note: overrides?.note ?? `From SMS: ${draft.parsed.raw}`,
+      });
+    }
 
     set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
     get().refresh();
@@ -511,7 +586,26 @@ export interface CategoryView {
   isIncomeOnly: boolean;
 }
 
-function toPlanned(subcategory: Subcategory, state: SubcategoryState | undefined): PlannedCategory {
+function toPlanned(
+  subcategory: Subcategory,
+  state: SubcategoryState | undefined,
+  transactionTotal: Minor | undefined,
+): PlannedCategory {
+  // An unplanned line has no single planned amount and no per-period paid flag;
+  // its effective value is the SUM of its child transactions, always treated as
+  // "actual" so the board and its transaction list can never disagree. It reads
+  // as paid whenever it has any spend, so it never shows as an outstanding bill.
+  if (subcategory.frequency === 'unplanned') {
+    const total = transactionTotal ?? 0;
+    return {
+      id: subcategory.id,
+      name: subcategory.name,
+      plannedMinor: 0,
+      actualMinor: total,
+      status: total > 0 ? 'paid' : 'pending',
+    };
+  }
+
   return {
     id: subcategory.id,
     name: subcategory.name,
@@ -524,7 +618,9 @@ function toPlanned(subcategory: Subcategory, state: SubcategoryState | undefined
 export function selectCategoryViews(state: AppState): CategoryView[] {
   return state.categories.map((category) => {
     const subs = state.subcategories.filter((s) => s.categoryId === category.id);
-    const planned = subs.map((s) => toPlanned(s, state.states.get(s.id)));
+    const planned = subs.map((s) =>
+      toPlanned(s, state.states.get(s.id), state.transactionTotals.get(s.id)),
+    );
     const funded = state.fundingTotals.get(category.id) ?? 0;
 
     return {
@@ -537,6 +633,13 @@ export function selectCategoryViews(state: AppState): CategoryView[] {
       isIncomeOnly: subs.length > 0 && subs.every((s) => s.type === 'income'),
     };
   });
+}
+
+/** All transactions for an unplanned subcategory in the current period, newest
+ * first — drives the entry list on the subcategory and list screens. Reads the
+ * DB directly (not the totals map) since the UI needs each row, not just a sum. */
+export function selectTransactions(state: AppState, subcategoryId: string): Transaction[] {
+  return transactionRepo.bySubcategoryPeriod(subcategoryId, state.period);
 }
 
 export function selectCategoryView(state: AppState, categoryId: string): CategoryView | undefined {
@@ -831,7 +934,13 @@ export function selectLoanViews(state: AppState): LoanView[] {
       termMonths: loan.termMonths,
     };
     const schedule = buildSchedule(terms);
-    const paidCount = paymentsElapsed(loan.startDate, loan.termMonths);
+    // Prefer the explicit "installments paid" the user entered; fall back to
+    // deriving it from the start date for loans created before that field
+    // existed (where it defaults to 0).
+    const paidCount =
+      loan.paidInstallments > 0
+        ? Math.min(loan.paidInstallments, loan.termMonths)
+        : paymentsElapsed(loan.startDate, loan.termMonths);
 
     return {
       loan,

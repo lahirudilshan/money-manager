@@ -250,3 +250,26 @@ export function resolveBrand(input: {
     BY_ID.get('other')!
   );
 }
+
+/**
+ * How an account reads everywhere in the app: the *bank* is the headline
+ * ("HNB", "Sampath"), and the user's own label ("Main account", "Savings") is
+ * the secondary line. Falls back gracefully — a hand-typed account with no bank
+ * shows its name as the primary and nothing secondary.
+ */
+export function accountLabel(card: {
+  bankId?: string | null;
+  bankName?: string | null;
+  name: string;
+}): { primary: string; secondary: string | null } {
+  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const bank = card.bankName ?? (brand.id !== 'other' ? brand.name : null);
+
+  // With a known bank: bank is primary, the custom name is secondary (unless
+  // it's the same string). Without one: the custom name stands alone.
+  if (bank) {
+    const secondary = card.name && card.name !== bank ? card.name : null;
+    return { primary: bank, secondary };
+  }
+  return { primary: card.name, secondary: null };
+}

@@ -10,14 +10,20 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
-import { Button, Divider, GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, Divider, GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
+import {
+  supportsSavingPlan,
+  isUnplanned,
+  type SubcategoryFrequency,
+} from '../../src/db/schema';
 import { resolveBrand } from '../../src/data/banks';
 import { BankLogo } from '../../src/components/BankLogo';
 import {
@@ -27,7 +33,7 @@ import {
   toSavingPlanPatch,
   type SavingPlanDraft,
 } from '../../src/components/SavingPlanFields';
-import { selectSavingPlans, useAppStore } from '../../src/store/useAppStore';
+import { selectSavingPlans, selectTransactions, useAppStore } from '../../src/store/useAppStore';
 import { statusStyle } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -69,9 +75,12 @@ export default function SubcategoryScreen() {
     stateRow?.actualMinor != null ? String(stateRow.actualMinor / 100) : '',
   );
   const [note, setNote] = useState(stateRow?.note ?? '');
-  const [frequency, setFrequency] = useState<'monthly' | 'one_time' | 'yearly'>(
+  const [frequency, setFrequency] = useState<SubcategoryFrequency>(
     subcategory?.frequency ?? 'monthly',
   );
+  const [parentId, setParentId] = useState(subcategory?.categoryId ?? '');
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [categoryQuery, setCategoryQuery] = useState('');
   const [plan, setPlan] = useState<SavingPlanDraft>(() =>
     savingPlanDraftFrom({
       planTargetMinor: subcategory?.planTargetMinor,
@@ -101,6 +110,16 @@ export default function SubcategoryScreen() {
 
   // The repo already collapses legacy values, so this is pending/paid.
   const status: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
+
+  // Unplanned lines behave differently: they hold a list of individual
+  // transactions, have no single planned/actual amount, and are never marked
+  // paid as a whole — so several fields below are hidden for them.
+  const unplanned = isUnplanned(frequency);
+  const transactions = useMemo(
+    () => (id && unplanned ? selectTransactions(state, id) : []),
+    [state, id, unplanned],
+  );
+  const unplannedTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
 
   async function pickImage(source: 'camera' | 'library') {
     const permission =
@@ -135,27 +154,38 @@ export default function SubcategoryScreen() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
-    // With a saving plan the monthly set-aside is derived from the plan, so it
-    // overrides whatever is in the planned-amount field.
-    const planPatch = toSavingPlanPatch(plan);
+    // A saving plan only applies to yearly lines; its monthly set-aside is
+    // derived from the plan and overrides the planned-amount field. On any
+    // other frequency the plan is dropped (the store also clears stored plan
+    // fields when frequency leaves yearly).
+    const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
     state.updateSubcategory(subcategory!.id, {
       name: trimmed,
-      plannedMinor: planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
+      // Unplanned lines have no single planned amount (it's the sum of entries).
+      plannedMinor: unplanned ? 0 : planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
       frequency,
       planTargetMinor: planPatch?.planTargetMinor ?? null,
       planDueDate: planPatch?.planDueDate ?? null,
       planStartDate: planPatch?.planStartDate ?? subcategory!.planStartDate ?? null,
     });
 
-    // Persist this month's slip, note and actual in one write, keeping the
-    // current paid/pending status. Empty actual means "as planned".
-    const parsedActual = actual.trim() === '' ? null : parseAmount(actual);
-    state.logTransaction(subcategory!.id, {
-      status,
-      actualMinor: parsedActual,
-      note: note.trim() || null,
-      imageUri,
-    });
+    // Move to a different parent category if the user changed it.
+    if (parentId && parentId !== subcategory!.categoryId) {
+      state.changeSubcategoryParent(subcategory!.id, parentId);
+    }
+
+    // Per-month slip/note/actual only apply to normal (non-unplanned) lines,
+    // whose spend is tracked as one figure per period. Unplanned lines track
+    // each entry separately, so there is nothing to log here for them.
+    if (!unplanned) {
+      const parsedActual = actual.trim() === '' ? null : parseAmount(actual);
+      state.logTransaction(subcategory!.id, {
+        status,
+        actualMinor: parsedActual,
+        note: note.trim() || null,
+        imageUri,
+      });
+    }
 
     router.back();
   }
@@ -194,6 +224,7 @@ export default function SubcategoryScreen() {
 
   const isDirty =
     name.trim() !== subcategory.name ||
+    parentId !== subcategory.categoryId ||
     (parseAmount(planned) ?? 0) !== subcategory.plannedMinor ||
     (actual.trim() === '' ? null : parseAmount(actual)) !== (stateRow?.actualMinor ?? null) ||
     note.trim() !== (stateRow?.note ?? '') ||
@@ -255,22 +286,35 @@ export default function SubcategoryScreen() {
 
           <Divider />
 
-          <Row justify="space-between">
-            <T variant="small" tone="secondary">
-              Planned
-            </T>
-            <T variant="figureLarge">{formatMoney(subcategory.plannedMinor)}</T>
-          </Row>
-          {stateRow?.actualMinor != null ? (
+          {unplanned ? (
             <Row justify="space-between">
               <T variant="small" tone="secondary">
-                Actual
+                Spent this month
               </T>
-              <T variant="figure" color={colors.accent}>
-                {formatMoney(stateRow.actualMinor)}
+              <T variant="figureLarge" color={colors.accent}>
+                {formatMoney(unplannedTotal)}
               </T>
             </Row>
-          ) : null}
+          ) : (
+            <>
+              <Row justify="space-between">
+                <T variant="small" tone="secondary">
+                  Planned
+                </T>
+                <T variant="figureLarge">{formatMoney(subcategory.plannedMinor)}</T>
+              </Row>
+              {stateRow?.actualMinor != null ? (
+                <Row justify="space-between">
+                  <T variant="small" tone="secondary">
+                    Actual
+                  </T>
+                  <T variant="figure" color={colors.accent}>
+                    {formatMoney(stateRow.actualMinor)}
+                  </T>
+                </Row>
+              ) : null}
+            </>
+          )}
 
           {fundingCard && brand ? (
             <>
@@ -285,34 +329,43 @@ export default function SubcategoryScreen() {
           ) : null}
         </Surface>
 
-        {/* Status toggle — one big tap for the whole point of the screen:
-            has this bill been paid. */}
-        <Pressable
-          onPress={() => state.cycleStatus(subcategory.id)}
-          accessibilityRole="button"
-          accessibilityLabel={`Mark as ${paid ? 'pending' : 'paid'}. Currently ${style.label}.`}
-          style={({ pressed }) => ({
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: space.md,
-            padding: space.lg,
-            borderRadius: 16,
-            borderWidth: 1.5,
-            borderColor: style.fg,
-            backgroundColor: style.bg,
-            opacity: pressed ? 0.85 : 1,
-          })}
-        >
-          <Ionicons name={style.icon as never} size={26} color={style.fg} />
-          <View style={{ flex: 1 }}>
-            <T variant="bodyStrong" color={style.fg}>
-              {paid ? 'Paid this month' : 'Not paid yet'}
-            </T>
-            <T variant="caption" color={style.fg} style={{ opacity: 0.85 }}>
-              Tap to mark as {paid ? 'pending' : 'paid'}
-            </T>
-          </View>
-        </Pressable>
+        {/* Status toggle — for normal bills only. Unplanned lines are never
+            "paid" as a whole; their spend is the running total of entries. */}
+        {unplanned ? (
+          <UnplannedTransactions
+            transactions={transactions}
+            total={unplannedTotal}
+            onAdd={() => router.push(`/transaction/unplanned?subcategoryId=${subcategory.id}`)}
+            onRemove={(txnId) => state.deleteTransaction(txnId)}
+          />
+        ) : (
+          <Pressable
+            onPress={() => state.cycleStatus(subcategory.id)}
+            accessibilityRole="button"
+            accessibilityLabel={`Mark as ${paid ? 'pending' : 'paid'}. Currently ${style.label}.`}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.md,
+              padding: space.lg,
+              borderRadius: 16,
+              borderWidth: 1.5,
+              borderColor: style.fg,
+              backgroundColor: style.bg,
+              opacity: pressed ? 0.85 : 1,
+            })}
+          >
+            <Ionicons name={style.icon as never} size={26} color={style.fg} />
+            <View style={{ flex: 1 }}>
+              <T variant="bodyStrong" color={style.fg}>
+                {paid ? 'Paid this month' : 'Not paid yet'}
+              </T>
+              <T variant="caption" color={style.fg} style={{ opacity: 0.85 }}>
+                Tap to mark as {paid ? 'pending' : 'paid'}
+              </T>
+            </View>
+          </Pressable>
+        )}
 
         {/* Saving-plan progress, when this bill has one. */}
         {subcategory.planTargetMinor != null && subcategory.planDueDate ? (
@@ -324,114 +377,171 @@ export default function SubcategoryScreen() {
           />
         ) : null}
 
-        {/* Slip / receipt — attach or replace the photo for this month. */}
-        <View style={{ gap: space.sm }}>
-          <Label>SLIP / RECEIPT</Label>
-          {imageUri ? (
-            <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
-              <Pressable
-                onPress={() => setImageViewerOpen(true)}
-                accessibilityRole="button"
-                accessibilityLabel="View slip"
-              >
-                <Image
-                  source={{ uri: imageUri }}
-                  style={{ width: 140, height: 140, borderRadius: 14 }}
-                />
-              </Pressable>
-              <Pressable
-                onPress={removeImage}
-                accessibilityRole="button"
-                accessibilityLabel="Remove slip"
-                style={{
-                  position: 'absolute',
-                  top: -8,
-                  right: -8,
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
-                  backgroundColor: colors.danger,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Ionicons name="close" size={16} color="#FFFFFF" />
-              </Pressable>
-            </View>
-          ) : (
-            <Row gap={space.sm}>
-              <UploadButton
-                icon="camera-outline"
-                label="Camera"
-                busy={imageBusy}
-                onPress={() => pickImage('camera')}
-              />
-              <UploadButton
-                icon="image-outline"
-                label="Upload"
-                busy={imageBusy}
-                onPress={() => pickImage('library')}
-              />
-            </Row>
-          )}
-        </View>
-
         {/* Editable plan. */}
         <View style={{ gap: space.md }}>
           <Label>DETAILS</Label>
           <Field label="Name" value={name} onChangeText={setName} />
-          <Field
-            label="Planned amount"
-            value={planned}
-            onChangeText={setPlanned}
-            keyboardType="numeric"
-            placeholder="0"
-          />
-          <Field
-            label="Actual amount (optional)"
-            value={actual}
-            onChangeText={setActual}
-            keyboardType="numeric"
-            placeholder="Leave empty if it matched the plan"
-          />
+
+          {/* Parent category — tap to open a searchable picker, so moving a line
+              between categories stays simple even with a long list. */}
+          <View style={{ gap: space.sm }}>
+            <Label>Category</Label>
+            <Pressable
+              onPress={() => setCategoryPickerOpen(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`Category: ${state.categories.find((c) => c.id === parentId)?.name ?? 'choose'}`}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: space.sm,
+                paddingHorizontal: space.md,
+                paddingVertical: 13,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+                backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
+              })}
+            >
+              {(() => {
+                const parent = state.categories.find((c) => c.id === parentId);
+                return (
+                  <>
+                    <Ionicons
+                      name={(parent?.icon as never) ?? 'albums-outline'}
+                      size={18}
+                      color={parent?.color ?? colors.inkMuted}
+                    />
+                    <T variant="body" style={{ flex: 1 }}>
+                      {parent?.name ?? 'Choose a category'}
+                    </T>
+                    <Ionicons name="chevron-down" size={16} color={colors.inkMuted} />
+                  </>
+                );
+              })()}
+            </Pressable>
+          </View>
+
+          {/* An unplanned line has no single planned amount — hide it. */}
+          {!unplanned ? (
+            <Field
+              label="Planned amount"
+              value={planned}
+              onChangeText={setPlanned}
+              keyboardType="numeric"
+              placeholder="0"
+            />
+          ) : null}
+
+          {/* Actual/note only apply to normal per-period bills. */}
+          {!unplanned ? (
+            <Field
+              label="Actual amount (optional)"
+              value={actual}
+              onChangeText={setActual}
+              keyboardType="numeric"
+              placeholder="Leave empty if it matched the plan"
+            />
+          ) : null}
+
           <PillSelect
             label="Frequency"
             options={[
               { key: 'monthly', label: 'Monthly' },
               { key: 'yearly', label: 'Yearly' },
               { key: 'one_time', label: 'One-time' },
+              { key: 'unplanned', label: 'Unplanned' },
             ]}
             selectedKey={frequency}
-            onSelect={(key) => setFrequency(key as typeof frequency)}
-          />
-          <SavingPlanFields draft={plan} onChange={setPlan} />
-
-          <Field
-            label="Note (optional)"
-            value={note}
-            onChangeText={setNote}
-            placeholder="What was this for?"
-            multiline
+            onSelect={(key) => setFrequency(key as SubcategoryFrequency)}
           />
 
-          <Pressable
-            onPress={confirmDelete}
-            accessibilityRole="button"
-            style={({ pressed }) => ({
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              paddingVertical: space.md,
-              opacity: pressed ? 0.6 : 1,
-            })}
-          >
-            <Ionicons name="trash-outline" size={16} color={colors.danger} />
-            <T variant="small" color={colors.danger} style={{ fontWeight: '600' }}>
-              Delete subcategory
-            </T>
-          </Pressable>
+          {/* "Save up for this" — yearly lines only. */}
+          {supportsSavingPlan(frequency) ? (
+            <SavingPlanFields draft={plan} onChange={setPlan} />
+          ) : null}
+
+          {!unplanned ? (
+            <Field
+              label="Note (optional)"
+              value={note}
+              onChangeText={setNote}
+              placeholder="What was this for?"
+              multiline
+            />
+          ) : null}
         </View>
+
+        {/* Slip / receipt — at the bottom, for normal bills only. */}
+        {!unplanned ? (
+          <View style={{ gap: space.sm }}>
+            <Label>SLIP / RECEIPT</Label>
+            {imageUri ? (
+              <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
+                <Pressable
+                  onPress={() => setImageViewerOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="View slip"
+                >
+                  <Image
+                    source={{ uri: imageUri }}
+                    style={{ width: 140, height: 140, borderRadius: 14 }}
+                  />
+                </Pressable>
+                <Pressable
+                  onPress={removeImage}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove slip"
+                  style={{
+                    position: 'absolute',
+                    top: -8,
+                    right: -8,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: colors.danger,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons name="close" size={16} color="#FFFFFF" />
+                </Pressable>
+              </View>
+            ) : (
+              <Row gap={space.sm}>
+                <UploadButton
+                  icon="camera-outline"
+                  label="Camera"
+                  busy={imageBusy}
+                  onPress={() => pickImage('camera')}
+                />
+                <UploadButton
+                  icon="image-outline"
+                  label="Upload"
+                  busy={imageBusy}
+                  onPress={() => pickImage('library')}
+                />
+              </Row>
+            )}
+          </View>
+        ) : null}
+
+        <Pressable
+          onPress={confirmDelete}
+          accessibilityRole="button"
+          style={({ pressed }) => ({
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            paddingVertical: space.md,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Ionicons name="trash-outline" size={16} color={colors.danger} />
+          <T variant="small" color={colors.danger} style={{ fontWeight: '600' }}>
+            Delete subcategory
+          </T>
+        </Pressable>
       </ScrollView>
 
       <PinnedFooter>
@@ -474,7 +584,142 @@ export default function SubcategoryScreen() {
         </View>
       </Modal>
     ) : null}
+
+    {/* Searchable category picker. */}
+    <BottomSheet
+      visible={categoryPickerOpen}
+      onClose={() => {
+        setCategoryPickerOpen(false);
+        setCategoryQuery('');
+      }}
+      title="Move to category"
+    >
+      <View style={{ paddingHorizontal: space.lg, paddingBottom: space.sm }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: space.sm,
+            backgroundColor: colors.surfaceSunken,
+            borderRadius: 12,
+            paddingHorizontal: space.md,
+          }}
+        >
+          <Ionicons name="search" size={16} color={colors.inkMuted} />
+          <TextInput
+            value={categoryQuery}
+            onChangeText={setCategoryQuery}
+            placeholder="Search categories…"
+            placeholderTextColor={colors.inkFaint}
+            style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
+          />
+        </View>
+      </View>
+      <ScrollView
+        contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.md }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {state.categories
+          .filter((c) => c.name.toLowerCase().includes(categoryQuery.trim().toLowerCase()))
+          .map((c) => {
+            const selected = c.id === parentId;
+            return (
+              <Pressable
+                key={c.id}
+                onPress={() => {
+                  setParentId(c.id);
+                  setCategoryPickerOpen(false);
+                  setCategoryQuery('');
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: space.md,
+                  paddingVertical: space.md,
+                  paddingHorizontal: space.md,
+                  borderRadius: 12,
+                  backgroundColor: selected ? colors.accentSoft : pressed ? colors.surfaceSunken : 'transparent',
+                })}
+              >
+                <Ionicons name={(c.icon as never) ?? 'albums-outline'} size={20} color={c.color} />
+                <T variant="body" color={selected ? colors.accent : colors.ink} style={{ flex: 1, fontWeight: selected ? '700' : '500' }}>
+                  {c.name}
+                </T>
+                {selected ? <Ionicons name="checkmark-circle" size={20} color={colors.accent} /> : null}
+              </Pressable>
+            );
+          })}
+      </ScrollView>
+    </BottomSheet>
     </KeyboardAvoidingView>
+  );
+}
+
+/**
+ * The entry list for an unplanned subcategory: a running total, an "add" action,
+ * and each transaction (name, date, amount) with swipe-free delete. Replaces the
+ * paid toggle, which is meaningless when spend is tracked entry by entry.
+ */
+function UnplannedTransactions({
+  transactions,
+  total,
+  onAdd,
+  onRemove,
+}: {
+  transactions: import('../../src/db/schema').Transaction[];
+  total: number;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <Surface padded={false} style={{ overflow: 'hidden' }}>
+      <Row justify="space-between" align="center" style={{ padding: space.lg, paddingBottom: space.sm }}>
+        <View>
+          <Label>THIS MONTH</Label>
+          <T variant="figureLarge" color={colors.accent}>
+            {formatMoney(total)}
+          </T>
+        </View>
+        <Button label="Add" icon="add" size="sm" onPress={onAdd} />
+      </Row>
+
+      {transactions.length === 0 ? (
+        <T variant="caption" tone="muted" style={{ padding: space.lg, paddingTop: 0 }}>
+          No entries yet this month. Tap Add, or confirm an SMS draft against this line.
+        </T>
+      ) : (
+        transactions.map((txn, index) => (
+          <View key={txn.id}>
+            {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+            <Row gap={space.md} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
+              <View style={{ flex: 1 }}>
+                <T variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
+                  {txn.name}
+                </T>
+                <T variant="caption" tone="muted">
+                  {new Date(txn.date).toLocaleDateString(undefined, {
+                    day: 'numeric',
+                    month: 'short',
+                  })}
+                </T>
+              </View>
+              <T variant="figure">{formatMoney(txn.amountMinor)}</T>
+              <Pressable
+                onPress={() => onRemove(txn.id)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${txn.name}`}
+              >
+                <Ionicons name="close-circle" size={20} color={colors.inkMuted} />
+              </Pressable>
+            </Row>
+          </View>
+        ))
+      )}
+    </Surface>
   );
 }
 

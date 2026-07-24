@@ -31,7 +31,7 @@ import { shadeHex } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 export default function LoansScreen() {
-  const { colors, space } = useTheme();
+  const { colors, radius, space } = useTheme();
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
   const state = useAppStore();
@@ -95,7 +95,7 @@ export default function LoansScreen() {
                 paddingVertical: 8,
                 paddingHorizontal: space.md,
                 borderRadius: 999,
-                backgroundColor: colors.pending,
+                backgroundColor: '#A21D6B',
                 opacity: pressed ? 0.85 : 1,
               })}
             >
@@ -118,34 +118,43 @@ export default function LoansScreen() {
         ) : (
           <>
             {/*
-              Summary hero focused on the two numbers that matter — what you
-              still owe (the headline) and what leaves your account each month.
-              Debt keeps its own warm hue rather than the app's brand gradient,
-              which reads as "your money"; borrowing is a different kind of
-              number and shouldn't wear that identity.
+              Summary hero focused on what you still owe (the headline) and what
+              leaves your account each month. A deep warm gradient reads as debt
+              — a different kind of number from the app's own money — while still
+              feeling premium rather than a flat warning panel.
             */}
-            <Surface
-              style={{
-                gap: space.lg,
-                backgroundColor: colors.pendingSoft,
-                borderColor: colors.pending,
-              }}
+            <View
+              style={{ borderRadius: radius.xl, overflow: 'hidden' }}
             >
-              <View style={{ gap: 2 }}>
-                <Label color={colors.pending}>TOTAL OUTSTANDING</Label>
-                <T variant="hero">{formatMoney(totals.outstanding)}</T>
-              </View>
-              <Divider style={{ backgroundColor: colors.hairlineStrong }} />
-              <Row justify="space-between">
-                <SummaryStat label="Per month" value={formatMoney(totals.monthly)} />
-                <SummaryStat
-                  label="Lifetime interest"
-                  value={formatMoney(totals.interest, { compact: true })}
-                  color={colors.pending}
-                  align="flex-end"
-                />
-              </Row>
-            </Surface>
+              <LinearGradient
+                colors={['#A21D6B', '#6D1349']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{ padding: space.xl, gap: space.lg }}
+              >
+                <View style={{ gap: 2 }}>
+                  <Label color="rgba(255,255,255,0.75)">TOTAL OUTSTANDING</Label>
+                  <T variant="hero" color="#FFFFFF">
+                    {formatMoney(totals.outstanding)}
+                  </T>
+                </View>
+                <Divider style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
+                <Row justify="space-between">
+                  <View style={{ gap: 2 }}>
+                    <Label color="rgba(255,255,255,0.65)">PER MONTH</Label>
+                    <T variant="figureLarge" color="#FFFFFF">
+                      {formatMoney(totals.monthly, { compact: true })}
+                    </T>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                    <Label color="rgba(255,255,255,0.65)">LIFETIME INTEREST</Label>
+                    <T variant="figureLarge" color="#FFFFFF">
+                      {formatMoney(totals.interest, { compact: true })}
+                    </T>
+                  </View>
+                </Row>
+              </LinearGradient>
+            </View>
 
             <Label>{views.length} ACTIVE LOAN{views.length === 1 ? '' : 'S'}</Label>
 
@@ -205,21 +214,28 @@ const LOAN_KIND_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
 function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) {
   const { colors, radius, space } = useTheme();
   const [expanded, setExpanded] = useState(false);
+  // Which year of the schedule is on screen — the plan paginates by year so a
+  // long loan is a few taps rather than a giant scroll. Defaults to the year
+  // the next payment falls in, so you land on "where you are".
+  const [year, setYear] = useState(Math.floor(view.paidCount / 12) + 1);
   const { loan } = view;
 
-  // The lender's brand identifies the loan — you recognise "the HNB lease"
-  // by its bank, not by a generic debt colour. Interest figures below still
-  // use the theme's debt hue so the *numbers* keep one consistent meaning.
   const brand = resolveBrand({ bankId: loan.bankId, name: loan.name });
   const accent = colors.pending;
 
-  const schedule = expanded
+  const totalYears = Math.ceil(loan.termMonths / 12);
+  // Full schedule (built when expanded); we then slice to the selected year's
+  // 12-month window so only ~12 rows render at a time.
+  const fullSchedule = expanded
     ? buildSchedule({
         principalMinor: loan.principalMinor,
         annualRatePct: loan.annualRatePct,
         termMonths: loan.termMonths,
-      }).schedule.slice(0, 12)
+      }).schedule
     : [];
+  const schedule = fullSchedule.filter(
+    (row) => row.period > (year - 1) * 12 && row.period <= year * 12,
+  );
 
   return (
     <Surface padded={false} style={{ overflow: 'hidden' }}>
@@ -349,8 +365,8 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
           </Row>
         </View>
 
-        {/* Schedule toggle + delete share one footer row. */}
-        <Row>
+        {/* Two clear footer buttons: reveal the repayment plan, or delete. */}
+        <Row gap={space.sm}>
           <Pressable
             onPress={() => setExpanded(!expanded)}
             accessibilityRole="button"
@@ -360,41 +376,86 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 4,
-              paddingVertical: space.xs,
-              opacity: pressed ? 0.6 : 1,
+              gap: 6,
+              paddingVertical: 11,
+              borderRadius: radius.md,
+              backgroundColor: expanded ? colors.accent : colors.accentSoft,
+              opacity: pressed ? 0.85 : 1,
             })}
           >
             <Ionicons
-              name={expanded ? 'chevron-up' : 'calendar-outline'}
-              size={14}
-              color={colors.accent}
+              name={expanded ? 'chevron-up' : 'receipt-outline'}
+              size={16}
+              color={expanded ? '#FFFFFF' : colors.accent}
             />
-            <T variant="caption" tone="accent" style={{ fontWeight: '700' }}>
-              {expanded ? 'Hide schedule' : 'Payment schedule'}
+            <T
+              variant="small"
+              color={expanded ? '#FFFFFF' : colors.accent}
+              style={{ fontWeight: '700' }}
+            >
+              {expanded ? 'Hide plan' : 'Repayment plan'}
             </T>
           </Pressable>
-
-          <View style={{ width: 1, backgroundColor: colors.hairline, marginHorizontal: space.sm }} />
 
           <Pressable
             onPress={onDelete}
             accessibilityRole="button"
             accessibilityLabel={`Delete ${loan.name}`}
-            hitSlop={8}
             style={({ pressed }) => ({
-              paddingHorizontal: space.sm,
-              paddingVertical: space.xs,
-              opacity: pressed ? 0.5 : 1,
+              width: 46,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingVertical: 11,
+              borderRadius: radius.md,
+              backgroundColor: colors.dangerSoft,
+              opacity: pressed ? 0.7 : 1,
             })}
           >
-            <Ionicons name="trash-outline" size={16} color={colors.inkMuted} />
+            <Ionicons name="trash-outline" size={17} color={colors.danger} />
           </Pressable>
         </Row>
 
         {expanded ? (
           <View style={{ gap: 4 }}>
             <Divider />
+
+            {/* Year pagination — 1Y, 2Y… so a long loan is a few taps, not a
+                giant scroll. */}
+            {totalYears > 1 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 6, paddingVertical: 4 }}
+              >
+                {Array.from({ length: totalYears }, (_, i) => i + 1).map((y) => {
+                  const active = y === year;
+                  return (
+                    <Pressable
+                      key={y}
+                      onPress={() => setYear(y)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={`Year ${y}`}
+                      style={{
+                        paddingHorizontal: space.md,
+                        paddingVertical: 6,
+                        borderRadius: 999,
+                        backgroundColor: active ? brand.color : colors.surfaceSunken,
+                      }}
+                    >
+                      <T
+                        variant="caption"
+                        color={active ? brand.onColor : colors.inkSecondary}
+                        style={{ fontWeight: '700' }}
+                      >
+                        {y}Y
+                      </T>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            ) : null}
+
             <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>
               <T variant="caption" tone="muted" style={{ width: 28 }}>
                 #
@@ -409,33 +470,47 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
                 BALANCE
               </T>
             </Row>
-            {schedule.map((row, index) => (
-              <Row
-                key={row.period}
-                justify="space-between"
-                style={{
-                  paddingVertical: 5,
-                  paddingHorizontal: space.xs,
-                  borderRadius: radius.sm,
-                  backgroundColor: index % 2 === 0 ? colors.surfaceSunken : 'transparent',
-                }}
-              >
-                <T variant="caption" tone="secondary" style={{ width: 28, fontWeight: '700' }}>
-                  {row.period}
-                </T>
-                <T variant="caption" color={colors.completed} style={{ flex: 1, textAlign: 'right' }}>
-                  {formatMoney(row.principalMinor, { showCurrency: false, compact: true })}
-                </T>
-                <T variant="caption" color={accent} style={{ flex: 1, textAlign: 'right' }}>
-                  {formatMoney(row.interestMinor, { showCurrency: false, compact: true })}
-                </T>
-                <T variant="caption" tone="secondary" style={{ flex: 1.2, textAlign: 'right' }}>
-                  {formatMoney(row.balanceMinor, { showCurrency: false, compact: true })}
-                </T>
-              </Row>
-            ))}
+            {schedule.map((row) => {
+              const isPaid = row.period <= view.paidCount;
+              const isNext = row.period === view.paidCount + 1;
+              return (
+                <Row
+                  key={row.period}
+                  justify="space-between"
+                  style={{
+                    paddingVertical: 5,
+                    paddingHorizontal: space.xs,
+                    borderRadius: radius.sm,
+                    backgroundColor: isNext
+                      ? colors.accentSoft
+                      : isPaid
+                        ? 'transparent'
+                        : colors.surfaceSunken,
+                    opacity: isPaid ? 0.5 : 1,
+                  }}
+                >
+                  <View style={{ width: 34, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                    {isPaid ? (
+                      <Ionicons name="checkmark-circle" size={12} color={colors.completed} />
+                    ) : null}
+                    <T variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
+                      {row.period}
+                    </T>
+                  </View>
+                  <T variant="caption" color={colors.completed} style={{ flex: 1, textAlign: 'right' }}>
+                    {formatMoney(row.principalMinor, { showCurrency: false, compact: true })}
+                  </T>
+                  <T variant="caption" color={accent} style={{ flex: 1, textAlign: 'right' }}>
+                    {formatMoney(row.interestMinor, { showCurrency: false, compact: true })}
+                  </T>
+                  <T variant="caption" tone="secondary" style={{ flex: 1.2, textAlign: 'right' }}>
+                    {formatMoney(row.balanceMinor, { showCurrency: false, compact: true })}
+                  </T>
+                </Row>
+              );
+            })}
             <T variant="caption" tone="muted" style={{ textAlign: 'center', paddingTop: space.xs }}>
-              First 12 months
+              {view.paidCount} of {loan.termMonths} paid · {loan.termMonths - view.paidCount} left
             </T>
           </View>
         ) : null}

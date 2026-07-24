@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BankLogo } from '../../src/components/BankLogo';
+import { AccountField } from '../../src/components/AccountPicker';
 import { SheetHeader } from '../../src/components/forms';
 import { GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
@@ -202,7 +202,7 @@ export default function NewTransactionScreen() {
             onChangeText={setAmount}
             keyboardType="numeric"
             placeholder="0"
-            placeholderTextColor={colors.inkMuted}
+            placeholderTextColor={colors.inkFaint}
             style={{
               fontSize: 44,
               fontWeight: '800',
@@ -254,51 +254,21 @@ export default function NewTransactionScreen() {
             value={newName}
             onChangeText={setNewName}
             placeholder="e.g. Groceries"
-            placeholderTextColor={colors.inkMuted}
+            placeholderTextColor={colors.inkFaint}
             autoFocus
             style={inputStyle(colors, space)}
           />
         </Field>
       ) : null}
 
-      {/* 4 · Account it moved through. */}
-      <Field label="PAID FROM">
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-          {state.cards.map((card) => {
-            const brand = resolveBrand({
-              bankId: card.bankId,
-              bankName: card.bankName,
-              name: card.name,
-            });
-            const selected = effectiveCardId === card.id;
-            return (
-              <Pressable
-                key={card.id}
-                onPress={() => setCardId(card.id)}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                style={({ pressed }) => ({
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: space.sm,
-                  paddingVertical: 7,
-                  paddingHorizontal: space.md,
-                  borderRadius: 999,
-                  borderWidth: 1.5,
-                  borderColor: selected ? brand.color : colors.hairline,
-                  backgroundColor: selected ? `${brand.color}14` : colors.surface,
-                  opacity: pressed ? 0.75 : 1,
-                })}
-              >
-                <BankLogo brand={brand} size={20} />
-                <T variant="small" style={{ fontWeight: selected ? '700' : '500' }}>
-                  {card.name}
-                </T>
-              </Pressable>
-            );
-          })}
-        </View>
-      </Field>
+      {/* 4 · Account it moved through — the shared picker, so "paid from" looks
+          identical to "funded account" everywhere. */}
+      <AccountField
+        label="Paid from"
+        cards={state.cards}
+        selectedId={effectiveCardId}
+        onSelect={setCardId}
+      />
 
       {/* 5 · Status. */}
       <Field label="STATUS">
@@ -348,7 +318,7 @@ export default function NewTransactionScreen() {
           value={note}
           onChangeText={setNote}
           placeholder="What was this for?"
-          placeholderTextColor={colors.inkMuted}
+          placeholderTextColor={colors.inkFaint}
           multiline
           style={[inputStyle(colors, space), { minHeight: 56, textAlignVertical: 'top' }]}
         />

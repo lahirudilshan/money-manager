@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from './client';
 import {
   cards,
@@ -10,6 +10,7 @@ import {
   settings,
   subcategories,
   subcategoryStates,
+  transactions,
   type Card,
   type Category,
   type CategoryFundingStatus,
@@ -23,9 +24,11 @@ import {
   type NewIncome,
   type NewLoan,
   type NewSubcategory,
+  type NewTransaction,
   type Subcategory,
   type SubcategoryState,
   type SubcategoryStatus,
+  type Transaction,
 } from './schema';
 
 /**
@@ -161,6 +164,70 @@ export const subcategoryRepo = {
   },
   remove(id: string): void {
     db.delete(subcategories).where(eq(subcategories.id, id)).run();
+  },
+};
+
+/**
+ * Individual entries under an `unplanned` subcategory. Its per-period "actual"
+ * is the SUM of these rows, so there is no single planned amount to store.
+ */
+export const transactionRepo = {
+  /** All entries for one subcategory across every period, newest first. */
+  bySubcategory(subcategoryId: string): Transaction[] {
+    return db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.subcategoryId, subcategoryId))
+      .orderBy(desc(transactions.date))
+      .all();
+  },
+
+  /** Entries for one subcategory within a single period, newest first. */
+  bySubcategoryPeriod(subcategoryId: string, period: string): Transaction[] {
+    return db
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.subcategoryId, subcategoryId), eq(transactions.period, period)))
+      .orderBy(desc(transactions.date))
+      .all();
+  },
+
+  /**
+   * Total spent per unplanned subcategory for a period, computed in SQL. Used
+   * as the subcategory's effective "actual" so the two can never disagree.
+   */
+  totalsByPeriod(period: string): Map<string, number> {
+    const rows = db
+      .select({
+        subcategoryId: transactions.subcategoryId,
+        total: sql<number>`COALESCE(SUM(${transactions.amountMinor}), 0)`,
+      })
+      .from(transactions)
+      .where(eq(transactions.period, period))
+      .groupBy(transactions.subcategoryId)
+      .all();
+    return new Map(rows.map((row) => [row.subcategoryId, Number(row.total)]));
+  },
+
+  create(input: Omit<NewTransaction, 'id'> & { id?: string }): Transaction {
+    return db
+      .insert(transactions)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+  },
+
+  update(id: string, patch: Partial<NewTransaction>): Transaction | undefined {
+    return db
+      .update(transactions)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(transactions.id, id))
+      .returning()
+      .get();
+  },
+
+  remove(id: string): void {
+    db.delete(transactions).where(eq(transactions.id, id)).run();
   },
 };
 

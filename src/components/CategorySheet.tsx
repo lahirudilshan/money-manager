@@ -11,6 +11,7 @@ const FREQUENCIES = [
   { key: 'monthly', label: 'Monthly' },
   { key: 'one_time', label: 'One-time' },
   { key: 'yearly', label: 'Yearly' },
+  { key: 'unplanned', label: 'Unplanned' },
 ];
 
 type Frequency = SubcategoryFrequency;
@@ -136,14 +137,18 @@ export function CategorySheet({
                 placeholder={index === 0 ? categoryName.trim() || 'e.g. Rent' : 'e.g. Electricity'}
                 style={{ flex: 2 }}
               />
-              <Field
-                label="Planned amount"
-                value={row.amount}
-                onChangeText={(text) => updateRow(index, { amount: text })}
-                placeholder="0"
-                keyboardType="numeric"
-                style={{ flex: 1 }}
-              />
+              {/* Unplanned lines have no single planned amount — it's the sum
+                  of the entries you add later — so the field is hidden. */}
+              {row.frequency !== 'unplanned' ? (
+                <Field
+                  label="Planned amount"
+                  value={row.amount}
+                  onChangeText={(text) => updateRow(index, { amount: text })}
+                  placeholder="0"
+                  keyboardType="numeric"
+                  style={{ flex: 1 }}
+                />
+              ) : null}
             </Row>
             <PillSelect
               options={FREQUENCIES}

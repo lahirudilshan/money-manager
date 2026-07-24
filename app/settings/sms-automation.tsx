@@ -36,111 +36,60 @@ export default function SmsAutomationGuide() {
         }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Why + how it flows. */}
+        {/* Short why. */}
         <T variant="small" tone="secondary">
-          iOS won&apos;t let any app read your messages. Instead, a one-time{' '}
+          iOS won&apos;t let apps read your messages, so a quick{' '}
           <T variant="small" color={colors.ink} style={{ fontWeight: '700' }}>
-            Shortcuts automation
+            Shortcut
           </T>{' '}
-          watches for a bank SMS and hands it to Money Manager. After setup, a matching text quietly
-          opens a draft on your dashboard.
+          does it: when a bank SMS arrives, it opens the app and a draft appears for you to confirm.
+          Set it up once in the <B>Shortcuts</B> app.
         </T>
 
-        <Surface style={{ gap: space.md }}>
-          <FlowStep k="Trigger" v="Bank SMS arrives" />
-          <FlowStep k="Shortcut" v="Opens a link" />
-          <FlowStep k="Money Manager" v="Draft appears to confirm" last />
-        </Surface>
-
-        {/* Part A — trigger. */}
-        <PartHeader tag="Part A" title="Set the trigger" />
+        {/* The 6 essential steps, in order. */}
+        <PartHeader tag="Shortcuts app" title="Create the automation" />
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <Step n={1}>
-            Open the <Tap>Shortcuts</Tap> app, then tap the <Tap>Automation</Tap> tab at the bottom.
+            <Tap>Automation</Tap> tab → <Tap>＋</Tap> → <Tap>Create Personal Automation</Tap> →{' '}
+            <Tap>Message</Tap>.
           </Step>
-          <Step n={2} note="First automation? Tap the big “Create Personal Automation” button instead.">
-            Tap <Tap>＋</Tap> in the top-right corner.
+          <Step
+            n={2}
+            code="LKR"
+            codeNote="Every bank alert contains “LKR”, so this one word catches them all — the app ignores OTPs and promos."
+          >
+            Set <Tap>Message Contains</Tap> to this word, choose <Tap>Run Immediately</Tap>, then{' '}
+            <Tap>Next</Tap>.
           </Step>
-          <Step n={3}>
-            Scroll the trigger list and tap <Tap>Message</Tap>.
+          <Step n={3} result={<Result label="URL Encode" chip="Shortcut Input" />}>
+            Add the <Tap>URL Encode</Tap> action, and set its input to <Chip>Shortcut Input</Chip>.
           </Step>
           <Step
             n={4}
-            code="LKR"
-            codeNote="Every bank alert — NDB and HNB, purchases, ATM, transfers and loan payments — contains “LKR”, so this one word catches them all. Money Manager ignores OTPs, promos and balance texts, so a broad keyword is safe."
-          >
-            Leave <B>Sender</B> as <Tap>Any</Tap>. Tap <Tap>Message Contains</Tap>, type this exactly
-            (uppercase), then tap <Tap>Done</Tap>:
-          </Step>
-          <Step
-            n={5}
-            last
-            warn="If you pick “Run After Confirmation”, you'll tap a prompt every time. Run Immediately is what makes it hands-free."
-          >
-            Choose <Tap>Run Immediately</Tap>, then tap <Tap>Next</Tap>.
-          </Step>
-        </Surface>
-
-        {/* Part B — actions. */}
-        <PartHeader tag="Part B" title="Build the link — 3 actions in order" />
-        <T variant="caption" tone="muted" style={{ marginTop: -space.sm }}>
-          Search each action by name, add it, then wire it up exactly as shown.
-        </T>
-        <Surface padded={false} style={{ overflow: 'hidden' }}>
-          <Step n={6} result={<Result label="URL Encode" chip="Shortcut Input" />}>
-            <B>Encode the message.</B> Tap <Tap>Add Action</Tap>, search <Tap>URL Encode</Tap>, add
-            it. Tap its blue <Tap>Text</Tap> slot and choose the <Chip>Shortcut Input</Chip> variable.
-          </Step>
-          <Step
-            n={7}
             code="moneymanager://sms?text="
-            codeNote="Type this exactly — no space at the end. Then insert the encoded result right after the = so it ends with a chip:"
             result={<Result prefix="moneymanager://sms?text=" chip="URL Encoded Text" />}
-            warn="This is the step people miss — the chip is inserted, not typed. Tap the box, then tap the “URL Encoded Text” suggestion in the bar above the keyboard. If it's not there, type a space, tap it, pick URL Encoded Text, then delete the space."
+            warn="The chip is inserted, not typed — after the =, tap the “URL Encoded Text” suggestion above the keyboard."
           >
-            <B>Write the link.</B> Search the plain <Tap>Text</Tap> action and add it. Tap into its
-            box and type:
+            Add a <Tap>Text</Tap> action. Type the link below, then insert the encoded result right
+            after it:
           </Step>
-          <Step n={8} last result={<Result label="Open" chip="Text" />}>
-            <B>Open it.</B> Search <Tap>Open URLs</Tap> and add it. Tap its blue <Tap>URLs</Tap> slot
-            and choose the <Chip>Text</Chip> variable — the output of step 7.
+          <Step n={5} last result={<Result label="Open" chip="Text" />}>
+            Add <Tap>Open URLs</Tap> and set it to the <Chip>Text</Chip> from step 4. Tap{' '}
+            <Tap>Done</Tap>.
           </Step>
         </Surface>
 
+        {/* Test. */}
         <Surface style={{ gap: space.sm, borderColor: colors.accentSoft }}>
           <Row gap={space.sm}>
             <Ionicons name="checkmark-circle" size={20} color={colors.completed} />
-            <T variant="bodyStrong">Then tap Done — it&apos;s live</T>
+            <T variant="bodyStrong">Test it</T>
           </Row>
           <T variant="small" tone="secondary">
-            Test it: have someone text you a message containing <B>LKR</B>, e.g.{' '}
-            <T variant="small" tone="muted" style={{ fontStyle: 'italic' }}>
-              “LKR 500.00 debited from AC XXXX6796 at TEST SHOP”.
-            </T>{' '}
-            When it lands, Money Manager opens and a draft appears under “From your messages”.
+            Text yourself a message with <B>LKR</B> in it. Money Manager should open with a draft
+            under &ldquo;From your messages&rdquo;.
           </T>
         </Surface>
-
-        {/* Why one keyword is enough — proven against real bank formats. */}
-        <PartHeader tag="Why LKR" title="One word catches them all" />
-        <T variant="caption" tone="muted" style={{ marginTop: -space.sm }}>
-          Every alert format below contains “LKR”, so a single automation covers your whole bank.
-          The word that would otherwise seem obvious (“debited”) misses HNB purchases and ATM
-          withdrawals.
-        </T>
-        <Surface padded={false} style={{ overflow: 'hidden' }}>
-          <Keyword word="LKR …debited" desc="NDB purchases, transfers, utilities, loan payment" />
-          <Keyword word="LKR …credited" desc="Money coming in (incoming transfers, salary)" />
-          <Keyword word="PURCHASE …LKR" desc="HNB card purchases — no “debited” word" />
-          <Keyword word="Withdrawal …LKR" desc="HNB ATM cash — no “debited” word" last />
-        </Surface>
-
-        <T variant="caption" tone="muted" style={{ lineHeight: 18 }}>
-          These steps live in Apple&apos;s Shortcuts app — Money Manager can&apos;t create the
-          automation for you, because iOS keeps message access out of apps&apos; hands. The link the
-          Shortcut opens is one this app already handles; nothing about your bank or account is ever
-          exposed.
-        </T>
       </ScrollView>
     </View>
   );

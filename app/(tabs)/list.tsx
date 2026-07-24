@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
 import { DayPicker } from '../../src/components/DayPicker';
 import {
@@ -223,7 +224,7 @@ export default function ListScreen() {
             value={search}
             onChangeText={setSearch}
             placeholder="Search bills or categories"
-            placeholderTextColor={colors.inkMuted}
+            placeholderTextColor={colors.inkFaint}
             accessibilityLabel="Search bills"
             returnKeyType="search"
             style={{
@@ -534,40 +535,70 @@ function CategoryCard({
             const raw = view.rawSubcategories.find((s) => s.id === line.id);
             const paid = line.status === 'paid';
             const amount = line.actualMinor ?? line.plannedMinor;
+            // Unplanned lines are never "paid" as a whole — their spend is a
+            // running total of entries — so they get an indicator, not a
+            // tap-to-pay checkbox.
+            const unplanned = raw?.frequency === 'unplanned';
 
             return (
               <View key={line.id}>
                 {index === 0 ? null : <Divider style={{ marginLeft: space.lg }} />}
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  {/* Big checkbox tap target: pay / unpay. */}
-                  <Pressable
-                    onPress={() => state.cycleStatus(line.id)}
-                    accessibilityRole="checkbox"
-                    accessibilityState={{ checked: paid }}
-                    accessibilityLabel={`${line.name}, ${paid ? 'paid' : 'not paid'}`}
-                    hitSlop={6}
-                    style={({ pressed }) => ({
-                      paddingLeft: space.lg,
-                      paddingRight: space.sm,
-                      paddingVertical: space.md,
-                      opacity: pressed ? 0.6 : 1,
-                    })}
-                  >
+                  {unplanned ? (
+                    // Non-interactive marker: this line tracks many entries.
                     <View
                       style={{
-                        width: 26,
-                        height: 26,
-                        borderRadius: 13,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: paid ? colors.completed : 'transparent',
-                        borderWidth: paid ? 0 : 2,
-                        borderColor: colors.hairlineStrong,
+                        paddingLeft: space.lg,
+                        paddingRight: space.sm,
+                        paddingVertical: space.md,
                       }}
+                      accessible
+                      accessibilityLabel={`${line.name}, unplanned`}
                     >
-                      {paid ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+                      <View
+                        style={{
+                          width: 26,
+                          height: 26,
+                          borderRadius: 13,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: colors.accentSoft,
+                        }}
+                      >
+                        <Ionicons name="list" size={15} color={colors.accent} />
+                      </View>
                     </View>
-                  </Pressable>
+                  ) : (
+                    /* Big checkbox tap target: pay / unpay. */
+                    <Pressable
+                      onPress={() => state.cycleStatus(line.id)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: paid }}
+                      accessibilityLabel={`${line.name}, ${paid ? 'paid' : 'not paid'}`}
+                      hitSlop={6}
+                      style={({ pressed }) => ({
+                        paddingLeft: space.lg,
+                        paddingRight: space.sm,
+                        paddingVertical: space.md,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <View
+                        style={{
+                          width: 26,
+                          height: 26,
+                          borderRadius: 13,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: paid ? colors.completed : 'transparent',
+                          borderWidth: paid ? 0 : 2,
+                          borderColor: colors.hairlineStrong,
+                        }}
+                      >
+                        {paid ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
+                      </View>
+                    </Pressable>
+                  )}
 
                   {/* Row body: open the bill's detail. */}
                   <Pressable
@@ -588,21 +619,28 @@ function CategoryCard({
                       <T
                         variant="body"
                         numberOfLines={1}
-                        tone={paid ? 'muted' : 'ink'}
-                        style={paid ? { textDecorationLine: 'line-through' } : undefined}
+                        // Unplanned lines are never "settled", so they keep full
+                        // ink and no strike-through even when their sum > 0.
+                        tone={paid && !unplanned ? 'muted' : 'ink'}
+                        style={paid && !unplanned ? { textDecorationLine: 'line-through' } : undefined}
                       >
                         {line.name}
                       </T>
                       <T variant="caption" tone="muted">
-                        {isFlexibleDueDay(raw?.dueDay ?? category.dueDay)
-                          ? 'Flexible'
-                          : `Day ${raw?.dueDay ?? category.dueDay}`}
-                        {raw?.frequency && raw.frequency !== 'monthly'
-                          ? ` · ${raw.frequency.replace('_', '-')}`
-                          : ''}
+                        {unplanned
+                          ? 'Unplanned · tap to see entries'
+                          : `${
+                              isFlexibleDueDay(raw?.dueDay ?? category.dueDay)
+                                ? 'Flexible'
+                                : `Day ${raw?.dueDay ?? category.dueDay}`
+                            }${
+                              raw?.frequency && raw.frequency !== 'monthly'
+                                ? ` · ${raw.frequency.replace('_', '-')}`
+                                : ''
+                            }`}
                       </T>
                     </View>
-                    <T variant="figure" tone={paid ? 'muted' : 'ink'}>
+                    <T variant="figure" tone={paid && !unplanned ? 'muted' : 'ink'}>
                       {formatMoney(amount, { compact: true })}
                     </T>
                     <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
@@ -661,7 +699,10 @@ const FREQUENCIES = [
   { key: 'monthly', label: 'Monthly' },
   { key: 'one_time', label: 'One-time' },
   { key: 'yearly', label: 'Yearly' },
+  { key: 'unplanned', label: 'Unplanned' },
 ] as const;
+
+type BillFrequency = 'monthly' | 'one_time' | 'yearly' | 'unplanned';
 
 /**
  * Bottom-sheet for adding a bill to a known parent category.
@@ -685,7 +726,7 @@ function AddSubcategorySheet({
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDay, setDueDay] = useState(1);
-  const [frequency, setFrequency] = useState<'monthly' | 'one_time' | 'yearly'>('monthly');
+  const [frequency, setFrequency] = useState<BillFrequency>('monthly');
   // null means "use the category's account"; a value overrides it for this bill.
   const [cardId, setCardId] = useState<string | null>(null);
   const [plan, setPlan] = useState<SavingPlanDraft>(emptySavingPlanDraft);
@@ -702,11 +743,14 @@ function AddSubcategorySheet({
     }
   }, [openFor, category?.dueDay]);
 
-  const planPatch = toSavingPlanPatch(plan);
-  // With a saving plan the monthly set-aside *is* the planned amount, so the
-  // amount field is derived rather than typed.
-  const plannedMinor = planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
-  const canAdd = Boolean(name.trim()) && (!plan.enabled || planPatch !== null);
+  const unplanned = frequency === 'unplanned';
+  // Saving plans belong only to yearly bills (same rule as everywhere else).
+  const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
+  // With a saving plan the monthly set-aside *is* the planned amount; an
+  // unplanned bill has no single planned amount (it's the sum of its entries).
+  const plannedMinor = unplanned ? 0 : planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
+  const canAdd =
+    Boolean(name.trim()) && (frequency !== 'yearly' || !plan.enabled || planPatch !== null);
 
   function handleAdd() {
     const trimmed = name.trim();
@@ -809,15 +853,17 @@ function AddSubcategorySheet({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {/* Amount hero. With a saving plan the monthly figure is derived
-                  from the plan, so this shows that instead of a typed field. */}
+              {/* Amount hero — hidden for unplanned bills, which have no single
+                  planned amount (their total is the sum of their entries).
+                  With a saving plan the monthly figure is derived from the plan. */}
+              {!unplanned ? (
               <View style={{ alignItems: 'center', gap: 4 }}>
-                <Label>{plan.enabled ? 'MONTHLY SET-ASIDE' : 'AMOUNT'}</Label>
+                <Label>{plan.enabled && frequency === 'yearly' ? 'MONTHLY SET-ASIDE' : 'AMOUNT'}</Label>
                 <Row gap={space.xs} align="center">
                   <T variant="title" tone="muted">
                     {state.currency}
                   </T>
-                  {plan.enabled ? (
+                  {plan.enabled && frequency === 'yearly' ? (
                     <T
                       style={{
                         fontSize: 42,
@@ -834,7 +880,7 @@ function AddSubcategorySheet({
                       onChangeText={setAmount}
                       keyboardType="numeric"
                       placeholder="0"
-                      placeholderTextColor={colors.inkMuted}
+                      placeholderTextColor={colors.inkFaint}
                       autoFocus
                       accessibilityLabel="Amount"
                       style={{
@@ -850,6 +896,7 @@ function AddSubcategorySheet({
                   )}
                 </Row>
               </View>
+              ) : null}
 
               <Field
                 label="What is it?"
@@ -858,65 +905,19 @@ function AddSubcategorySheet({
                 placeholder="e.g. Rent, Electricity, Netflix"
               />
 
-              {/* Paid from — override the category's account for this bill.
-                  Compact wrapping chips keep this to one or two rows. */}
+              {/* Paid from — override the category's account for this bill,
+                  using the shared account picker. Null = the category default. */}
               {state.cards.length > 0 ? (
-                <View style={{ gap: space.sm }}>
-                  <Label>PAID FROM</Label>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-                    {state.cards.map((c) => {
-                      const brand = resolveBrand({
-                        bankId: c.bankId,
-                        bankName: c.bankName,
-                        name: c.name,
-                      });
-                      const selected = effectiveCardId === c.id;
-                      const isDefault = category?.cardId === c.id;
-                      return (
-                        <Pressable
-                          key={c.id}
-                          onPress={() => setCardId(selected ? null : c.id)}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected }}
-                          accessibilityLabel={`${c.name}${isDefault ? ', category default' : ''}`}
-                          style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 7,
-                            paddingVertical: 6,
-                            paddingLeft: 6,
-                            paddingRight: space.md,
-                            borderRadius: radius.pill,
-                            borderWidth: 1.5,
-                            borderColor: selected ? brand.color : colors.hairline,
-                            backgroundColor: selected ? `${brand.color}12` : colors.surface,
-                            opacity: pressed ? 0.8 : 1,
-                          })}
-                        >
-                          <BankLogo brand={brand} size={24} />
-                          <T
-                            variant="small"
-                            numberOfLines={1}
-                            style={{ fontWeight: selected ? '700' : '500' }}
-                          >
-                            {c.name}
-                          </T>
-                          {isDefault ? (
-                            <View
-                              style={{
-                                width: 5,
-                                height: 5,
-                                borderRadius: 3,
-                                backgroundColor: selected ? brand.color : colors.inkMuted,
-                              }}
-                            />
-                          ) : null}
-                        </Pressable>
-                      );
-                    })}
-                  </View>
+                <View style={{ gap: 4 }}>
+                  <AccountField
+                    label="Paid from"
+                    cards={state.cards}
+                    selectedId={cardId}
+                    onSelect={setCardId}
+                    allowNone
+                  />
                   <T variant="caption" tone="muted">
-                    Uses the category’s account unless you pick another.
+                    Leave as the category’s account unless this bill is paid from another.
                   </T>
                 </View>
               ) : null}
@@ -957,11 +958,14 @@ function AddSubcategorySheet({
                 </Row>
               </View>
 
-              {/* Payment day. */}
-              <DayPicker value={dueDay} onChange={setDueDay} />
+              {/* Payment day — not applicable to unplanned bills. */}
+              {!unplanned ? <DayPicker value={dueDay} onChange={setDueDay} /> : null}
 
-              {/* Saving plan — for a big amount due later, collected monthly. */}
-              <SavingPlanFields draft={plan} onChange={setPlan} />
+              {/* Saving plan — yearly bills only (a big amount due later,
+                  collected monthly), matching the rest of the app. */}
+              {frequency === 'yearly' ? (
+                <SavingPlanFields draft={plan} onChange={setPlan} />
+              ) : null}
             </ScrollView>
 
             <PinnedFooter>

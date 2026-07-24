@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, SheetHeader } from '../../src/components/forms';
+import { Field, ModalScreen } from '../../src/components/forms';
 import { GradientButton, PinnedFooter, T } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { parseSms } from '../../src/core/smsParser';
@@ -41,15 +41,7 @@ export default function PasteSmsScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      {/* Header is a fixed sibling above the ScrollView; the footer lifts itself
-          by the keyboard height (followsKeyboard) rather than relying on a
-          KeyboardAvoidingView, which does not reach the window bottom in a
-          modal and left the button hidden behind the keyboard. */}
-      <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
-        <SheetHeader title="Paste a message" onClose={() => router.back()} />
-      </View>
-
+    <ModalScreen title="Paste a message" onClose={() => router.back()}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{
@@ -124,6 +116,6 @@ export default function PasteSmsScreen() {
       <PinnedFooter followsKeyboard>
         <GradientButton label="Add draft" icon="add" onPress={onAdd} />
       </PinnedFooter>
-    </View>
+    </ModalScreen>
   );
 }

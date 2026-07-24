@@ -8,7 +8,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, SheetHeader } from '../../src/components/forms';
+import { Field, ModalScreen, SheetHeader } from '../../src/components/forms';
 import { Button, GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
 import { HINT_META } from '../../src/core/smsCategoryHints';
@@ -115,12 +115,7 @@ export default function SmsDraftModal() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      {/* Fixed header sibling; the footer lifts by the keyboard height itself. */}
-      <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
-        <SheetHeader title="Review message" onClose={() => router.back()} />
-      </View>
-
+    <ModalScreen title="Review message" onClose={() => router.back()}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{
@@ -203,7 +198,7 @@ export default function SmsDraftModal() {
               value={query}
               onChangeText={setQuery}
               placeholder="Search bills…"
-              placeholderTextColor={colors.inkMuted}
+              placeholderTextColor={colors.inkFaint}
               accessibilityLabel="Search bills"
               style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
             />
@@ -276,6 +271,6 @@ export default function SmsDraftModal() {
       <PinnedFooter followsKeyboard>
         <GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />
       </PinnedFooter>
-    </View>
+    </ModalScreen>
   );
 }

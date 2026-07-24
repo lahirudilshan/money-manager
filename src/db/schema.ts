@@ -41,6 +41,20 @@ export const cards = sqliteTable('cards', {
   last4: text('last4'),
   color: text('color').notNull().default('#6366F1'),
   icon: text('icon').notNull().default('card-outline'),
+  /**
+   * Whether this entry is a payment *card* (shows number/CVV/expiry) versus a
+   * plain *account* (shows account number/branch/code). Both live in this one
+   * table; this flag switches which detail fields the UI collects and shows.
+   */
+  isCard: integer('is_card', { mode: 'boolean' }).notNull().default(false),
+  /** Card-only details. Sensitive — stored locally only, shown in the detail modal. */
+  cardNumber: text('card_number'),
+  cvv: text('cvv'),
+  expiry: text('expiry'),
+  /** Account-only details. */
+  accountNumber: text('account_number'),
+  branch: text('branch'),
+  bankCode: text('bank_code'),
   /** Optional target for savings/goal cards. */
   targetMinor: integer('target_minor'),
   /** Balance present before the app started tracking. */
@@ -104,8 +118,15 @@ export const subcategories = sqliteTable(
     color: text('color').notNull().default('#6366F1'),
     icon: text('icon').notNull().default('pricetag-outline'),
     plannedMinor: integer('planned_minor').notNull().default(0),
-    /** How often this line recurs. */
-    frequency: text('frequency', { enum: ['monthly', 'one_time', 'yearly'] })
+    /**
+     * How often this line recurs.
+     *
+     * `unplanned` is special: the line has no single planned amount paid once a
+     * period. Instead it holds many individual transactions (see the
+     * `transactions` table), its "actual" is the SUM of those, and it is never
+     * marked paid as a whole — the money is tracked entry by entry.
+     */
+    frequency: text('frequency', { enum: ['monthly', 'one_time', 'yearly', 'unplanned'] })
       .notNull()
       .default('monthly'),
     /** Overrides the parent category's `dueDay` when set. */
@@ -137,6 +158,40 @@ export const subcategories = sqliteTable(
     ...timestamps,
   },
   (t) => [index('subcategories_category_idx').on(t.categoryId)],
+);
+
+/**
+ * Individual money movements under an `unplanned` subcategory.
+ *
+ * A normal (monthly/yearly/one_time) subcategory has a single planned amount
+ * paid once a period. An *unplanned* one (e.g. "Groceries", "Eating out") has
+ * no fixed amount — it accumulates many small entries. Each row here is one
+ * such entry; the subcategory's effective spend for a period is the SUM of its
+ * transactions in that period. This is also where a confirmed SMS draft can be
+ * logged when it maps to an unplanned line.
+ */
+export const transactions = sqliteTable(
+  'transactions',
+  {
+    id: text('id').primaryKey(),
+    subcategoryId: text('subcategory_id')
+      .notNull()
+      .references(() => subcategories.id, { onDelete: 'cascade' }),
+    /** "YYYY-MM" the entry counts toward, derived from `date` on write. */
+    period: text('period').notNull(),
+    /** What it was — merchant/description. */
+    name: text('name').notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
+    note: text('note'),
+    /** Local file URI of an attached receipt/photo. */
+    imageUri: text('image_uri'),
+    ...timestamps,
+  },
+  (t) => [
+    index('transactions_sub_idx').on(t.subcategoryId),
+    index('transactions_lookup_idx').on(t.subcategoryId, t.period),
+  ],
 );
 
 /**
@@ -266,6 +321,13 @@ export const loans = sqliteTable('loans', {
   annualRatePct: real('annual_rate_pct').notNull(),
   termMonths: integer('term_months').notNull(),
   startDate: integer('start_date', { mode: 'timestamp_ms' }).notNull(),
+  /**
+   * Which installment number the borrower has *already reached* — 1 means the
+   * loan is brand new, 6 means five have been paid and the 6th is next. Lets
+   * the schedule show progress (paid vs. remaining) across the full term
+   * instead of assuming every loan starts today. Defaults to 1.
+   */
+  paidInstallments: integer('paid_installments').notNull().default(0),
   color: text('color').notNull().default('#F97316'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
   ...timestamps,
@@ -286,6 +348,8 @@ export type Category = typeof categories.$inferSelect;
 export type NewCategory = typeof categories.$inferInsert;
 export type Subcategory = typeof subcategories.$inferSelect;
 export type NewSubcategory = typeof subcategories.$inferInsert;
+export type Transaction = typeof transactions.$inferSelect;
+export type NewTransaction = typeof transactions.$inferInsert;
 export type SubcategoryState = typeof subcategoryStates.$inferSelect;
 export type NewSubcategoryState = typeof subcategoryStates.$inferInsert;
 export type CategoryState = typeof categoryStates.$inferSelect;
@@ -303,7 +367,20 @@ export const SUBCATEGORY_FREQUENCIES: SubcategoryFrequency[] = [
   'monthly',
   'one_time',
   'yearly',
+  'unplanned',
 ];
+
+/** True for frequencies that support the "save up for this" saving plan. Per
+ * product rule, only yearly lines can save up toward a future due date. */
+export function supportsSavingPlan(frequency: SubcategoryFrequency): boolean {
+  return frequency === 'yearly';
+}
+
+/** True for the unplanned frequency, which holds many child transactions
+ * rather than one planned amount and is never marked paid as a whole. */
+export function isUnplanned(frequency: SubcategoryFrequency): boolean {
+  return frequency === 'unplanned';
+}
 
 /**
  * The two states a bill (subcategory) moves through in a month, as seen above

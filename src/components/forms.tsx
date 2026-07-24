@@ -32,7 +32,7 @@ export function Field({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={colors.inkMuted}
+        placeholderTextColor={colors.inkFaint}
         keyboardType={keyboardType}
         autoFocus={autoFocus}
         multiline={multiline}
@@ -45,7 +45,10 @@ export function Field({
           paddingHorizontal: space.md,
           paddingVertical: 13,
           fontSize: 16,
-          fontWeight: '500' as const,
+          fontWeight: '400' as const,
+          // Explicit zero so placeholder + typed text read as plain body text,
+          // never picking up a wide tracking from a parent/label style.
+          letterSpacing: 0,
           color: colors.ink,
           minHeight: multiline ? 88 : undefined,
           textAlignVertical: multiline ? 'top' : 'center',
@@ -168,25 +171,73 @@ export function ColorPicker({
   );
 }
 
+/**
+ * The one modal header used across the whole app — a title and a close button
+ * with identical structure, spacing and close target everywhere. The close
+ * control is a 40pt circular tap target pulled to the edge, and there is a
+ * consistent gap below the row. Do NOT hand-roll modal headers; use this (or
+ * `ModalScreen`, which wraps it with the correct top spacing).
+ */
 export function SheetHeader({ title, onClose }: { title: string; onClose: () => void }) {
-  const { colors } = useTheme();
+  const { colors, space } = useTheme();
   return (
     <View
       style={{
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        // Breathing room below every header, so content never crowds the title.
+        marginBottom: space.md,
+        // Pull the close button's padding to the edge without shifting the row.
+        marginRight: -space.xs,
       }}
     >
       <T variant="title">{title}</T>
       <Pressable
         onPress={onClose}
-        hitSlop={12}
         accessibilityRole="button"
         accessibilityLabel="Close"
+        style={({ pressed }) => ({
+          width: 40,
+          height: 40,
+          borderRadius: 20,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+        })}
       >
-        <Ionicons name="close" size={25} color={colors.inkSecondary} />
+        <Ionicons name="close" size={24} color={colors.inkSecondary} />
       </Pressable>
+    </View>
+  );
+}
+
+/**
+ * The standard chrome for a route-level modal screen (expo-router
+ * `presentation: 'modal'`): a correctly-spaced header row over a flex body.
+ *
+ * iOS presents these as a card already inset from the top, so adding the full
+ * safe-area top inset double-spaces the header — the "unwanted gap" that made
+ * modals look inconsistent. This applies only a small fixed top padding, so
+ * every modal's title sits the same distance from the sheet's edge. Wrap a
+ * modal screen's content in this and pass the title; children fill the rest.
+ */
+export function ModalScreen({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const { colors, space } = useTheme();
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      <View style={{ paddingTop: space.lg, paddingHorizontal: space.lg }}>
+        <SheetHeader title={title} onClose={onClose} />
+      </View>
+      {children}
     </View>
   );
 }

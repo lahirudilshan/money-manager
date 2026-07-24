@@ -18,7 +18,7 @@ import {
 } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { formatPeriod, shiftPeriod } from '../../src/core/planning';
-import { resolveBrand } from '../../src/data/banks';
+import { accountLabel, resolveBrand } from '../../src/data/banks';
 import {
   selectAccountTransfers,
   selectBoardTotals,
@@ -74,53 +74,65 @@ export default function DashboardScreen() {
   })();
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
-      contentContainerStyle={{
-        paddingTop: insets.top + space.md,
-        paddingBottom: tabClearance,
-        paddingHorizontal: space.lg,
-        gap: space.lg,
-      }}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Greeting + month switcher — everything below is scoped to this period. */}
-      <Row justify="space-between" align="center">
-        <View style={{ gap: 1 }}>
-          <T variant="caption" tone="muted">
-            {greeting}
-          </T>
-          <T variant="title">Dashboard</T>
-        </View>
-        <Row
-          gap={2}
-          style={{
-            backgroundColor: colors.surface,
-            borderRadius: 999,
-            borderWidth: 1,
-            borderColor: colors.hairline,
-            padding: 3,
-          }}
-        >
-          <PeriodStep
-            icon="chevron-back"
-            label="Previous month"
-            onPress={() => state.setPeriod(shiftPeriod(state.period, -1))}
-          />
-          <View style={{ minWidth: 116, alignItems: 'center', justifyContent: 'center' }}>
-            <T variant="bodyStrong" numberOfLines={1}>
-              {formatPeriod(state.period)}
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      {/* Fixed header — greeting + month switcher stay put while content scrolls. */}
+      <View
+        style={{
+          paddingTop: insets.top + space.md,
+          paddingHorizontal: space.lg,
+          paddingBottom: space.sm,
+          backgroundColor: colors.canvas,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.hairline,
+        }}
+      >
+        <Row justify="space-between" align="center">
+          <View style={{ gap: 1 }}>
+            <T variant="caption" tone="muted">
+              {greeting}
             </T>
+            <T variant="title">Dashboard</T>
           </View>
-          <PeriodStep
-            icon="chevron-forward"
-            label="Next month"
-            onPress={() => state.setPeriod(shiftPeriod(state.period, 1))}
-          />
+          <Row
+            gap={2}
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: colors.hairline,
+              padding: 3,
+            }}
+          >
+            <PeriodStep
+              icon="chevron-back"
+              label="Previous month"
+              onPress={() => state.setPeriod(shiftPeriod(state.period, -1))}
+            />
+            <View style={{ minWidth: 108, alignItems: 'center', justifyContent: 'center' }}>
+              <T variant="bodyStrong" numberOfLines={1}>
+                {formatPeriod(state.period)}
+              </T>
+            </View>
+            <PeriodStep
+              icon="chevron-forward"
+              label="Next month"
+              onPress={() => state.setPeriod(shiftPeriod(state.period, 1))}
+            />
+          </Row>
         </Row>
-      </Row>
+      </View>
 
-      {/* Headline: what's left after the whole plan. */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: space.md,
+          paddingBottom: tabClearance,
+          paddingHorizontal: space.lg,
+          gap: space.lg,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+      {/* Headline: the month's whole shape — income in, money out, what's left. */}
       <GradientCard>
         <View style={{ gap: space.lg }}>
           <View style={{ gap: 2 }}>
@@ -130,13 +142,14 @@ export default function DashboardScreen() {
             </T>
           </View>
 
-          <Row gap={space.xxl}>
-            <HeroStat label="INCOME" value={formatMoney(income, { compact: true })} />
-            <HeroStat label="PLANNED" value={formatMoney(totals.plannedMinor, { compact: true })} />
-            <HeroStat
-              label="TRANSFERRED"
-              value={formatMoney(totals.fundedMinor, { compact: true })}
-            />
+          {/* Four headline figures: money in, planned out, actually spent, debt.
+              Currency prefix is dropped here (it's LKR throughout) so all four
+              compact values fit without truncating. */}
+          <Row justify="space-between">
+            <HeroStat label="INCOME" value={formatMoney(income, { compact: true, showCurrency: false })} />
+            <HeroStat label="PLANNED" value={formatMoney(totals.plannedMinor, { compact: true, showCurrency: false })} />
+            <HeroStat label="SPENT" value={formatMoney(totals.paidMinor, { compact: true, showCurrency: false })} />
+            <HeroStat label="DEBT" value={formatMoney(loanOutstanding, { compact: true, showCurrency: false })} />
           </Row>
 
           <View style={{ gap: space.sm }}>
@@ -165,13 +178,13 @@ export default function DashboardScreen() {
             <Row gap={space.lg}>
               <LegendDot shade={1} label={`Loans ${ratios.loanPct.toFixed(0)}%`} />
               <LegendDot shade={0.65} label={`Living ${ratios.livingPct.toFixed(0)}%`} />
-              <LegendDot shade={0.4} label={`Free ${ratios.freePct.toFixed(0)}%`} />
+              <LegendDot shade={0.4} label={`Saving ${ratios.freePct.toFixed(0)}%`} />
             </Row>
           </View>
         </View>
       </GradientCard>
 
-      {/* Quick actions — the things you reach for most, one tap from home. */}
+      {/* Quick actions — unique shortcuts NOT reachable from the bottom tabs. */}
       <Row gap={space.sm}>
         <QuickAction
           icon="add-circle-outline"
@@ -179,19 +192,19 @@ export default function DashboardScreen() {
           onPress={() => router.push('/transaction/new')}
         />
         <QuickAction
-          icon="albums-outline"
-          label="Category"
-          onPress={() => router.push('/category/new')}
-        />
-        <QuickAction
           icon="chatbox-ellipses-outline"
           label="Paste SMS"
           onPress={() => router.push('/sms/new')}
         />
         <QuickAction
-          icon="wallet-outline"
-          label="Accounts"
-          onPress={() => router.push('/(tabs)/cards')}
+          icon="flash-outline"
+          label="Auto-detect"
+          onPress={() => router.push('/settings/sms-automation')}
+        />
+        <QuickAction
+          icon="albums-outline"
+          label="Category"
+          onPress={() => router.push('/category/new')}
         />
       </Row>
 
@@ -324,20 +337,23 @@ export default function DashboardScreen() {
                   ? (account.movedMinor / account.plannedMinor) * 100
                   : 100;
 
+              const label = accountLabel(account.card);
               return (
                 <Surface
                   key={account.card.id}
-                  onPress={() => router.push('/(tabs)/cards')}
+                  onPress={() => router.push(`/account/${account.card.id}`)}
                   style={{ gap: space.md }}
                 >
                   <Row gap={space.md}>
                     <BankLogo brand={brand} size={42} />
                     <View style={{ flex: 1 }}>
                       <T variant="bodyStrong" numberOfLines={1}>
-                        {account.card.name}
+                        {label.primary}
                       </T>
                       <T variant="caption" tone="muted" numberOfLines={1}>
-                        {account.categoryNames.slice(0, 3).join(' · ') || 'No categories'}
+                        {label.secondary ??
+                          account.categoryNames.slice(0, 3).join(' · ') ??
+                          'No categories'}
                       </T>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
@@ -424,7 +440,8 @@ export default function DashboardScreen() {
           />
         </Surface>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -460,9 +477,9 @@ function PeriodStep({
 
 function HeroStat({ label, value }: { label: string; value: string }) {
   return (
-    <View style={{ gap: 2 }}>
+    <View style={{ gap: 2, flex: 1 }}>
       <Label color="rgba(255,255,255,0.65)">{label}</Label>
-      <T variant="figureLarge" color="#FFFFFF">
+      <T variant="figure" color="#FFFFFF" numberOfLines={1}>
         {value}
       </T>
     </View>
