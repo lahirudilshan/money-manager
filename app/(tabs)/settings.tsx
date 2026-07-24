@@ -177,6 +177,17 @@ export default function SettingsScreen() {
           />
         </Section>
 
+        {/* Automation — the SMS → draft pipeline setup guide. */}
+        <Section title="AUTOMATION">
+          <SettingRow
+            icon="chatbox-ellipses-outline"
+            color={colors.accent}
+            title="Auto-detect transactions"
+            subtitle="Turn incoming bank SMS into drafts"
+            onPress={() => router.push('/settings/sms-automation')}
+          />
+        </Section>
+
         {/* Preferences. */}
         <Section title="PREFERENCES">
           <SettingRow

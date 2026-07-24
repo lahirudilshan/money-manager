@@ -23,6 +23,9 @@ import {
   type SubcategoryStatus,
 } from '../core/planning';
 import { groupColors } from '../theme';
+import { parseSms } from '../core/smsParser';
+import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
+import { createId } from '../db/repositories';
 import { initialiseDatabase, resetDatabase } from '../db/client';
 import {
   cardRepo,
@@ -78,6 +81,13 @@ export interface AppState {
   /** 'system' follows the OS; 'light'/'dark' force a mode. */
   themeMode: 'system' | 'light' | 'dark';
   hapticsEnabled: boolean;
+
+  /**
+   * Parsed-from-SMS transactions awaiting the user's Yes/Edit/No. Held in
+   * memory only — a draft is either confirmed into the board or dismissed, so
+   * there is nothing to persist. Newest first.
+   */
+  smsDrafts: SmsDraft[];
 
   initialise: () => Promise<void>;
   refresh: () => void;
@@ -148,6 +158,27 @@ export interface AppState {
 
   addLoan: (input: Omit<NewLoan, 'id'>) => void;
   deleteLoan: (id: string) => void;
+
+  /**
+   * Parse an incoming SMS (from a deep link, share sheet, or paste) into a
+   * draft transaction and queue it for confirmation. Returns the draft id, or
+   * null when the text was not a recognisable money movement. Duplicate raw
+   * texts already queued are ignored so re-opening the same deep link does not
+   * stack identical drafts.
+   */
+  ingestSmsText: (text: string) => string | null;
+  /**
+   * Confirm a queued draft: log it against the chosen bill for the current
+   * period (reusing logTransaction), then remove it from the queue. Overrides
+   * let the confirm card apply the user's edits before logging. A no-op if the
+   * draft has no target subcategory.
+   */
+  confirmDraft: (
+    draftId: string,
+    overrides?: { subcategoryId?: string; amountMinor?: Minor; note?: string | null },
+  ) => void;
+  /** Discard a queued draft without logging it. */
+  dismissDraft: (draftId: string) => void;
 }
 
 /** Round-robin tint so every new item stays visually distinct with zero picker. */
@@ -171,6 +202,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   usdRate: 300,
   themeMode: 'system',
   hapticsEnabled: true,
+  smsDrafts: [],
 
   async initialise() {
     initialiseDatabase();
@@ -412,6 +444,53 @@ export const useAppStore = create<AppState>((set, get) => ({
     loanRepo.remove(id);
     get().refresh();
   },
+
+  ingestSmsText(text) {
+    const parsed = parseSms(text);
+    if (!parsed) return null;
+
+    const { smsDrafts, subcategories, categories, cards } = get();
+
+    // Ignore an identical raw text that is already waiting — re-firing the same
+    // deep link (iOS Shortcuts can deliver a message more than once) should not
+    // pile up duplicate drafts for the user to dismiss.
+    if (smsDrafts.some((draft) => draft.parsed.raw === parsed.raw)) return null;
+
+    const draft = reconcileSms(
+      parsed,
+      { subcategories, categories, cards },
+      createId(),
+    );
+
+    set({ smsDrafts: [draft, ...smsDrafts] });
+    return draft.id;
+  },
+
+  confirmDraft(draftId, overrides) {
+    const { smsDrafts, period } = get();
+    const draft = smsDrafts.find((d) => d.id === draftId);
+    if (!draft) return;
+
+    const subcategoryId = overrides?.subcategoryId ?? draft.subcategoryId;
+    // Without a target bill there is nothing to mark paid; the confirm card
+    // must supply one before this is reachable.
+    if (!subcategoryId) return;
+
+    const amountMinor = overrides?.amountMinor ?? draft.amountMinor;
+
+    stateRepo.logTransaction(subcategoryId, period, {
+      status: 'paid',
+      actualMinor: amountMinor,
+      note: overrides?.note ?? `From SMS: ${draft.parsed.raw}`,
+    });
+
+    set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
+    get().refresh();
+  },
+
+  dismissDraft(draftId) {
+    set({ smsDrafts: get().smsDrafts.filter((d) => d.id !== draftId) });
+  },
 }));
 
 // ------------------------------------------------------------- selectors
@@ -462,6 +541,25 @@ export function selectCategoryViews(state: AppState): CategoryView[] {
 
 export function selectCategoryView(state: AppState, categoryId: string): CategoryView | undefined {
   return selectCategoryViews(state).find((view) => view.category.id === categoryId);
+}
+
+/**
+ * Subcategories a draft can be logged against, restricted to the matching type
+ * (a credit → income lines, a debit/bill → expense lines) so the picker never
+ * offers a nonsensical target. Ordered as the reconciler ranked them.
+ */
+export function selectDraftTargets(state: AppState, draftId: string): Subcategory[] {
+  const draft = state.smsDrafts.find((d) => d.id === draftId);
+  if (!draft) return [];
+  const wantType = draft.parsed.direction === 'credit' ? 'income' : 'expense';
+  return state.subcategories.filter((s) => s.type === wantType);
+}
+
+/** The category name a subcategory belongs to — for draft picker labels. */
+export function categoryNameOf(state: AppState, subcategoryId: string): string {
+  const sub = state.subcategories.find((s) => s.id === subcategoryId);
+  const category = sub && state.categories.find((c) => c.id === sub.categoryId);
+  return category?.name ?? '';
 }
 
 export function selectBoardTotals(state: AppState): BoardTotals {

@@ -1,0 +1,104 @@
+import { describe, expect, it } from 'vitest';
+import samplesFile from '../../data/sms-samples.json';
+import { parseSms } from '../smsParser';
+
+/**
+ * The parser is validated against src/data/sms-samples.json — the same file the
+ * user edits with real messages. Each sample declares either the fields it must
+ * extract or `expect: null` for a message that must be ignored (OTP, promo,
+ * balance-only). Replacing a sample's `raw` with a real SMS and running the
+ * suite immediately shows whether the parser still handles it.
+ */
+
+interface SampleExpect {
+  direction: string;
+  kind: string;
+  amountMinor: number;
+  merchant: string;
+  account: string;
+  date: string | null;
+}
+
+interface Sample {
+  id: string;
+  source: string;
+  raw: string;
+  expect: SampleExpect | null;
+}
+
+const samples = samplesFile.samples as Sample[];
+
+describe('parseSms over sms-samples.json', () => {
+  for (const sample of samples) {
+    it(sample.id, () => {
+      const result = parseSms(sample.raw);
+
+      if (sample.expect === null) {
+        expect(result).toBeNull();
+        return;
+      }
+
+      expect(result).not.toBeNull();
+      expect(result!.direction).toBe(sample.expect.direction);
+      expect(result!.kind).toBe(sample.expect.kind);
+      expect(result!.amountMinor).toBe(sample.expect.amountMinor);
+      expect(result!.merchant).toBe(sample.expect.merchant);
+      expect(result!.account).toBe(sample.expect.account);
+      expect(result!.date).toBe(sample.expect.date);
+    });
+  }
+});
+
+describe('parseSms robustness', () => {
+  it('returns null for empty or non-string input', () => {
+    expect(parseSms('')).toBeNull();
+    expect(parseSms('   ')).toBeNull();
+    // @ts-expect-error deliberately wrong type
+    expect(parseSms(null)).toBeNull();
+  });
+
+  it('never reads the trailing available balance as the amount', () => {
+    const result = parseSms(
+      'Your Card ending 1234 was debited LKR 500.00 at SHOP on 01/07/2026. Avl Bal LKR 99,999.00',
+    );
+    expect(result?.amountMinor).toBe(50_000);
+  });
+
+  it('keeps amounts as positive minor units regardless of direction', () => {
+    const credit = parseSms('Your account 12 has been credited with Rs.1,000.00 on 01/07/2026');
+    expect(credit?.amountMinor).toBe(100_000);
+    expect(credit?.direction).toBe('credit');
+  });
+
+  it('preserves cents, including a trailing-zero .40', () => {
+    const water = parseSms(
+      'LKR 2,867.40 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 at Water. Avl Bal 1.00',
+    );
+    expect(water?.amountMinor).toBe(286_740);
+
+    const sub = parseSms(
+      'LKR 7,027.41 debited from AC XXXXXXXX6796 as POS TXN on 20 Jul 2026 at ANTHROPIC. Avl Bal 1.00',
+    );
+    expect(sub?.amountMinor).toBe(702_741);
+  });
+
+  it('reads the withdrawal amount, never the transaction fee', () => {
+    const result = parseSms(
+      'HNB ATM Withdrawal e-Receipt\nAmt(Approx.): 85000.00 LKR\nTxn Fee: 30.00LKR\nAvl Bal: 640099.67 LKR',
+    );
+    expect(result?.amountMinor).toBe(8_500_000);
+    expect(result?.kind).toBe('atm');
+  });
+
+  it('does not mistake a scam-warning "/OTP" in a real payment for an OTP delivery', () => {
+    const result = parseSms(
+      'LKR 180,025.00 debited to Ac No:13802XXXXX50 on 24/07/26 Reason:MB:loan-AML08 DO NOT SHARE ACCOUNT DETAILS /OTP',
+    );
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('loan_payment');
+  });
+
+  it('still ignores a genuine OTP delivery message', () => {
+    expect(parseSms('452123 is your OTP for a payment of LKR 3,000.00')).toBeNull();
+  });
+});

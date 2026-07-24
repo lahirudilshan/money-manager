@@ -123,6 +123,10 @@ function RootNavigator() {
       <Stack.Screen name="category/edit/[id]" options={{ presentation: 'modal' }} />
       <Stack.Screen name="subcategory/[id]" options={{ presentation: 'modal' }} />
       <Stack.Screen name="transaction/new" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="sms/index" />
+      <Stack.Screen name="sms/new" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="sms/[id]" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="settings/sms-automation" options={{ presentation: 'modal' }} />
     </Stack>
   );
 }

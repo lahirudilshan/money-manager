@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -102,7 +104,9 @@ export function Surface({
         {
           backgroundColor: raised ? colors.surfaceRaised : colors.surface,
           borderRadius: radius.lg,
-          borderWidth: StyleSheet.hairlineWidth,
+          // Solid 1px (not hairline) so every card matches the quick-action
+          // tiles' visible edge — one source of truth for the app's card border.
+          borderWidth: 1,
           borderColor: colors.hairline,
           padding: padded ? space.lg : 0,
         },
@@ -222,21 +226,60 @@ export function GradientButton({
  * pins to the bottom while the content scrolls above it. In a bottom-sheet,
  * pass `flush` to drop the safe-area padding (the sheet already insets).
  */
+/**
+ * The keyboard's current height (0 when hidden), tracked via the Keyboard API.
+ * `enabled` lets a caller opt out so screens that don't need it pay nothing.
+ * Uses the `Will` events on iOS (they fire with the frame before the animation)
+ * and the `Did` events on Android (which lacks the `Will` variants).
+ */
+function useKeyboardHeight(enabled: boolean): number {
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const show = Keyboard.addListener(showEvent, (e) => setHeight(e.endCoordinates?.height ?? 0));
+    const hide = Keyboard.addListener(hideEvent, () => setHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [enabled]);
+
+  return enabled ? height : 0;
+}
+
 export function PinnedFooter({
   children,
   flush = false,
+  followsKeyboard = false,
 }: {
   children: React.ReactNode;
   flush?: boolean;
+  /**
+   * Lift the footer by the keyboard's height while it is open, instead of
+   * relying on a parent KeyboardAvoidingView. Use on screens where the KAV
+   * doesn't reach the window bottom (e.g. Expo Router modals), where the footer
+   * would otherwise stay hidden behind the keyboard. When the keyboard is up
+   * its own inset replaces the safe-area bottom padding.
+   */
+  followsKeyboard?: boolean;
 }) {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight(followsKeyboard);
+  const keyboardUp = keyboardHeight > 0;
+
   return (
     <View
       style={{
         paddingHorizontal: space.lg,
         paddingTop: space.sm,
-        paddingBottom: (flush ? 0 : insets.bottom) + space.sm,
+        // While the keyboard is up, sit flush on top of it; otherwise fall back
+        // to the safe-area inset (unless the caller asked to be flush).
+        paddingBottom: (keyboardUp ? keyboardHeight : flush ? 0 : insets.bottom) + space.sm,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: colors.hairline,
         backgroundColor: colors.surface,

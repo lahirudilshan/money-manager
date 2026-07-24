@@ -4,6 +4,7 @@ import React, { useMemo } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
+import { SmsDraftCard } from '../../src/components/SmsDraftCard';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import {
   Divider,
@@ -53,6 +54,7 @@ export default function DashboardScreen() {
   const accounts = useMemo(() => selectAccountTransfers(state), [state]);
   const reminders = useMemo(() => selectReminders(state), [state]);
   const loanViews = useMemo(() => selectLoanViews(state), [state]);
+  const smsDrafts = state.smsDrafts;
 
   const overdue = reminders.filter((r) => r.urgency === 'overdue');
   const dueSoon = reminders.filter((r) => r.urgency === 'due_soon');
@@ -182,9 +184,9 @@ export default function DashboardScreen() {
           onPress={() => router.push('/category/new')}
         />
         <QuickAction
-          icon="list-outline"
-          label="Plan"
-          onPress={() => router.push('/(tabs)/list')}
+          icon="chatbox-ellipses-outline"
+          label="Paste SMS"
+          onPress={() => router.push('/sms/new')}
         />
         <QuickAction
           icon="wallet-outline"
@@ -192,6 +194,53 @@ export default function DashboardScreen() {
           onPress={() => router.push('/(tabs)/cards')}
         />
       </Row>
+
+      {/* Drafts parsed from incoming SMS, awaiting Yes/Edit/No. Surfaced high
+          because they are the one thing the user must act on before the board
+          reflects reality. */}
+      {smsDrafts.length > 0 ? (
+        <View style={{ gap: space.sm }}>
+          <Row justify="space-between" align="center">
+            <View style={{ gap: 1 }}>
+              <Label>FROM YOUR MESSAGES</Label>
+              <T variant="caption" tone="muted">
+                Read from your SMS — confirm to add
+              </T>
+            </View>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 4,
+                paddingHorizontal: space.sm,
+                paddingVertical: 4,
+                borderRadius: 999,
+                backgroundColor: colors.accentSoft,
+              }}
+            >
+              <Ionicons name="chatbox-ellipses" size={12} color={colors.accent} />
+              <T variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+                {smsDrafts.length} to review
+              </T>
+            </View>
+          </Row>
+
+          {smsDrafts.map((draft) => (
+            <SmsDraftCard
+              key={draft.id}
+              draft={draft}
+              cards={state.cards}
+              matchedBillName={
+                draft.subcategoryId
+                  ? state.subcategories.find((s) => s.id === draft.subcategoryId)?.name
+                  : undefined
+              }
+              onOpen={() => router.push(`/sms/${draft.id}`)}
+              onConfirm={() => state.confirmDraft(draft.id)}
+            />
+          ))}
+        </View>
+      ) : null}
 
       {views.length === 0 ? (
         <Empty
