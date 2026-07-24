@@ -114,6 +114,24 @@ export const subcategories = sqliteTable(
     cardId: text('card_id').references(() => cards.id, { onDelete: 'set null' }),
     /** Set when this line is a loan installment, to link back to the loan. */
     loanId: text('loan_id').references(() => loans.id, { onDelete: 'set null' }),
+
+    /**
+     * Saving plan ("sinking fund") for a large bill paid at a future date —
+     * vehicle insurance, a 6-month subscription, a credit-card installment
+     * plan. When `planTargetMinor` is set, `plannedMinor` is the *monthly*
+     * set-aside and these describe the whole commitment:
+     *
+     *   planTargetMinor  the full amount to reach (e.g. 144,000)
+     *   planDueDate      when it must be paid / when cover expires
+     *   planStartDate    when saving began, so progress can be derived
+     *
+     * Null on ordinary bills, which are simply paid each period.
+     */
+    planTargetMinor: integer('plan_target_minor'),
+    planDueDate: integer('plan_due_date', { mode: 'timestamp_ms' }),
+    planStartDate: integer('plan_start_date', { mode: 'timestamp_ms' }),
+    /** Days before `planDueDate` to warn — drives the expiry reminder. */
+    planRemindDaysBefore: integer('plan_remind_days_before').notNull().default(14),
     sortOrder: integer('sort_order').notNull().default(0),
     archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
     ...timestamps,

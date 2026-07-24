@@ -8,9 +8,13 @@ import {
   effectiveAmount,
   formatPeriod,
   isPaid,
+  isPlanExpiringSoon,
+  monthsBetween,
   nextStatus,
   periodKey,
   periodToDate,
+  planFromMonthly,
+  savingPlanProgress,
   shiftPeriod,
   summariseBoard,
   summariseCategory,
@@ -280,5 +284,99 @@ describe('urgencyFor / daysUntil', () => {
   it('counts whole days, negative once past due', () => {
     expect(daysUntil(new Date(2026, 6, 20), today)).toBe(5);
     expect(daysUntil(new Date(2026, 6, 10), today)).toBe(-5);
+  });
+});
+
+describe('monthsBetween', () => {
+  it('counts whole months ahead', () => {
+    expect(monthsBetween(new Date(2026, 0, 10), new Date(2026, 3, 10))).toBe(3);
+  });
+
+  it('counts a partial month when the day is later', () => {
+    expect(monthsBetween(new Date(2026, 0, 10), new Date(2026, 3, 20))).toBe(4);
+  });
+
+  it('floors at zero for past dates', () => {
+    expect(monthsBetween(new Date(2026, 5, 10), new Date(2026, 0, 10))).toBe(0);
+  });
+});
+
+describe('savingPlanProgress', () => {
+  const plan = {
+    targetMinor: toMinor(144_000),
+    dueDate: new Date(2026, 11, 15),
+    startDate: new Date(2026, 0, 15),
+  };
+  const today = new Date(2026, 3, 15); // 8 months to run
+
+  it('divides the remaining amount across the remaining months', () => {
+    const p = savingPlanProgress(plan, toMinor(24_000), today);
+    expect(p.monthsRemaining).toBe(8);
+    expect(p.remainingMinor).toBe(toMinor(120_000));
+    expect(p.monthlyMinor).toBe(toMinor(15_000));
+  });
+
+  it('raises the monthly amount after falling behind', () => {
+    const behind = savingPlanProgress(plan, 0, today);
+    const onTrack = savingPlanProgress(plan, toMinor(24_000), today);
+    expect(behind.monthlyMinor).toBeGreaterThan(onTrack.monthlyMinor);
+  });
+
+  it('reports completion once the target is reached', () => {
+    const p = savingPlanProgress(plan, toMinor(144_000), today);
+    expect(p.isComplete).toBe(true);
+    expect(p.remainingMinor).toBe(0);
+    expect(p.progressPct).toBe(100);
+  });
+
+  it('never reports a negative remainder when overfunded', () => {
+    const p = savingPlanProgress(plan, toMinor(200_000), today);
+    expect(p.remainingMinor).toBe(0);
+    expect(p.progressPct).toBe(100);
+  });
+
+  it('demands the whole remainder once no months are left', () => {
+    const p = savingPlanProgress(plan, toMinor(100_000), new Date(2026, 11, 20));
+    expect(p.monthsRemaining).toBe(0);
+    expect(p.monthlyMinor).toBe(toMinor(44_000));
+  });
+
+  it('flags an unfunded plan past its date as overdue', () => {
+    const p = savingPlanProgress(plan, toMinor(10_000), new Date(2027, 0, 10));
+    expect(p.isOverdue).toBe(true);
+  });
+
+  it('is not overdue once fully saved', () => {
+    const p = savingPlanProgress(plan, toMinor(144_000), new Date(2027, 0, 10));
+    expect(p.isOverdue).toBe(false);
+  });
+});
+
+describe('planFromMonthly', () => {
+  it('derives the total from monthly x months', () => {
+    const plan = planFromMonthly(toMinor(12_000), 12, new Date(2026, 0, 1));
+    expect(plan.targetMinor).toBe(toMinor(144_000));
+    expect(plan.dueDate.getFullYear()).toBe(2027);
+    expect(plan.dueDate.getMonth()).toBe(0);
+  });
+});
+
+describe('isPlanExpiringSoon', () => {
+  const plan = {
+    targetMinor: toMinor(100_000),
+    dueDate: new Date(2026, 5, 20),
+    startDate: new Date(2026, 0, 1),
+  };
+
+  it('warns inside the window', () => {
+    expect(isPlanExpiringSoon(plan, 14, new Date(2026, 5, 10))).toBe(true);
+  });
+
+  it('stays quiet outside the window', () => {
+    expect(isPlanExpiringSoon(plan, 14, new Date(2026, 4, 1))).toBe(false);
+  });
+
+  it('stays quiet once past due', () => {
+    expect(isPlanExpiringSoon(plan, 14, new Date(2026, 6, 1))).toBe(false);
   });
 });

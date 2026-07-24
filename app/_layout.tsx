@@ -5,7 +5,7 @@ import { ActivityIndicator, ScrollView, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
-import { selectCategoryViews, useAppStore } from '../src/store/useAppStore';
+import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
 import { syncCategoryReminders } from '../src/services/notifications';
 import { T } from '../src/components/ui';
 
@@ -35,7 +35,18 @@ function RootNavigator() {
             dueDay: view.category.dueDay,
           }));
 
-        void syncCategoryReminders(reminders).catch((error) =>
+        // Plus anything saving toward a date — insurance expiring, an
+        // installment plan ending — warned ahead of its due day.
+        const planReminders = selectSavingPlans(state)
+          .filter((plan) => !plan.progress.isComplete)
+          .map((plan) => ({
+            categoryId: plan.subcategory.id,
+            categoryName: `${plan.subcategory.name} due`,
+            shortfallMinor: plan.progress.remainingMinor,
+            dueDay: plan.plan.dueDate.getDate(),
+          }));
+
+        void syncCategoryReminders([...reminders, ...planReminders]).catch((error) =>
           console.warn('Reminder sync skipped:', error),
         );
       })

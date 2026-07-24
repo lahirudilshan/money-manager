@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankSelectTile } from '../../src/components/BankLogo';
-import { GradientButton, Label, Row, T } from '../../src/components/ui';
+import { GradientButton, Label, PinnedFooter, Row, T } from '../../src/components/ui';
 import { BANKS } from '../../src/data/banks';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -79,18 +79,19 @@ export default function OnboardingBanksScreen() {
   }
 
   return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
     <ScrollView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+      style={{ flex: 1 }}
       contentContainerStyle={{
         paddingTop: insets.top + space.lg,
-        paddingBottom: insets.bottom + space.xl,
+        paddingBottom: space.lg,
         paddingHorizontal: space.lg,
         gap: space.lg,
       }}
       showsVerticalScrollIndicator={false}
     >
       <View style={{ gap: 2 }}>
-        <Label>STEP 1 OF 3</Label>
+        <Label>STEP 1 OF 4</Label>
         <T variant="title">Where do you bank?</T>
         <T variant="small" tone="muted">
           Pick every account your money moves through. You can rename them or
@@ -101,6 +102,9 @@ export default function OnboardingBanksScreen() {
       <Section title="BANKS" tiles={banks} selected={selected} onToggle={toggle} />
       <Section title="WALLETS & CASH" tiles={wallets} selected={selected} onToggle={toggle} />
 
+    </ScrollView>
+
+    <PinnedFooter>
       <View style={{ gap: space.sm }}>
         <Row justify="center">
           <T variant="caption" tone="muted">
@@ -116,7 +120,8 @@ export default function OnboardingBanksScreen() {
           disabled={selected.size === 0}
         />
       </View>
-    </ScrollView>
+    </PinnedFooter>
+    </View>
   );
 }
 

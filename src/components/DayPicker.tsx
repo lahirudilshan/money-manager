@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
@@ -18,6 +19,9 @@ function ordinal(day: number): string {
   const suffix = ['th', 'st', 'nd', 'rd'][Math.min(day % 10, 4)] ?? 'th';
   return `${day}${suffix}`;
 }
+
+/** Day 0 means "no fixed date" — see FLEXIBLE_DUE_DAY in core/planning. */
+const FLEXIBLE = 0;
 
 /**
  * Payment-day picker laid out like a month calendar — rows of 7 with the last
@@ -53,10 +57,42 @@ export function DayPicker({
           }}
         >
           <T variant="caption" color={colors.accentInk} style={{ fontWeight: '700' }}>
-            Every {ordinal(value)}
+            {value === FLEXIBLE ? 'No fixed date' : `Every ${ordinal(value)}`}
           </T>
         </View>
       </Row>
+
+      {/* Flexible — for bills with no set date, so they never read as overdue. */}
+      <Pressable
+        onPress={() => onChange(value === FLEXIBLE ? 1 : FLEXIBLE)}
+        accessibilityRole="button"
+        accessibilityState={{ selected: value === FLEXIBLE }}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: space.sm,
+          paddingVertical: 10,
+          paddingHorizontal: space.md,
+          borderRadius: radius.md,
+          borderWidth: 1.5,
+          borderColor: value === FLEXIBLE ? colors.accent : colors.hairline,
+          backgroundColor: value === FLEXIBLE ? colors.accentSoft : colors.surface,
+          opacity: pressed ? 0.75 : 1,
+        })}
+      >
+        <Ionicons
+          name={value === FLEXIBLE ? 'checkmark-circle' : 'ellipse-outline'}
+          size={18}
+          color={value === FLEXIBLE ? colors.accent : colors.inkMuted}
+        />
+        <T
+          variant="small"
+          color={value === FLEXIBLE ? colors.accentInk : colors.inkSecondary}
+          style={{ fontWeight: value === FLEXIBLE ? '700' : '500' }}
+        >
+          Flexible — no fixed day
+        </T>
+      </Pressable>
 
       <View
         style={{
@@ -66,6 +102,9 @@ export function DayPicker({
           borderColor: colors.hairline,
           padding: space.sm,
           gap: 6,
+          // Dimmed while flexible: the grid is still tappable (tapping a day
+          // switches back to a fixed date) but reads as inactive.
+          opacity: value === FLEXIBLE ? 0.45 : 1,
         }}
       >
         {WEEKS.map((week, weekIndex) => (

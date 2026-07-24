@@ -40,6 +40,15 @@ export default function EditCategoryScreen() {
   const [dueDay, setDueDay] = useState(category?.dueDay ?? 1);
   const [frequency, setFrequency] = useState<Frequency>(category?.defaultFrequency ?? 'monthly');
 
+  // Save stays disabled until something actually changed, so the button
+  // reflects whether there is anything to save.
+  const isDirty =
+    name.trim() !== (category?.name ?? '') ||
+    icon !== (category?.icon ?? CATEGORY_ICONS[0].key) ||
+    cardId !== (category?.cardId ?? null) ||
+    dueDay !== (category?.dueDay ?? 1) ||
+    frequency !== (category?.defaultFrequency ?? 'monthly');
+
   if (!category) {
     return (
       <View
@@ -116,7 +125,12 @@ export default function EditCategoryScreen() {
       </ScrollView>
 
       <PinnedFooter>
-        <GradientButton label="Save changes" icon="checkmark" onPress={handleSave} disabled={!name.trim()} />
+        <GradientButton
+          label="Save changes"
+          icon="checkmark"
+          onPress={handleSave}
+          disabled={!name.trim() || !isDirty}
+        />
       </PinnedFooter>
     </KeyboardAvoidingView>
   );

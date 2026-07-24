@@ -24,6 +24,14 @@ export interface DraftLine {
   frequency: 'monthly' | 'one_time' | 'yearly';
   /** Account this line is funded from; null means "use the category default". */
   cardId: string | null;
+  /**
+   * Currency the amount was entered in. Income is often paid in USD, so it is
+   * captured as typed and converted to local minor units on commit — keeping
+   * the original figure and rate for the record.
+   */
+  currency: 'local' | 'usd';
+  /** Amount as typed when `currency` is 'usd'; null for local-currency lines. */
+  foreignAmount: number | null;
 }
 
 interface OnboardingDraftState {
@@ -61,6 +69,8 @@ function lineFromCatalog(catalogId: string): DraftLine | null {
     dueDay: subcategory.dueDay ?? (subcategory.type === 'income' ? 25 : 1),
     frequency: subcategory.frequency ?? 'monthly',
     cardId: null,
+    currency: 'local',
+    foreignAmount: null,
   };
 }
 

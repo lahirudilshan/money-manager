@@ -20,7 +20,14 @@ import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
 import { BankLogo } from '../../src/components/BankLogo';
-import { useAppStore } from '../../src/store/useAppStore';
+import {
+  savingPlanDraftFrom,
+  SavingPlanFields,
+  SavingPlanProgressCard,
+  toSavingPlanPatch,
+  type SavingPlanDraft,
+} from '../../src/components/SavingPlanFields';
+import { selectSavingPlans, useAppStore } from '../../src/store/useAppStore';
 import { statusStyle } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -46,6 +53,14 @@ export default function SubcategoryScreen() {
     return state.cards.find((c) => c.id === cardId);
   }, [state.cards, subcategory?.cardId, category?.cardId]);
 
+  // Progress comes from the shared selector so the figure matches everywhere.
+  const savedMinor = useMemo(() => {
+    if (!id) return 0;
+    return (
+      selectSavingPlans(state).find((p) => p.subcategory.id === id)?.progress.savedMinor ?? 0
+    );
+  }, [state, id]);
+
   const [name, setName] = useState(subcategory?.name ?? '');
   const [planned, setPlanned] = useState(
     subcategory ? String(subcategory.plannedMinor / 100) : '',
@@ -56,6 +71,12 @@ export default function SubcategoryScreen() {
   const [note, setNote] = useState(stateRow?.note ?? '');
   const [frequency, setFrequency] = useState<'monthly' | 'one_time' | 'yearly'>(
     subcategory?.frequency ?? 'monthly',
+  );
+  const [plan, setPlan] = useState<SavingPlanDraft>(() =>
+    savingPlanDraftFrom({
+      planTargetMinor: subcategory?.planTargetMinor,
+      planDueDate: subcategory?.planDueDate,
+    }),
   );
   const [imageUri, setImageUri] = useState<string | null>(stateRow?.imageUri ?? null);
   const [imageBusy, setImageBusy] = useState(false);
@@ -114,10 +135,16 @@ export default function SubcategoryScreen() {
     const trimmed = name.trim();
     if (!trimmed) return;
 
+    // With a saving plan the monthly set-aside is derived from the plan, so it
+    // overrides whatever is in the planned-amount field.
+    const planPatch = toSavingPlanPatch(plan);
     state.updateSubcategory(subcategory!.id, {
       name: trimmed,
-      plannedMinor: parseAmount(planned) ?? 0,
+      plannedMinor: planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
       frequency,
+      planTargetMinor: planPatch?.planTargetMinor ?? null,
+      planDueDate: planPatch?.planDueDate ?? null,
+      planStartDate: planPatch?.planStartDate ?? subcategory!.planStartDate ?? null,
     });
 
     // Persist this month's slip, note and actual in one write, keeping the
@@ -156,6 +183,23 @@ export default function SubcategoryScreen() {
     : undefined;
   const style = statusStyle(status, colors);
   const paid = status === 'paid';
+
+  // Save stays disabled until something actually changed. The plan compares
+  // its *resolved* target/date, so editing an active plan counts as a change.
+  const resolvedPlan = toSavingPlanPatch(plan);
+  const planChanged =
+    (resolvedPlan?.planTargetMinor ?? null) !== (subcategory.planTargetMinor ?? null) ||
+    (resolvedPlan?.planDueDate?.getTime() ?? null) !==
+      (subcategory.planDueDate?.getTime() ?? null);
+
+  const isDirty =
+    name.trim() !== subcategory.name ||
+    (parseAmount(planned) ?? 0) !== subcategory.plannedMinor ||
+    (actual.trim() === '' ? null : parseAmount(actual)) !== (stateRow?.actualMinor ?? null) ||
+    note.trim() !== (stateRow?.note ?? '') ||
+    imageUri !== (stateRow?.imageUri ?? null) ||
+    frequency !== subcategory.frequency ||
+    planChanged;
 
   return (
     <KeyboardAvoidingView
@@ -270,6 +314,16 @@ export default function SubcategoryScreen() {
           </View>
         </Pressable>
 
+        {/* Saving-plan progress, when this bill has one. */}
+        {subcategory.planTargetMinor != null && subcategory.planDueDate ? (
+          <SavingPlanProgressCard
+            targetMinor={subcategory.planTargetMinor}
+            dueDate={subcategory.planDueDate}
+            startDate={subcategory.planStartDate ?? subcategory.createdAt}
+            savedMinor={savedMinor}
+          />
+        ) : null}
+
         {/* Slip / receipt — attach or replace the photo for this month. */}
         <View style={{ gap: space.sm }}>
           <Label>SLIP / RECEIPT</Label>
@@ -350,6 +404,8 @@ export default function SubcategoryScreen() {
             selectedKey={frequency}
             onSelect={(key) => setFrequency(key as typeof frequency)}
           />
+          <SavingPlanFields draft={plan} onChange={setPlan} />
+
           <Field
             label="Note (optional)"
             value={note}
@@ -383,7 +439,7 @@ export default function SubcategoryScreen() {
           label="Save changes"
           icon="checkmark"
           onPress={handleSave}
-          disabled={!name.trim()}
+          disabled={!name.trim() || !isDirty}
         />
       </PinnedFooter>
 

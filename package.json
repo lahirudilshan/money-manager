@@ -46,6 +46,8 @@
     "prebuild:ios": "LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 expo prebuild --platform ios && node plugins/fix-ios-prebuild.js",
     "ios": "yarn prebuild:ios && expo run:ios",
     "ios:dev": "expo run:ios",
+    "ios:device": "expo run:ios --device",
+    "ios:release": "expo run:ios --configuration Release --device",
     "web": "expo start --web",
     "test": "vitest run",
     "test:watch": "vitest",

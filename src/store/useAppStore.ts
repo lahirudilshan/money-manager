@@ -5,6 +5,10 @@ import {
   calculateRatios,
   daysUntil,
   dueDateFor,
+  isFlexibleDueDay,
+  savingPlanProgress,
+  type SavingPlan,
+  type SavingPlanProgress,
   nextStatus,
   periodKey,
   resolveCardId,
@@ -126,6 +130,10 @@ export interface AppState {
     cardId?: string | null;
     dueDay?: number | null;
     loanId?: string | null;
+    /** Saving-plan fields; see `subcategories` in schema.ts. */
+    planTargetMinor?: Minor | null;
+    planDueDate?: Date | null;
+    planStartDate?: Date | null;
   }) => Subcategory;
   updateSubcategory: (id: string, patch: Partial<Subcategory>) => void;
   deleteSubcategory: (id: string) => void;
@@ -352,6 +360,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       color: category?.color ?? nextColor(siblings.length),
       cardId: input.cardId ?? null,
       loanId: input.loanId ?? null,
+      planTargetMinor: input.planTargetMinor ?? null,
+      planDueDate: input.planDueDate ?? null,
+      planStartDate: input.planStartDate ?? null,
       sortOrder: siblings.length,
     });
     get().refresh();
@@ -414,6 +425,11 @@ export interface CategoryView {
   summary: CategorySummary;
   /** Whether the category's bulk money has been transferred this period. */
   transferStatus: CategoryFundingStatus;
+  /**
+   * True when every line in the category is income. Income lands directly in
+   * the account, so there is nothing to "transfer" — the UI hides that action.
+   */
+  isIncomeOnly: boolean;
 }
 
 function toPlanned(subcategory: Subcategory, state: SubcategoryState | undefined): PlannedCategory {
@@ -439,6 +455,7 @@ export function selectCategoryViews(state: AppState): CategoryView[] {
       rawSubcategories: subs,
       summary: summariseCategory(planned, funded),
       transferStatus: state.categoryStates.get(category.id)?.status ?? 'pending',
+      isIncomeOnly: subs.length > 0 && subs.every((s) => s.type === 'income'),
     };
   });
 }
@@ -608,6 +625,55 @@ export interface ReminderView {
   urgency: DueUrgency;
 }
 
+/** A bill with a saving plan, plus how far along it is. */
+export interface SavingPlanView {
+  subcategory: Subcategory;
+  categoryName: string;
+  categoryColor: string;
+  plan: SavingPlan;
+  progress: SavingPlanProgress;
+}
+
+/**
+ * Every bill that carries a saving plan, with progress derived from how many
+ * months have actually been marked paid since the plan started.
+ *
+ * Counting *paid months* rather than a stored running total means the figure
+ * can never drift from the checklist the user actually ticks, and re-opening
+ * an old month corrects it automatically.
+ */
+export function selectSavingPlans(state: AppState, today = new Date()): SavingPlanView[] {
+  const plans: SavingPlanView[] = [];
+
+  for (const category of state.categories) {
+    for (const sub of state.subcategories) {
+      if (sub.categoryId !== category.id) continue;
+      if (sub.planTargetMinor == null || !sub.planDueDate) continue;
+
+      const plan: SavingPlan = {
+        targetMinor: sub.planTargetMinor,
+        dueDate: sub.planDueDate,
+        startDate: sub.planStartDate ?? sub.createdAt,
+      };
+
+      // Each paid month contributed that month's planned set-aside.
+      const paidPeriods = stateRepo.paidPeriodCount(sub.id);
+      const saved = paidPeriods * sub.plannedMinor;
+
+      plans.push({
+        subcategory: sub,
+        categoryName: category.name,
+        categoryColor: category.color,
+        plan,
+        progress: savingPlanProgress(plan, saved, today),
+      });
+    }
+  }
+
+  // Soonest due first — the ones needing attention lead.
+  return plans.sort((a, b) => a.progress.daysUntilDue - b.progress.daysUntilDue);
+}
+
 export function selectReminders(state: AppState, today = new Date()): ReminderView[] {
   const reminders: ReminderView[] = [];
 
@@ -624,7 +690,12 @@ export function selectReminders(state: AppState, today = new Date()): ReminderVi
       // Paid means done — nothing left to remind about.
       if (status === 'paid') continue;
 
-      const dueDate = dueDateFor(state.period, sub.dueDay ?? category.dueDay);
+      // A flexible bill has no fixed date, so it can never be "overdue" and
+      // must not appear in the due-date reminder list.
+      const effectiveDueDay = sub.dueDay ?? category.dueDay;
+      if (isFlexibleDueDay(effectiveDueDay)) continue;
+
+      const dueDate = dueDateFor(state.period, effectiveDueDay);
       reminders.push({
         subcategory: sub,
         categoryName: category.name,

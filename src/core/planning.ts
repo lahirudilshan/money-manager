@@ -237,6 +237,17 @@ export function formatPeriod(period: string): string {
  * month's length clamp to its last day, so "due on the 31st" still resolves in
  * February rather than rolling into March.
  */
+/**
+ * Sentinel day meaning "no fixed date" — the bill is paid whenever, so it
+ * never becomes overdue and is left out of due-date reminders.
+ */
+export const FLEXIBLE_DUE_DAY = 0;
+
+/** True when a bill has no fixed payment date. */
+export function isFlexibleDueDay(dueDay: number | null | undefined): boolean {
+  return dueDay === FLEXIBLE_DUE_DAY;
+}
+
 export function dueDateFor(period: string, dueDay: number): Date {
   const base = periodToDate(period);
   const lastDay = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
@@ -259,6 +270,114 @@ export function urgencyFor(dueDate: Date, today: Date): DueUrgency {
   if (days < 0) return 'overdue';
   if (days <= 7) return 'due_soon';
   return 'upcoming';
+}
+
+// ----------------------------------------------------- saving plans
+
+/**
+ * A large bill paid at a future date that you save toward monthly — vehicle
+ * insurance, a 6-month subscription, a credit-card installment plan.
+ *
+ * The user may know either side of the equation, so both are supported:
+ *   - total + due date  -> the monthly set-aside is derived
+ *   - monthly + term    -> the total and due date are derived
+ * Whichever they enter, the stored shape is always total + due date, and the
+ * monthly figure is recomputed from what is *left* to save, so falling behind
+ * one month raises the following months rather than silently under-funding.
+ */
+export interface SavingPlan {
+  targetMinor: Minor;
+  dueDate: Date;
+  startDate: Date;
+}
+
+export interface SavingPlanProgress {
+  targetMinor: Minor;
+  /** Set aside so far. */
+  savedMinor: Minor;
+  /** Still to collect; never negative. */
+  remainingMinor: Minor;
+  /** Whole months from today until the due date; 0 once due. */
+  monthsRemaining: number;
+  /** What to set aside this month to stay on track. */
+  monthlyMinor: Minor;
+  /** 0-100, clamped — safe for progress bars. */
+  progressPct: number;
+  /** Days until the bill is due; negative once overdue. */
+  daysUntilDue: number;
+  isComplete: boolean;
+  isOverdue: boolean;
+}
+
+/**
+ * Whole months between two dates, rounded up and floored at zero — the number
+ * of contributions still available before the due date.
+ */
+export function monthsBetween(from: Date, to: Date): number {
+  const months =
+    (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  // A due date later in the same month still leaves one contribution.
+  const partial = to.getDate() > from.getDate() ? 1 : 0;
+  return Math.max(0, months + partial);
+}
+
+/**
+ * Derive the monthly set-aside and progress for a plan, given what has been
+ * saved so far. Dividing the *remaining* amount by the *remaining* months
+ * keeps the plan self-correcting.
+ */
+export function savingPlanProgress(
+  plan: SavingPlan,
+  savedMinor: Minor,
+  today = new Date(),
+): SavingPlanProgress {
+  const remaining = Math.max(0, plan.targetMinor - savedMinor);
+  const monthsRemaining = monthsBetween(today, plan.dueDate);
+  const days = daysUntil(plan.dueDate, today);
+
+  return {
+    targetMinor: plan.targetMinor,
+    savedMinor,
+    remainingMinor: remaining,
+    monthsRemaining,
+    // With no months left, the whole remainder is due now.
+    monthlyMinor: monthsRemaining > 0 ? Math.ceil(remaining / monthsRemaining) : remaining,
+    progressPct:
+      plan.targetMinor > 0
+        ? Math.min(100, Math.max(0, (savedMinor / plan.targetMinor) * 100))
+        : 0,
+    daysUntilDue: days,
+    isComplete: remaining === 0,
+    isOverdue: days < 0 && remaining > 0,
+  };
+}
+
+/**
+ * Build a plan from "I pay X per month for N months", the other entry mode.
+ * Starts today and runs N whole months forward.
+ */
+export function planFromMonthly(
+  monthlyMinor: Minor,
+  months: number,
+  startDate = new Date(),
+): SavingPlan {
+  const dueDate = new Date(startDate);
+  dueDate.setMonth(dueDate.getMonth() + Math.max(1, Math.round(months)));
+  return {
+    targetMinor: monthlyMinor * Math.max(1, Math.round(months)),
+    dueDate,
+    startDate,
+  };
+}
+
+/** True when a plan's due date is close enough to warn about. */
+export function isPlanExpiringSoon(
+  plan: SavingPlan,
+  remindDaysBefore: number,
+  today = new Date(),
+): boolean {
+  const days = daysUntil(plan.dueDate, today);
+  return days >= 0 && days <= remindDaysBefore;
 }
 
 /** Whole days from `today` to `dueDate`; negative once past due. */

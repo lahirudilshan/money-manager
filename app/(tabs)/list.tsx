@@ -15,6 +15,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
 import { DayPicker } from '../../src/components/DayPicker';
+import {
+  emptySavingPlanDraft,
+  SavingPlanFields,
+  toSavingPlanPatch,
+  type SavingPlanDraft,
+} from '../../src/components/SavingPlanFields';
 import { Field } from '../../src/components/forms';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import {
@@ -28,7 +34,7 @@ import {
   T,
 } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { formatPeriod, resolveCardId } from '../../src/core/planning';
+import { formatPeriod, isFlexibleDueDay, resolveCardId } from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
@@ -79,6 +85,7 @@ export default function ListScreen() {
   // hunted for. Collapsing is opt-in per card, or all at once.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<Filter>('all');
+  const [search, setSearch] = useState('');
   const [addingToCategoryId, setAddingToCategoryId] = useState<string | null>(null);
 
   const addingToCategory = views.find((v) => v.category.id === addingToCategoryId)?.category;
@@ -99,18 +106,33 @@ export default function ListScreen() {
     setCollapsed(allCollapsed ? new Set() : new Set(views.map((v) => v.category.id)));
   }
 
-  // Filtering hides bills; a category with none left drops out.
+  // Search + status filter both hide bills; a category left with none drops
+  // out entirely. A category whose *own* name matches keeps all its bills, so
+  // searching "Housing" shows the whole group rather than nothing.
+  const query = search.trim().toLowerCase();
   const filtered = useMemo(() => {
-    if (filter === 'all') return views;
+    if (filter === 'all' && !query) return views;
+
     return views
-      .map((view) => ({
-        ...view,
-        subcategories: view.subcategories.filter((sub) =>
-          filter === 'paid' ? sub.status === 'paid' : sub.status !== 'paid',
-        ),
-      }))
+      .map((view) => {
+        const categoryMatches = view.category.name.toLowerCase().includes(query);
+        return {
+          ...view,
+          subcategories: view.subcategories.filter((sub) => {
+            const passesStatus =
+              filter === 'all'
+                ? true
+                : filter === 'paid'
+                  ? sub.status === 'paid'
+                  : sub.status !== 'paid';
+            const passesSearch =
+              !query || categoryMatches || sub.name.toLowerCase().includes(query);
+            return passesStatus && passesSearch;
+          }),
+        };
+      })
       .filter((view) => view.subcategories.length > 0);
-  }, [views, filter]);
+  }, [views, filter, query]);
 
   const left = income - totals.plannedMinor;
   const paidPct =
@@ -183,6 +205,48 @@ export default function ListScreen() {
         </Surface>
       ) : null}
 
+      {/* Search — find a bill without scrolling the whole plan. */}
+      {views.length > 0 ? (
+        <Row
+          gap={space.sm}
+          style={{
+            backgroundColor: colors.surface,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: colors.hairline,
+            paddingHorizontal: space.md,
+            paddingVertical: 2,
+          }}
+        >
+          <Ionicons name="search" size={16} color={colors.inkMuted} />
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search bills or categories"
+            placeholderTextColor={colors.inkMuted}
+            accessibilityLabel="Search bills"
+            returnKeyType="search"
+            style={{
+              flex: 1,
+              paddingVertical: 10,
+              fontSize: 15,
+              color: colors.ink,
+            }}
+          />
+          {search.length > 0 ? (
+            <Pressable
+              onPress={() => setSearch('')}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Clear search"
+              style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1 })}
+            >
+              <Ionicons name="close-circle" size={17} color={colors.inkMuted} />
+            </Pressable>
+          ) : null}
+        </Row>
+      ) : null}
+
       {/* Filters + collapse control. */}
       {views.length > 0 ? (
         <Row justify="space-between" align="center">
@@ -250,14 +314,18 @@ export default function ListScreen() {
 
       {filtered.length === 0 ? (
         <Empty
-          icon="albums-outline"
-          title={views.length === 0 ? 'Nothing planned' : 'Nothing here'}
+          icon={query ? 'search-outline' : 'albums-outline'}
+          title={
+            views.length === 0 ? 'Nothing planned' : query ? 'No matches' : 'Nothing here'
+          }
           message={
             views.length === 0
               ? 'Create a category, then add the bills you pay each month.'
-              : filter === 'paid'
-                ? 'No bills paid yet this month.'
-                : 'Everything is paid. Nice.'
+              : query
+                ? `Nothing matches "${search.trim()}".`
+                : filter === 'paid'
+                  ? 'No bills paid yet this month.'
+                  : 'Everything is paid. Nice.'
           }
           actionLabel={views.length === 0 ? 'Create a category' : undefined}
           onAction={views.length === 0 ? () => router.push('/category/new') : undefined}
@@ -356,7 +424,17 @@ function CategoryCard({
   const headerBg = mode === 'dark' ? colors.surfaceRaised : `${category.color}0D`;
 
   return (
-    <Surface padded={false} style={{ overflow: 'hidden' }}>
+    // A full-strength border (not the default hairline) plus the category's
+    // own tint on the edge makes each group read as a distinct card rather
+    // than one continuous list.
+    <Surface
+      padded={false}
+      style={{
+        overflow: 'hidden',
+        borderWidth: 1.5,
+        borderColor: collapsed ? colors.hairlineStrong : `${category.color}55`,
+      }}
+    >
       {/* Header. */}
       <View style={{ backgroundColor: headerBg, padding: space.lg, gap: space.md }}>
         <Row gap={space.md}>
@@ -405,7 +483,9 @@ function CategoryCard({
           </View>
         </Row>
 
-        {/* Transfer toggle — the bulk salary→account move, one tap. */}
+        {/* Transfer toggle — the bulk salary→account move, one tap. Income
+            categories skip it: that money arrives in the account by itself. */}
+        {view.isIncomeOnly ? null : (
         <Pressable
           onPress={() => state.toggleCategoryTransfer(category.id)}
           accessibilityRole="button"
@@ -442,6 +522,7 @@ function CategoryCard({
             </T>
           ) : null}
         </Pressable>
+        )}
 
         <ProgressBar pct={paidPct} color={category.color} height={6} />
       </View>
@@ -513,7 +594,9 @@ function CategoryCard({
                         {line.name}
                       </T>
                       <T variant="caption" tone="muted">
-                        Day {raw?.dueDay ?? category.dueDay}
+                        {isFlexibleDueDay(raw?.dueDay ?? category.dueDay)
+                          ? 'Flexible'
+                          : `Day ${raw?.dueDay ?? category.dueDay}`}
                         {raw?.frequency && raw.frequency !== 'monthly'
                           ? ` · ${raw.frequency.replace('_', '-')}`
                           : ''}
@@ -605,6 +688,7 @@ function AddSubcategorySheet({
   const [frequency, setFrequency] = useState<'monthly' | 'one_time' | 'yearly'>('monthly');
   // null means "use the category's account"; a value overrides it for this bill.
   const [cardId, setCardId] = useState<string | null>(null);
+  const [plan, setPlan] = useState<SavingPlanDraft>(emptySavingPlanDraft);
 
   const openFor = category?.id ?? null;
   React.useEffect(() => {
@@ -614,19 +698,29 @@ function AddSubcategorySheet({
       setDueDay(category?.dueDay ?? 1);
       setFrequency('monthly');
       setCardId(null);
+      setPlan(emptySavingPlanDraft);
     }
   }, [openFor, category?.dueDay]);
 
+  const planPatch = toSavingPlanPatch(plan);
+  // With a saving plan the monthly set-aside *is* the planned amount, so the
+  // amount field is derived rather than typed.
+  const plannedMinor = planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
+  const canAdd = Boolean(name.trim()) && (!plan.enabled || planPatch !== null);
+
   function handleAdd() {
     const trimmed = name.trim();
-    if (!trimmed || !category) return;
+    if (!trimmed || !category || !canAdd) return;
     state.addSubcategory({
       name: trimmed,
       categoryId: category.id,
-      plannedMinor: parseAmount(amount) ?? 0,
+      plannedMinor,
       dueDay,
       frequency,
       cardId,
+      planTargetMinor: planPatch?.planTargetMinor ?? null,
+      planDueDate: planPatch?.planDueDate ?? null,
+      planStartDate: planPatch?.planStartDate ?? null,
     });
     onClose();
   }
@@ -715,31 +809,45 @@ function AddSubcategorySheet({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {/* Amount hero. */}
+              {/* Amount hero. With a saving plan the monthly figure is derived
+                  from the plan, so this shows that instead of a typed field. */}
               <View style={{ alignItems: 'center', gap: 4 }}>
-                <Label>AMOUNT</Label>
+                <Label>{plan.enabled ? 'MONTHLY SET-ASIDE' : 'AMOUNT'}</Label>
                 <Row gap={space.xs} align="center">
                   <T variant="title" tone="muted">
                     {state.currency}
                   </T>
-                  <TextInput
-                    value={amount}
-                    onChangeText={setAmount}
-                    keyboardType="numeric"
-                    placeholder="0"
-                    placeholderTextColor={colors.inkMuted}
-                    autoFocus
-                    accessibilityLabel="Amount"
-                    style={{
-                      fontSize: 42,
-                      fontWeight: '800',
-                      letterSpacing: -1.2,
-                      color: colors.ink,
-                      minWidth: 110,
-                      textAlign: 'center',
-                      padding: 0,
-                    }}
-                  />
+                  {plan.enabled ? (
+                    <T
+                      style={{
+                        fontSize: 42,
+                        fontWeight: '800',
+                        letterSpacing: -1.2,
+                        color: planPatch ? colors.ink : colors.inkMuted,
+                      }}
+                    >
+                      {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
+                    </T>
+                  ) : (
+                    <TextInput
+                      value={amount}
+                      onChangeText={setAmount}
+                      keyboardType="numeric"
+                      placeholder="0"
+                      placeholderTextColor={colors.inkMuted}
+                      autoFocus
+                      accessibilityLabel="Amount"
+                      style={{
+                        fontSize: 42,
+                        fontWeight: '800',
+                        letterSpacing: -1.2,
+                        color: colors.ink,
+                        minWidth: 110,
+                        textAlign: 'center',
+                        padding: 0,
+                      }}
+                    />
+                  )}
                 </Row>
               </View>
 
@@ -851,6 +959,9 @@ function AddSubcategorySheet({
 
               {/* Payment day. */}
               <DayPicker value={dueDay} onChange={setDueDay} />
+
+              {/* Saving plan — for a big amount due later, collected monthly. */}
+              <SavingPlanFields draft={plan} onChange={setPlan} />
             </ScrollView>
 
             <PinnedFooter>
@@ -858,7 +969,7 @@ function AddSubcategorySheet({
                 label="Add bill"
                 icon="add"
                 onPress={handleAdd}
-                disabled={!name.trim()}
+                disabled={!canAdd}
               />
             </PinnedFooter>
           </KeyboardAvoidingView>

@@ -81,6 +81,10 @@ const DDL = [
     due_day INTEGER,
     card_id TEXT REFERENCES cards(id) ON DELETE SET NULL,
     loan_id TEXT REFERENCES loans(id) ON DELETE SET NULL,
+    plan_target_minor INTEGER,
+    plan_due_date INTEGER,
+    plan_start_date INTEGER,
+    plan_remind_days_before INTEGER NOT NULL DEFAULT 14,
     sort_order INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -522,6 +526,21 @@ function ensureAdditiveColumns(): void {
       'categories',
       'default_frequency',
       "default_frequency TEXT NOT NULL DEFAULT 'monthly'",
+    );
+  }
+
+  const hasSubcategories = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='subcategories'`,
+  );
+  if (hasSubcategories) {
+    // Saving-plan fields — see `subcategories` in schema.ts.
+    ensureColumn('subcategories', 'plan_target_minor', 'plan_target_minor INTEGER');
+    ensureColumn('subcategories', 'plan_due_date', 'plan_due_date INTEGER');
+    ensureColumn('subcategories', 'plan_start_date', 'plan_start_date INTEGER');
+    ensureColumn(
+      'subcategories',
+      'plan_remind_days_before',
+      'plan_remind_days_before INTEGER NOT NULL DEFAULT 14',
     );
   }
 

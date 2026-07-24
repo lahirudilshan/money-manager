@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sed -i '' 's|<Label>STEP 1 OF 3</Label>|<Label>STEP 1 OF 4</Label>|' app/onboarding/index.tsx)",
+      "Bash(sed -i '' 's|<Label>STEP 2 OF 3</Label>|<Label>STEP 2 OF 4</Label>|' app/onboarding/categories.tsx)",
+      "Bash(sed -i '' 's|<Label>STEP 3 OF 3</Label>|<Label>STEP 3 OF 4</Label>|' app/onboarding/plan.tsx)"
+    ]
+  }
+}

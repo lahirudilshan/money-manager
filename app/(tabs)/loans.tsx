@@ -3,10 +3,15 @@ import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Vi
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
-import { BankLogo } from '../../src/components/BankLogo';
+import { SheetHeader } from '../../src/components/forms';
 import {
-  Button,
+  emptyLoanDraft,
+  isLoanDraftValid,
+  LoanForm,
+  loanDraftToInput,
+  type LoanDraft,
+} from '../../src/components/LoanForm';
+import {
   Divider,
   Empty,
   FundingBar,
@@ -19,20 +24,11 @@ import {
 } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { buildSchedule } from '../../src/core/amortization';
-import { formatMoney, parseAmount } from '../../src/core/money';
-import { BANKS, resolveBrand } from '../../src/data/banks';
+import { formatMoney } from '../../src/core/money';
+import { resolveBrand } from '../../src/data/banks';
 import { selectLoanViews, useAppStore, type LoanView } from '../../src/store/useAppStore';
 import { shadeHex } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
-
-const LOAN_KINDS = [
-  { key: 'personal', label: 'Personal', icon: 'person-outline' as const },
-  { key: 'lease', label: 'Lease', icon: 'car-outline' as const },
-  { key: 'mortgage', label: 'Mortgage', icon: 'home-outline' as const },
-  { key: 'other', label: 'Other', icon: 'ellipsis-horizontal' as const },
-];
-
-type LoanKind = 'personal' | 'lease' | 'mortgage' | 'other';
 
 export default function LoansScreen() {
   const { colors, space } = useTheme();
@@ -43,12 +39,7 @@ export default function LoansScreen() {
   const views = useMemo(() => selectLoanViews(state), [state]);
 
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [kind, setKind] = useState<LoanKind>('personal');
-  const [bankId, setBankId] = useState<string | null>(null);
-  const [amount, setAmount] = useState('');
-  const [rate, setRate] = useState('');
-  const [years, setYears] = useState('5');
+  const [draft, setDraft] = useState<LoanDraft>(emptyLoanDraft);
 
   const totals = views.reduce(
     (acc, view) => ({
@@ -60,32 +51,11 @@ export default function LoansScreen() {
   );
 
   function handleCreate() {
-    const principal = parseAmount(amount);
-    const annualRate = Number.parseFloat(rate);
-    const termYears = Number.parseFloat(years);
-    if (!name.trim() || !principal || !Number.isFinite(annualRate) || !Number.isFinite(termYears)) {
-      return;
-    }
-
-    state.addLoan({
-      name: name.trim(),
-      kind,
-      bankId,
-      principalMinor: principal,
-      annualRatePct: annualRate,
-      termMonths: Math.round(termYears * 12),
-      startDate: new Date(),
-      // Card faces use the lender's brand; this stays as the neutral fallback
-      // for loans with no bank set.
-      color: colors.pending,
-      isActive: true,
-    });
-
-    setName('');
-    setBankId(null);
-    setAmount('');
-    setRate('');
-    setYears('5');
+    if (!isLoanDraftValid(draft)) return;
+    // Card faces use the lender's brand; `colors.pending` is the neutral
+    // fallback for loans with no bank set.
+    state.addLoan(loanDraftToInput(draft, colors.pending));
+    setDraft(emptyLoanDraft);
     setOpen(false);
   }
 
@@ -208,40 +178,7 @@ export default function LoansScreen() {
           contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          <Field label="Name" value={name} onChangeText={setName} autoFocus />
-          <PillSelect
-            label="Type"
-            options={LOAN_KINDS}
-            selectedKey={kind}
-            onSelect={(key) => setKind(key as LoanKind)}
-          />
-          <BankPicker selectedId={bankId} onSelect={setBankId} />
-          <Field
-            label="Loan amount"
-            value={amount}
-            onChangeText={setAmount}
-            placeholder="e.g. 7200000"
-            keyboardType="numeric"
-          />
-          <Row gap={space.md}>
-            <Field
-              label="Annual rate %"
-              value={rate}
-              onChangeText={setRate}
-              placeholder="11.5"
-              keyboardType="decimal-pad"
-              style={{ flex: 1 }}
-            />
-            <Field
-              label="Years"
-              value={years}
-              onChangeText={setYears}
-              placeholder="5"
-              keyboardType="decimal-pad"
-              style={{ flex: 1 }}
-            />
-          </Row>
-          <LoanPreview amount={amount} rate={rate} years={years} />
+          <LoanForm draft={draft} onChange={setDraft} />
         </ScrollView>
 
         <PinnedFooter>
@@ -249,7 +186,7 @@ export default function LoansScreen() {
             label="Add loan"
             icon="add"
             onPress={handleCreate}
-            disabled={!name.trim()}
+            disabled={!isLoanDraftValid(draft)}
           />
         </PinnedFooter>
         </KeyboardAvoidingView>
@@ -545,94 +482,5 @@ function SummaryStat({
         {value}
       </T>
     </View>
-  );
-}
-
-/** Horizontal strip of lender brands for the loan sheet. */
-function BankPicker({
-  selectedId,
-  onSelect,
-}: {
-  selectedId: string | null;
-  onSelect: (id: string | null) => void;
-}) {
-  const { colors, radius, space } = useTheme();
-  const banks = BANKS.filter((bank) => bank.kind === 'bank');
-
-  return (
-    <View style={{ gap: space.sm }}>
-      <Label>LENDER</Label>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
-      >
-        {banks.map((brand) => {
-          const selected = selectedId === brand.id;
-          return (
-            <Pressable
-              key={brand.id}
-              onPress={() => onSelect(selected ? null : brand.id)}
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              accessibilityLabel={brand.name}
-              style={({ pressed }) => ({
-                alignItems: 'center',
-                gap: 4,
-                padding: 4,
-                borderRadius: radius.md,
-                borderWidth: 2,
-                borderColor: selected ? colors.ink : 'transparent',
-                opacity: pressed ? 0.75 : 1,
-              })}
-            >
-              <BankLogo brand={brand} size={44} />
-              <T variant="caption" tone={selected ? 'ink' : 'muted'} numberOfLines={1}>
-                {brand.shortName}
-              </T>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-    </View>
-  );
-}
-
-function LoanPreview({
-  amount,
-  rate,
-  years,
-}: {
-  amount: string;
-  rate: string;
-  years: string;
-}) {
-  const { colors, space } = useTheme();
-  const principal = parseAmount(amount);
-  const annualRate = Number.parseFloat(rate);
-  const termYears = Number.parseFloat(years);
-
-  if (!principal || !Number.isFinite(annualRate) || !Number.isFinite(termYears)) return null;
-
-  const summary = buildSchedule({
-    principalMinor: principal,
-    annualRatePct: annualRate,
-    termMonths: Math.round(termYears * 12),
-  });
-
-  return (
-    <Surface style={{ gap: space.sm, backgroundColor: colors.accentSoft }}>
-      <Label>PREVIEW</Label>
-      <Row justify="space-between">
-        <T variant="small">Monthly installment</T>
-        <T variant="figure">{formatMoney(summary.installmentMinor)}</T>
-      </Row>
-      <Row justify="space-between">
-        <T variant="small">Total interest</T>
-        <T variant="figure" color={colors.pending}>
-          {formatMoney(summary.totalInterestMinor)}
-        </T>
-      </Row>
-    </Surface>
   );
 }

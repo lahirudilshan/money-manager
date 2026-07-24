@@ -6,8 +6,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
 import { DayPicker } from '../../src/components/DayPicker';
 import { DragList } from '../../src/components/DragList';
-import { Divider, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
-import { formatMoney, parseAmount } from '../../src/core/money';
+import {
+  Divider,
+  GradientButton,
+  Label,
+  PinnedFooter,
+  Row,
+  Surface,
+  T,
+} from '../../src/components/ui';
+import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
 import { CATEGORY_CATALOG } from '../../src/data/categoryCatalog';
 import { useAppStore } from '../../src/store/useAppStore';
@@ -47,6 +55,11 @@ export default function OnboardingPlanScreen() {
     }
     return { income, expense, left: income - expense };
   }, [lines]);
+
+  // A plan is only meaningful once its lines carry amounts, so the finish
+  // action stays disabled until every picked line has a budget set.
+  const unsetCount = lines.filter((line) => line.plannedMinor <= 0).length;
+  const canBuild = lines.length > 0 && unsetCount === 0;
 
   /**
    * Commit the draft: create one category per catalog group that has picked
@@ -92,11 +105,16 @@ export default function OnboardingPlanScreen() {
         });
 
         if (line.type === 'income' && line.plannedMinor > 0) {
+          const isForeign = line.currency === 'usd' && line.foreignAmount != null;
           state.addIncome({
             name: line.name,
             amountMinor: line.plannedMinor,
             cardId: line.cardId ?? created.cardId ?? null,
-            icon: line.icon,
+            // Keep the original figure and rate so the row can show "$X @ rate"
+            // rather than only the converted local amount.
+            foreignAmount: isForeign ? line.foreignAmount : null,
+            foreignRate: isForeign ? state.usdRate : null,
+            icon: isForeign ? 'logo-usd' : line.icon,
             sortOrder: index,
           });
         }
@@ -104,15 +122,16 @@ export default function OnboardingPlanScreen() {
     }
 
     draft.reset();
-    router.push('/onboarding/done');
+    router.push('/onboarding/loans');
   }
 
   return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
     <ScrollView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+      style={{ flex: 1 }}
       contentContainerStyle={{
         paddingTop: insets.top + space.lg,
-        paddingBottom: insets.bottom + space.xl,
+        paddingBottom: space.lg,
         paddingHorizontal: space.lg,
         gap: space.lg,
       }}
@@ -120,7 +139,7 @@ export default function OnboardingPlanScreen() {
       showsVerticalScrollIndicator={false}
     >
       <View style={{ gap: 2 }}>
-        <Label>STEP 3 OF 3</Label>
+        <Label>STEP 3 OF 4</Label>
         <T variant="title">Set up your plan</T>
         <T variant="small" tone="muted">
           Tap a line to set its amount, day and account. Hold and drag to
@@ -168,13 +187,6 @@ export default function OnboardingPlanScreen() {
         )}
       />
 
-      <GradientButton
-        label="Build my plan"
-        icon="checkmark"
-        onPress={handleFinish}
-        disabled={lines.length === 0}
-      />
-
       {/* Editing opens a bottom sheet, so the fields are always in reach rather
           than pushed below a long scroll. */}
       <LineEditorSheet
@@ -182,6 +194,25 @@ export default function OnboardingPlanScreen() {
         onClose={() => setEditingId(null)}
       />
     </ScrollView>
+
+    <PinnedFooter>
+      <View style={{ gap: space.sm }}>
+        {unsetCount > 0 ? (
+          <Row justify="center">
+            <T variant="caption" tone="muted">
+              {unsetCount} line{unsetCount === 1 ? '' : 's'} still need an amount
+            </T>
+          </Row>
+        ) : null}
+        <GradientButton
+          label="Build my plan"
+          icon="checkmark"
+          onPress={handleFinish}
+          disabled={!canBuild}
+        />
+      </View>
+    </PinnedFooter>
+    </View>
   );
 }
 
@@ -358,12 +389,51 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
               </Row>
 
               <View style={{ gap: space.sm }}>
-                <Label>AMOUNT</Label>
+                <Row justify="space-between" align="center">
+                  <Label>AMOUNT</Label>
+                  {/* Income is often paid in USD; expenses are local. */}
+                  {line.type === 'income' ? (
+                    <Row gap={space.xs}>
+                      <Chip
+                        label={state.currency}
+                        selected={line.currency === 'local'}
+                        onPress={() =>
+                          draft.updateLine(line.id, { currency: 'local', foreignAmount: null })
+                        }
+                      />
+                      <Chip
+                        label="USD"
+                        selected={line.currency === 'usd'}
+                        onPress={() => draft.updateLine(line.id, { currency: 'usd' })}
+                      />
+                    </Row>
+                  ) : null}
+                </Row>
+
                 <TextInput
-                  value={line.plannedMinor > 0 ? String(line.plannedMinor / 100) : ''}
-                  onChangeText={(text) =>
-                    draft.updateLine(line.id, { plannedMinor: parseAmount(text) ?? 0 })
+                  value={
+                    line.currency === 'usd'
+                      ? line.foreignAmount
+                        ? String(line.foreignAmount)
+                        : ''
+                      : line.plannedMinor > 0
+                        ? String(line.plannedMinor / 100)
+                        : ''
                   }
+                  onChangeText={(text) => {
+                    if (line.currency === 'usd') {
+                      const foreign = Number.parseFloat(text.replace(/[^0-9.]/g, ''));
+                      const valid = Number.isFinite(foreign) ? foreign : null;
+                      draft.updateLine(line.id, {
+                        foreignAmount: valid,
+                        // Store the converted local value so every total the
+                        // plan shows stays in one currency.
+                        plannedMinor: valid ? convertToLocalMinor(valid, state.usdRate) : 0,
+                      });
+                    } else {
+                      draft.updateLine(line.id, { plannedMinor: parseAmount(text) ?? 0 });
+                    }
+                  }}
                   placeholder="0"
                   placeholderTextColor={colors.inkMuted}
                   keyboardType="numeric"
@@ -380,6 +450,12 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                     color: colors.ink,
                   }}
                 />
+
+                {line.currency === 'usd' ? (
+                  <T variant="caption" tone="muted">
+                    ≈ {formatMoney(line.plannedMinor)} at {state.currency} {state.usdRate} / USD
+                  </T>
+                ) : null}
               </View>
 
               <View style={{ gap: space.sm }}>
@@ -403,7 +479,8 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
 
               {state.cards.length > 0 ? (
                 <View style={{ gap: space.sm }}>
-                  <Label>PAID FROM</Label>
+                  {/* Income arrives *into* an account; expenses go *out of* one. */}
+                  <Label>{line.type === 'income' ? 'PAID IN TO' : 'PAID FROM'}</Label>
                   <View style={{ gap: space.sm }}>
                     {state.cards.map((card) => {
                       const brand = resolveBrand({

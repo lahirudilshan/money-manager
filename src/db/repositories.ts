@@ -179,6 +179,22 @@ export const stateRepo = {
   },
 
   /**
+   * How many months this subcategory has been marked paid, across every
+   * period. Drives saving-plan progress, which is derived from the checklist
+   * rather than a stored running total so the two can never disagree.
+   *
+   * Legacy `transferred`/`completed` rows count as paid, matching `readSubState`.
+   */
+  paidPeriodCount(subcategoryId: string): number {
+    const rows = db
+      .select()
+      .from(subcategoryStates)
+      .where(eq(subcategoryStates.subcategoryId, subcategoryId))
+      .all();
+    return rows.filter((row) => readSubState(row).status === 'paid').length;
+  },
+
+  /**
    * Set a bill's status for a period, creating the row on first touch. Upsert
    * keyed on (subcategoryId, period), which has a unique index.
    */

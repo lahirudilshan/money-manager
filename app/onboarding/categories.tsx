@@ -3,7 +3,15 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { LayoutAnimation, Platform, Pressable, ScrollView, UIManager, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Divider, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import {
+  Divider,
+  GradientButton,
+  Label,
+  PinnedFooter,
+  Row,
+  Surface,
+  T,
+} from '../../src/components/ui';
 import { CATEGORY_CATALOG, type CatalogCategory } from '../../src/data/categoryCatalog';
 import { useOnboardingDraft } from '../../src/store/useOnboardingDraft';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -38,18 +46,19 @@ export default function OnboardingCategoriesScreen() {
   }
 
   return (
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
     <ScrollView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+      style={{ flex: 1 }}
       contentContainerStyle={{
         paddingTop: insets.top + space.lg,
-        paddingBottom: insets.bottom + space.xl,
+        paddingBottom: space.lg,
         paddingHorizontal: space.lg,
         gap: space.lg,
       }}
       showsVerticalScrollIndicator={false}
     >
       <View style={{ gap: 2 }}>
-        <Label>STEP 2 OF 3</Label>
+        <Label>STEP 2 OF 4</Label>
         <T variant="title">What do you spend on?</T>
         <T variant="small" tone="muted">
           Tap a category to open it, then pick the lines you actually have.
@@ -71,6 +80,9 @@ export default function OnboardingCategoriesScreen() {
         ))}
       </View>
 
+    </ScrollView>
+
+    <PinnedFooter>
       <View style={{ gap: space.sm }}>
         <Row justify="center">
           <T variant="caption" tone="muted">
@@ -86,7 +98,8 @@ export default function OnboardingCategoriesScreen() {
           disabled={pickedCount === 0}
         />
       </View>
-    </ScrollView>
+    </PinnedFooter>
+    </View>
   );
 }
 

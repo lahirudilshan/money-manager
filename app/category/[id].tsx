@@ -185,7 +185,9 @@ export default function CategoryDetailScreen() {
           </View>
         </Surface>
 
-        {/* Bulk transfer — the salary→account move. */}
+        {/* Bulk transfer — the salary→account move. Income categories skip it:
+            that money arrives in the account on its own. */}
+        {view.isIncomeOnly ? null : (
         <View style={{ gap: space.sm }}>
           <Label>BULK TRANSFER</Label>
           <Pressable
@@ -252,6 +254,7 @@ export default function CategoryDetailScreen() {
             </T>
           ) : null}
         </View>
+        )}
 
         {/* Settings summary. */}
         <View style={{ gap: space.sm }}>
