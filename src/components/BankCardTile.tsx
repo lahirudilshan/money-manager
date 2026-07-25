@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { Pressable, View } from 'react-native';
-import { resolveBrand } from '../data/banks';
+import { useBrand } from '../hooks/useBrand';
 import type { Card } from '../db/schema';
 import { shadeHex } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
@@ -36,7 +36,7 @@ export function BankCardTile({
 }) {
   const { radius, shadow, space } = useTheme();
 
-  const brand = resolveBrand({
+  const brand = useBrand({
     bankId: card.bankId,
     bankName: card.bankName,
     name: card.name,

@@ -9,6 +9,14 @@ import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/stor
 import { syncCategoryReminders } from '../src/services/notifications';
 import { T } from '../src/components/ui';
 
+/**
+ * Options for a route whose screen renders its content inside the shared
+ * BottomSheet: the route itself is a transparent, non-animating overlay so the
+ * BottomSheet owns the backdrop fade and slide. One constant so every sheet
+ * route is configured identically.
+ */
+const SHEET_ROUTE = { presentation: 'transparentModal', animation: 'none' } as const;
+
 function RootNavigator() {
   const theme = useTheme();
   const router = useRouter();
@@ -119,16 +127,19 @@ function RootNavigator() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="onboarding" />
       <Stack.Screen name="category/[id]" />
-      <Stack.Screen name="category/new" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="category/edit/[id]" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="subcategory/[id]" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="transaction/new" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="transaction/unplanned" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="account/[id]" options={{ presentation: 'modal' }} />
+      {/* Modal routes render their content inside the shared BottomSheet, so
+          they present as the one app-wide sheet. `transparentModal` +
+          `animation: none` lets the BottomSheet own the backdrop and slide. */}
+      <Stack.Screen name="category/new" options={SHEET_ROUTE} />
+      <Stack.Screen name="category/edit/[id]" options={SHEET_ROUTE} />
+      <Stack.Screen name="subcategory/[id]" options={SHEET_ROUTE} />
+      <Stack.Screen name="transaction/new" options={SHEET_ROUTE} />
+      <Stack.Screen name="transaction/unplanned" options={SHEET_ROUTE} />
+      <Stack.Screen name="account/[id]" options={SHEET_ROUTE} />
       <Stack.Screen name="sms/index" />
-      <Stack.Screen name="sms/new" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="sms/[id]" options={{ presentation: 'modal' }} />
-      <Stack.Screen name="settings/sms-automation" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="sms/new" options={SHEET_ROUTE} />
+      <Stack.Screen name="sms/[id]" options={SHEET_ROUTE} />
+      <Stack.Screen name="settings/sms-automation" options={SHEET_ROUTE} />
     </Stack>
   );
 }

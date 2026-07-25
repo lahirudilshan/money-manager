@@ -3,10 +3,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Keyboard,
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -17,6 +19,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { STATUS_ICON, statusStyle, type StatusKey } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
+
+/** Pressable that can take Animated styles (for the fading sheet backdrop). */
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type TypeKey =
   | 'hero'
@@ -252,6 +257,12 @@ function useKeyboardHeight(enabled: boolean): number {
   return enabled ? height : 0;
 }
 
+/**
+ * A bottom action bar pinned below a scrolling body — a hairline-topped surface
+ * holding the page's primary button(s). Used by full-screen flows (onboarding
+ * steps) whose footer is part of the page rather than a modal; modals get their
+ * pinned footer from `BottomSheet`'s `footer` prop instead.
+ */
 export function PinnedFooter({
   children,
   flush = false,
@@ -261,10 +272,8 @@ export function PinnedFooter({
   flush?: boolean;
   /**
    * Lift the footer by the keyboard's height while it is open, instead of
-   * relying on a parent KeyboardAvoidingView. Use on screens where the KAV
-   * doesn't reach the window bottom (e.g. Expo Router modals), where the footer
-   * would otherwise stay hidden behind the keyboard. When the keyboard is up
-   * its own inset replaces the safe-area bottom padding.
+   * relying on a parent KeyboardAvoidingView. When the keyboard is up its own
+   * inset replaces the safe-area bottom padding.
    */
   followsKeyboard?: boolean;
 }) {
@@ -292,97 +301,206 @@ export function PinnedFooter({
 }
 
 /**
- * A sheet that slides up from the bottom, with a grab handle, a tap-to-dismiss
- * backdrop, and safe-area-aware bottom padding. Rounded top corners and a
- * capped height keep it reading as a sheet rather than a full page. Content is
- * whatever children are passed; a `title` renders a header row with a close
- * button. Prefer this over a centered dialog for pickers and short forms —
- * it's thumb-reachable and feels native on iOS.
+ * THE single modal for the whole app — a sheet that slides up from the bottom
+ * over a fading backdrop, with a grab handle, a rich header, a scroll/content
+ * area, and an optional pinned footer. Every modal and sheet uses this so they
+ * all look and behave identically (the "new bill in" style).
+ *
+ * Header: always an icon tile + `title`; an optional `eyebrow` shows a small
+ * uppercase context line above the title (e.g. "NEW BILL IN"). A close button
+ * sits at the right. Pass `footer` for a pinned bottom action bar (it lifts
+ * with the keyboard). `heightPct` sizes the sheet — forms want a tall sheet,
+ * short pickers can size to content via `maxHeightPct` instead.
  */
 export function BottomSheet({
   visible,
   onClose,
   title,
+  eyebrow,
+  icon,
+  iconColor,
+  footer,
   children,
   maxHeightPct = 0.85,
+  heightPct,
+  scroll = false,
 }: {
   visible: boolean;
   onClose: () => void;
   title?: string;
+  /** Small uppercase context line above the title (e.g. a parent category). */
+  eyebrow?: string;
+  /** Leading header icon. Defaults to a neutral list glyph when a title is set. */
+  icon?: keyof typeof Ionicons.glyphMap;
+  /** Background for the icon tile (e.g. a category colour). Defaults to accent. */
+  iconColor?: string;
+  /** Pinned footer action bar (keyboard-aware) — usually a GradientButton. */
+  footer?: React.ReactNode;
   children: React.ReactNode;
   /** Cap on the sheet's height as a fraction of the screen. */
   maxHeightPct?: number;
+  /** Fixed height as a fraction of the screen — use for forms so the footer pins. */
+  heightPct?: number;
+  /** Wrap children in a keyboard-aware ScrollView (for forms). */
+  scroll?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
   const insets = useSafeAreaInsets();
+  const keyboardHeight = useKeyboardHeight(Boolean(footer));
+
+  // Keep the modal mounted through the exit animation: `mounted` gates the
+  // native Modal, `anim` drives the backdrop fade and sheet slide together.
+  const [mounted, setMounted] = React.useState(visible);
+  const anim = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      Animated.timing(anim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    } else if (mounted) {
+      Animated.timing(anim, { toValue: 0, duration: 180, useNativeDriver: true }).start(
+        ({ finished }) => {
+          if (finished) setMounted(false);
+        },
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  if (!mounted) return null;
+
+  // Backdrop fades in/out; the sheet slides up from just below the screen.
+  const backdropOpacity = anim;
+  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [600, 0] });
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      {/* Backdrop — tap outside the sheet to dismiss. */}
-      <Pressable
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-        style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}
-      >
-        {/* Swallow taps on the sheet body so they don't close it. */}
-        <Pressable
-          onPress={() => {}}
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        {/* Fading backdrop — tap outside the sheet to dismiss. */}
+        <AnimatedPressable
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
           style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: colors.overlay,
+            opacity: backdropOpacity,
+          }}
+        />
+        {/* Sliding sheet; swallows taps so they don't close it. */}
+        <Animated.View
+          style={{
+            transform: [{ translateY }],
             backgroundColor: colors.surface,
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
-            paddingBottom: insets.bottom + space.md,
-            maxHeight: `${Math.round(maxHeightPct * 100)}%`,
+            overflow: 'hidden',
+            ...(heightPct
+              ? { height: `${Math.round(heightPct * 100)}%` }
+              : { maxHeight: `${Math.round(maxHeightPct * 100)}%` }),
           }}
         >
           {/* Grab handle. */}
           <View style={{ alignItems: 'center', paddingTop: space.sm, paddingBottom: space.xs }}>
             <View
-              style={{
-                width: 40,
-                height: 5,
-                borderRadius: 999,
-                backgroundColor: colors.hairlineStrong,
-              }}
+              style={{ width: 40, height: 5, borderRadius: radius.pill, backgroundColor: colors.hairlineStrong }}
             />
           </View>
 
+          {/* Rich header: icon tile + optional eyebrow + title + close. */}
           {title ? (
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                paddingLeft: space.lg,
-                paddingRight: space.lg - space.xs,
-                paddingTop: space.xs,
-                // Same breathing room below the header as SheetHeader.
-                paddingBottom: space.md,
-              }}
-            >
-              <T variant="title">{title}</T>
-              <Pressable
-                onPress={onClose}
-                accessibilityRole="button"
-                accessibilityLabel="Close"
-                style={({ pressed }) => ({
-                  width: 40,
-                  height: 40,
-                  borderRadius: 20,
+            <>
+              <View
+                style={{
+                  flexDirection: 'row',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-                })}
+                  gap: space.md,
+                  paddingLeft: space.lg,
+                  paddingRight: space.lg - space.xs,
+                  paddingTop: space.xs,
+                  paddingBottom: space.md,
+                }}
               >
-                <Ionicons name="close" size={24} color={colors.inkSecondary} />
-              </Pressable>
-            </View>
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: radius.md,
+                    backgroundColor: iconColor ?? colors.accent,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons name={(icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  {eyebrow ? (
+                    <T variant="caption" tone="muted">
+                      {eyebrow.toUpperCase()}
+                    </T>
+                  ) : null}
+                  <T variant="heading" numberOfLines={1}>
+                    {title}
+                  </T>
+                </View>
+                <Pressable
+                  onPress={onClose}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                  style={({ pressed }) => ({
+                    width: 40,
+                    height: 40,
+                    borderRadius: radius.pill,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                  })}
+                >
+                  <Ionicons name="close" size={24} color={colors.inkSecondary} />
+                </Pressable>
+              </View>
+              <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.hairline }} />
+            </>
           ) : null}
 
-          {children}
-        </Pressable>
-      </Pressable>
+          {/* Body — optionally a keyboard-aware scroll area so it flexes and the
+              footer pins to the bottom. */}
+          {scroll ? (
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ padding: space.lg, gap: space.lg }}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {children}
+            </ScrollView>
+          ) : (
+            children
+          )}
+
+          {/* Pinned footer — lifts with the keyboard when open. */}
+          {footer ? (
+            <View
+              style={{
+                paddingHorizontal: space.lg,
+                paddingTop: space.sm,
+                paddingBottom: (keyboardHeight > 0 ? keyboardHeight : insets.bottom) + space.sm,
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: colors.hairline,
+                backgroundColor: colors.surface,
+              }}
+            >
+              {footer}
+            </View>
+          ) : (
+            <View style={{ height: insets.bottom + space.md }} />
+          )}
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
@@ -803,5 +921,282 @@ export function GroupTile({
         </T>
       </View>
     </Pressable>
+  );
+}
+
+/**
+ * The one list-row primitive: a leading visual, a title + optional subtitle
+ * column, an optional trailing node (a value, a switch, a badge…), and an
+ * optional chevron. Tappable when `onPress` is given. This replaces the ~18
+ * hand-rolled `Pressable{row}` variants across the app so every row shares the
+ * same height, padding, press feedback and alignment.
+ *
+ * `leading` is any node (a BankLogo, a Glyph, an icon tile). `trailing` is any
+ * node shown right-aligned before the chevron. Keep row-specific decoration in
+ * those slots; the shell only owns layout.
+ */
+export function ListRow({
+  leading,
+  title,
+  subtitle,
+  trailing,
+  chevron = false,
+  onPress,
+  titleColor,
+  strikethrough = false,
+  accessibilityLabel,
+}: {
+  leading?: React.ReactNode;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  trailing?: React.ReactNode;
+  chevron?: boolean;
+  onPress?: () => void;
+  titleColor?: string;
+  strikethrough?: boolean;
+  accessibilityLabel?: string;
+}) {
+  const { colors, space } = useTheme();
+
+  const body = (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+      }}
+    >
+      {leading}
+      <View style={{ flex: 1, gap: 1 }}>
+        {typeof title === 'string' ? (
+          <T
+            variant="bodyStrong"
+            numberOfLines={1}
+            color={titleColor}
+            style={strikethrough ? { textDecorationLine: 'line-through' } : undefined}
+          >
+            {title}
+          </T>
+        ) : (
+          title
+        )}
+        {subtitle != null ? (
+          typeof subtitle === 'string' ? (
+            <T variant="caption" tone="muted" numberOfLines={1}>
+              {subtitle}
+            </T>
+          ) : (
+            subtitle
+          )
+        ) : null}
+      </View>
+      {trailing}
+      {chevron ? <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} /> : null}
+    </View>
+  );
+
+  if (!onPress) return body;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+    >
+      {body}
+    </Pressable>
+  );
+}
+
+/**
+ * A labelled figure — the small "LABEL / value" stat repeated across every
+ * summary card and hero. `inline` lays it out as a label↔value row (for stacked
+ * lists like "This month"); the default stacks the label over the figure (for
+ * hero rows). `onDark` switches to white-on-gradient treatment. Replaces the
+ * per-screen HeroStat / SummaryStat / StatRow / CardStat re-declarations.
+ */
+export function Stat({
+  label,
+  value,
+  color,
+  inline = false,
+  onDark = false,
+  large = false,
+  align = 'flex-start',
+}: {
+  label: string;
+  value: string;
+  color?: string;
+  inline?: boolean;
+  onDark?: boolean;
+  large?: boolean;
+  align?: ViewStyle['alignItems'];
+}) {
+  const { colors } = useTheme();
+  const labelColor = onDark ? 'rgba(255,255,255,0.65)' : undefined;
+  const valueColor = color ?? (onDark ? '#FFFFFF' : colors.ink);
+
+  if (inline) {
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <T variant="small" tone={onDark ? undefined : 'secondary'} color={onDark ? 'rgba(255,255,255,0.75)' : undefined}>
+          {label}
+        </T>
+        <T variant="figure" color={valueColor}>
+          {value}
+        </T>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ gap: 2, alignItems: align }}>
+      <Label color={labelColor}>{label}</Label>
+      <T variant={large ? 'figureLarge' : 'figure'} color={valueColor} numberOfLines={1}>
+        {value}
+      </T>
+    </View>
+  );
+}
+
+/**
+ * A label ↔ value row for detail sheets (account number, branch, expiry…), with
+ * an optional trailing action (e.g. a reveal eye). One definition replaces the
+ * byte-identical copies that lived in cards.tsx and account/[id].tsx.
+ */
+export function DetailRow({
+  label,
+  value,
+  action,
+}: {
+  label: string;
+  value: string;
+  action?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void };
+}) {
+  const { colors, space } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+      }}
+    >
+      <T variant="small" tone="muted">
+        {label}
+      </T>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
+        <T variant="small" style={{ fontWeight: '600' }}>
+          {value}
+        </T>
+        {action ? (
+          <Pressable
+            onPress={action.onPress}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+          >
+            <Ionicons name={action.icon} size={18} color={colors.accent} />
+          </Pressable>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * A fixed screen header — a safe-area-aware bar with an optional back chevron, a
+ * title, and an optional right action (or arbitrary `right` node), over a
+ * hairline bottom border. Stays put while the body scrolls beneath it. Replaces
+ * the hand-rolled fixed headers on the accounts/income/etc. screens so they
+ * share one structure, spacing and back-button treatment.
+ */
+export function AppHeader({
+  title,
+  onBack,
+  action,
+  right,
+}: {
+  title: string;
+  onBack?: () => void;
+  action?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void; label: string };
+  right?: React.ReactNode;
+}) {
+  const { colors, space } = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={{
+        paddingTop: insets.top + space.md,
+        paddingHorizontal: space.lg,
+        paddingBottom: space.sm,
+        backgroundColor: colors.canvas,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.hairline,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      {onBack ? (
+        <Pressable onPress={onBack} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back">
+          <Ionicons name="chevron-back" size={24} color={colors.ink} />
+        </Pressable>
+      ) : (
+        <View style={{ width: 24 }} />
+      )}
+      <T variant="title">{title}</T>
+      {right ??
+        (action ? (
+          <Pressable
+            onPress={action.onPress}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={action.label}
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Ionicons name={action.icon} size={28} color={colors.accent} />
+          </Pressable>
+        ) : (
+          <View style={{ width: 24 }} />
+        ))}
+    </View>
+  );
+}
+
+/**
+ * A titled group: a section label (with an optional note) over a Surface that
+ * holds a set of rows, divided from the header. The standard way to present a
+ * grouped list — replaces the per-screen `<Label>` + `<Surface padded={false}>`
+ * reimplementations (settings, income, accounts, category/account detail…).
+ */
+export function Section({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note?: string;
+  children: React.ReactNode;
+}) {
+  const { space } = useTheme();
+  return (
+    <Surface style={{ gap: space.xs }} padded={false}>
+      <View style={{ padding: space.lg, paddingBottom: note ? space.xs : space.md, gap: space.xs }}>
+        <Label>{title}</Label>
+        {note ? (
+          <T variant="caption" tone="muted">
+            {note}
+          </T>
+        ) : null}
+      </View>
+      <Divider />
+      {children}
+    </Surface>
   );
 }

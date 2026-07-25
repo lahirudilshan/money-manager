@@ -1,9 +1,10 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { ScrollView, View } from 'react-native';
-import { Field, ModalScreen } from '../../src/components/forms';
-import { GradientButton, Label, PinnedFooter, T } from '../../src/components/ui';
+import { View } from 'react-native';
+import { Field } from '../../src/components/forms';
+import { BottomSheet, GradientButton, Label, T } from '../../src/components/ui';
 import { DayPicker } from '../../src/components/DayPicker';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { parseAmount } from '../../src/core/money';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -16,7 +17,7 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  */
 export default function AddUnplannedTransaction() {
   const { colors, space } = useTheme();
-  const router = useRouter();
+  const closeModal = useModalClose();
   const { subcategoryId } = useLocalSearchParams<{ subcategoryId: string }>();
   const state = useAppStore();
 
@@ -40,46 +41,40 @@ export default function AddUnplannedTransaction() {
     const [year, month] = state.period.split('-').map(Number);
     const date = new Date(year, month - 1, day);
     state.addTransaction({ subcategoryId, name: name.trim(), amountMinor, date });
-    router.back();
+    closeModal();
   }
 
   return (
-    <ModalScreen title="Add entry" onClose={() => router.back()}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingTop: space.md,
-          paddingHorizontal: space.lg,
-          paddingBottom: space.xl,
-          gap: space.lg,
-        }}
-        keyboardShouldPersistTaps="handled"
-      >
-        {subcategory ? (
-          <T variant="small" tone="muted">
-            Adding to <T variant="small" color={colors.ink} style={{ fontWeight: '700' }}>{subcategory.name}</T>.
-            The line&apos;s total is the sum of its entries.
-          </T>
-        ) : null}
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title="Add entry"
+      eyebrow={subcategory ? `Entry in ${subcategory.name}` : undefined}
+      icon="add-circle-outline"
+      iconColor={colors.accent}
+      heightPct={0.85}
+      scroll
+      footer={<GradientButton label="Add entry" icon="add" onPress={handleSave} disabled={!canSave} />}
+    >
+      {subcategory ? (
+        <T variant="small" tone="muted">
+          The line&apos;s total is the sum of its entries.
+        </T>
+      ) : null}
 
-        <Field label="What was it?" value={name} onChangeText={setName} placeholder="e.g. Keells run" autoFocus />
-        <Field
-          label="Amount"
-          value={amount}
-          onChangeText={setAmount}
-          keyboardType="decimal-pad"
-          placeholder="0"
-        />
+      <Field label="What was it?" value={name} onChangeText={setName} placeholder="e.g. Keells run" autoFocus />
+      <Field
+        label="Amount"
+        value={amount}
+        onChangeText={setAmount}
+        keyboardType="decimal-pad"
+        placeholder="0"
+      />
 
-        <View style={{ gap: space.sm }}>
-          <Label>Day of month</Label>
-          <DayPicker value={day} onChange={setDay} />
-        </View>
-      </ScrollView>
-
-      <PinnedFooter followsKeyboard>
-        <GradientButton label="Add entry" icon="add" onPress={handleSave} disabled={!canSave} />
-      </PinnedFooter>
-    </ModalScreen>
+      <View style={{ gap: space.sm }}>
+        <Label>Day of month</Label>
+        <DayPicker value={day} onChange={setDay} />
+      </View>
+    </BottomSheet>
   );
 }

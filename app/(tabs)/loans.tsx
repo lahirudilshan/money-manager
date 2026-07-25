@@ -1,9 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SheetHeader } from '../../src/components/forms';
 import {
   emptyLoanDraft,
   isLoanDraftValid,
@@ -12,12 +11,12 @@ import {
   type LoanDraft,
 } from '../../src/components/LoanForm';
 import {
+  BottomSheet,
   Divider,
   Empty,
   FundingBar,
   GradientButton,
   Label,
-  PinnedFooter,
   Row,
   Surface,
   T,
@@ -25,7 +24,7 @@ import {
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { buildSchedule } from '../../src/core/amortization';
 import { formatMoney } from '../../src/core/money';
-import { resolveBrand } from '../../src/data/banks';
+import { useBrand } from '../../src/hooks/useBrand';
 import { selectLoanViews, useAppStore, type LoanView } from '../../src/store/useAppStore';
 import { shadeHex } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -169,37 +168,25 @@ export default function LoansScreen() {
         )}
       </ScrollView>
 
-      <Modal
+      <BottomSheet
         visible={open}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setOpen(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={{ flex: 1, backgroundColor: colors.canvas }}
-        >
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
-          <SheetHeader title="New loan" onClose={() => setOpen(false)} />
-        </View>
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <LoanForm draft={draft} onChange={setDraft} />
-        </ScrollView>
-
-        <PinnedFooter>
+        onClose={() => setOpen(false)}
+        title="New loan"
+        icon="cash-outline"
+        iconColor={colors.pending}
+        heightPct={0.9}
+        scroll
+        footer={
           <GradientButton
             label="Add loan"
             icon="add"
             onPress={handleCreate}
             disabled={!isLoanDraftValid(draft)}
           />
-        </PinnedFooter>
-        </KeyboardAvoidingView>
-      </Modal>
+        }
+      >
+          <LoanForm draft={draft} onChange={setDraft} />
+      </BottomSheet>
     </>
   );
 }
@@ -220,7 +207,7 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
   const [year, setYear] = useState(Math.floor(view.paidCount / 12) + 1);
   const { loan } = view;
 
-  const brand = resolveBrand({ bankId: loan.bankId, name: loan.name });
+  const brand = useBrand({ bankId: loan.bankId, name: loan.name });
   const accent = colors.pending;
 
   const totalYears = Math.ceil(loan.termMonths / 12);
@@ -538,24 +525,3 @@ function CardStat({
 }
 
 /** A labelled figure in the loans summary hero. */
-function SummaryStat({
-  label,
-  value,
-  color,
-  align = 'flex-start',
-}: {
-  label: string;
-  value: string;
-  color?: string;
-  align?: 'flex-start' | 'flex-end';
-}) {
-  const { colors } = useTheme();
-  return (
-    <View style={{ gap: 2, alignItems: align }}>
-      <Label color={colors.pending}>{label}</Label>
-      <T variant="figureLarge" color={color}>
-        {value}
-      </T>
-    </View>
-  );
-}

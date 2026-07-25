@@ -2,9 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
   LayoutAnimation,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -22,20 +20,22 @@ import {
   toSavingPlanPatch,
   type SavingPlanDraft,
 } from '../../src/components/SavingPlanFields';
-import { Field } from '../../src/components/forms';
+import { AmountField, Field, FrequencyPicker } from '../../src/components/forms';
+import type { SubcategoryFrequency } from '../../src/db/schema';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import {
+  BottomSheet,
   Divider,
   Empty,
   GradientButton,
   Label,
-  PinnedFooter,
   Row,
+  Stat,
   Surface,
   T,
 } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { formatPeriod, isFlexibleDueDay, resolveCardId } from '../../src/core/planning';
+import { effectiveAmount, formatPeriod, isFlexibleDueDay, resolveCardId } from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
@@ -356,14 +356,7 @@ export default function ListScreen() {
 }
 
 function SummaryStat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <View style={{ gap: 1 }}>
-      <Label>{label}</Label>
-      <T variant="figureLarge" color={color}>
-        {value}
-      </T>
-    </View>
-  );
+  return <Stat label={label} value={value} color={color} large />;
 }
 
 function ProgressBar({ pct, color, height = 8 }: { pct: number; color: string; height?: number }) {
@@ -534,7 +527,7 @@ function CategoryCard({
           {subcategories.map((line, index) => {
             const raw = view.rawSubcategories.find((s) => s.id === line.id);
             const paid = line.status === 'paid';
-            const amount = line.actualMinor ?? line.plannedMinor;
+            const amount = effectiveAmount(line);
             // Unplanned lines are never "paid" as a whole — their spend is a
             // running total of entries — so they get an indicator, not a
             // tap-to-pay checkbox.
@@ -695,14 +688,6 @@ function CategoryCard({
   );
 }
 
-const FREQUENCIES = [
-  { key: 'monthly', label: 'Monthly' },
-  { key: 'one_time', label: 'One-time' },
-  { key: 'yearly', label: 'Yearly' },
-  { key: 'unplanned', label: 'Unplanned' },
-] as const;
-
-type BillFrequency = 'monthly' | 'one_time' | 'yearly' | 'unplanned';
 
 /**
  * Bottom-sheet for adding a bill to a known parent category.
@@ -726,7 +711,7 @@ function AddSubcategorySheet({
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDay, setDueDay] = useState(1);
-  const [frequency, setFrequency] = useState<BillFrequency>('monthly');
+  const [frequency, setFrequency] = useState<SubcategoryFrequency>('monthly');
   // null means "use the category's account"; a value overrides it for this bill.
   const [cardId, setCardId] = useState<string | null>(null);
   const [plan, setPlan] = useState<SavingPlanDraft>(emptySavingPlanDraft);
@@ -774,128 +759,44 @@ function AddSubcategorySheet({
   const effectiveCardId = resolveCardId(cardId, category?.cardId);
 
   return (
-    <Modal visible={Boolean(category)} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-        style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}
-      >
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.canvas,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            // A tall fixed height (not max-height) gives the inner column real
-            // vertical space, so the ScrollView can flex and the footer pins to
-            // the bottom rather than floating up under short content.
-            height: '90%',
-            overflow: 'hidden',
-          }}
-        >
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={{ flex: 1 }}
-          >
-            {/* Fixed header: grab handle + parent category. */}
-            <View style={{ paddingTop: space.sm, paddingHorizontal: space.lg }}>
-              <View
-                style={{
-                  alignSelf: 'center',
-                  width: 40,
-                  height: 4,
-                  borderRadius: 2,
-                  backgroundColor: colors.hairlineStrong,
-                  marginBottom: space.md,
-                }}
-              />
-              <Row gap={space.md} style={{ paddingBottom: space.md }}>
-                <View
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: radius.md,
-                    backgroundColor: category?.color ?? colors.accent,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Ionicons
-                    name={(category?.icon ?? 'albums-outline') as never}
-                    size={20}
-                    color="#FFFFFF"
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <T variant="caption" tone="muted">
-                    NEW BILL IN
-                  </T>
-                  <T variant="bodyStrong" numberOfLines={1}>
-                    {category?.name ?? ''}
-                  </T>
-                </View>
-                <Pressable
-                  onPress={onClose}
-                  hitSlop={10}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close"
-                >
-                  <Ionicons name="close" size={24} color={colors.inkSecondary} />
-                </Pressable>
-              </Row>
-              <Divider />
-            </View>
-
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={{ padding: space.lg, gap: space.xl }}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
+    <BottomSheet
+      visible={Boolean(category)}
+      onClose={onClose}
+      title={category?.name ?? ''}
+      eyebrow="New bill in"
+      icon={(category?.icon ?? 'albums-outline') as keyof typeof Ionicons.glyphMap}
+      iconColor={category?.color ?? colors.accent}
+      heightPct={0.9}
+      scroll
+      footer={
+        <GradientButton
+          label="Add bill"
+          icon="add"
+          onPress={handleAdd}
+          disabled={!canAdd}
+        />
+      }
+    >
               {/* Amount hero — hidden for unplanned bills, which have no single
                   planned amount (their total is the sum of their entries).
                   With a saving plan the monthly figure is derived from the plan. */}
               {!unplanned ? (
-              <View style={{ alignItems: 'center', gap: 4 }}>
-                <Label>{plan.enabled && frequency === 'yearly' ? 'MONTHLY SET-ASIDE' : 'AMOUNT'}</Label>
-                <Row gap={space.xs} align="center">
-                  <T variant="title" tone="muted">
-                    {state.currency}
-                  </T>
-                  {plan.enabled && frequency === 'yearly' ? (
-                    <T
-                      style={{
-                        fontSize: 42,
-                        fontWeight: '800',
-                        letterSpacing: -1.2,
-                        color: planPatch ? colors.ink : colors.inkMuted,
-                      }}
-                    >
-                      {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
-                    </T>
-                  ) : (
-                    <TextInput
-                      value={amount}
-                      onChangeText={setAmount}
-                      keyboardType="numeric"
-                      placeholder="0"
-                      placeholderTextColor={colors.inkFaint}
-                      autoFocus
-                      accessibilityLabel="Amount"
-                      style={{
-                        fontSize: 42,
-                        fontWeight: '800',
-                        letterSpacing: -1.2,
-                        color: colors.ink,
-                        minWidth: 110,
-                        textAlign: 'center',
-                        padding: 0,
-                      }}
-                    />
-                  )}
-                </Row>
-              </View>
+                plan.enabled && frequency === 'yearly' ? (
+                  // Saving plan: the monthly figure is derived, shown read-only.
+                  <View style={{ alignItems: 'center', gap: 4 }}>
+                    <Label>MONTHLY SET-ASIDE</Label>
+                    <Row gap={space.xs} align="center">
+                      <T variant="title" tone="muted">
+                        {state.currency}
+                      </T>
+                      <T style={{ fontSize: 42, fontWeight: '800', letterSpacing: -1.2, color: planPatch ? colors.ink : colors.inkMuted }}>
+                        {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
+                      </T>
+                    </Row>
+                  </View>
+                ) : (
+                  <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} autoFocus />
+                )
               ) : null}
 
               <Field
@@ -922,41 +823,13 @@ function AddSubcategorySheet({
                 </View>
               ) : null}
 
-              {/* Frequency. */}
-              <View style={{ gap: space.sm }}>
-                <Label>HOW OFTEN?</Label>
-                <Row gap={space.sm}>
-                  {FREQUENCIES.map((f) => {
-                    const selected = frequency === f.key;
-                    return (
-                      <Pressable
-                        key={f.key}
-                        onPress={() => setFrequency(f.key)}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected }}
-                        style={({ pressed }) => ({
-                          flex: 1,
-                          alignItems: 'center',
-                          paddingVertical: 11,
-                          borderRadius: radius.md,
-                          borderWidth: 1.5,
-                          borderColor: selected ? colors.accent : colors.hairline,
-                          backgroundColor: selected ? colors.accentSoft : colors.surface,
-                          opacity: pressed ? 0.75 : 1,
-                        })}
-                      >
-                        <T
-                          variant="small"
-                          color={selected ? colors.accentInk : colors.inkSecondary}
-                          style={{ fontWeight: selected ? '700' : '500' }}
-                        >
-                          {f.label}
-                        </T>
-                      </Pressable>
-                    );
-                  })}
-                </Row>
-              </View>
+              {/* Frequency — shared picker (includes unplanned for bills). */}
+              <FrequencyPicker
+                label="How often?"
+                value={frequency}
+                onChange={setFrequency}
+                includeUnplanned
+              />
 
               {/* Payment day — not applicable to unplanned bills. */}
               {!unplanned ? <DayPicker value={dueDay} onChange={setDueDay} /> : null}
@@ -966,20 +839,7 @@ function AddSubcategorySheet({
               {frequency === 'yearly' ? (
                 <SavingPlanFields draft={plan} onChange={setPlan} />
               ) : null}
-            </ScrollView>
-
-            <PinnedFooter>
-              <GradientButton
-                label="Add bill"
-                icon="add"
-                onPress={handleAdd}
-                disabled={!canAdd}
-              />
-            </PinnedFooter>
-          </KeyboardAvoidingView>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }
 

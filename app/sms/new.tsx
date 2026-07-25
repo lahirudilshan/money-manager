@@ -1,9 +1,9 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, ModalScreen } from '../../src/components/forms';
-import { GradientButton, PinnedFooter, T } from '../../src/components/ui';
+import { View } from 'react-native';
+import { Field } from '../../src/components/forms';
+import { BottomSheet, GradientButton, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { formatMoney } from '../../src/core/money';
 import { parseSms } from '../../src/core/smsParser';
 import { useAppStore } from '../../src/store/useAppStore';
@@ -19,8 +19,8 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  */
 export default function PasteSmsScreen() {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
+  const closeModal = useModalClose();
   const ingestSmsText = useAppStore((s) => s.ingestSmsText);
 
   const [text, setText] = useState('');
@@ -41,17 +41,16 @@ export default function PasteSmsScreen() {
   }
 
   return (
-    <ModalScreen title="Paste a message" onClose={() => router.back()}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingTop: space.md,
-          paddingHorizontal: space.lg,
-          paddingBottom: space.xl,
-          gap: space.lg,
-        }}
-        keyboardShouldPersistTaps="handled"
-      >
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title="Paste a message"
+      icon="chatbox-ellipses-outline"
+      iconColor={colors.accent}
+      heightPct={0.85}
+      scroll
+      footer={<GradientButton label="Add draft" icon="add" onPress={onAdd} />}
+    >
         <T variant="small" tone="muted">
           Paste a bank or utility SMS. We read the amount, who it was for, and the date, then add a
           draft you confirm on the dashboard.
@@ -111,11 +110,6 @@ export default function PasteSmsScreen() {
             {error}
           </T>
         ) : null}
-      </ScrollView>
-
-      <PinnedFooter followsKeyboard>
-        <GradientButton label="Add draft" icon="add" onPress={onAdd} />
-      </PinnedFooter>
-    </ModalScreen>
+    </BottomSheet>
   );
 }

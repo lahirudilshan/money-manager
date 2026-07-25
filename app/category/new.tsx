@@ -1,41 +1,33 @@
-import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AccountField } from '../../src/components/AccountPicker';
 import { DayPicker } from '../../src/components/DayPicker';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
-import { GradientButton, PinnedFooter, T } from '../../src/components/ui';
+import { Field, IconPicker } from '../../src/components/forms';
+import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '../../src/data/categoryIcons';
+import { BottomSheet, GradientButton, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
-const CATEGORY_ICONS = [
-  { key: 'home-outline', label: 'Home', icon: 'home-outline' as const },
-  { key: 'basket-outline', label: 'Living', icon: 'basket-outline' as const },
-  { key: 'card-outline', label: 'Loans', icon: 'card-outline' as const },
-  { key: 'car-sport-outline', label: 'Vehicle', icon: 'car-sport-outline' as const },
-  { key: 'repeat-outline', label: 'Subs', icon: 'repeat-outline' as const },
-  { key: 'albums-outline', label: 'Other', icon: 'albums-outline' as const },
-];
-
-const FREQUENCIES = [
-  { key: 'monthly', label: 'Monthly' },
-  { key: 'yearly', label: 'Yearly' },
-  { key: 'one_time', label: 'One-time' },
-] as const;
-
-type Frequency = 'monthly' | 'one_time' | 'yearly';
 
 export default function NewCategoryScreen() {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
+  const closeModal = useModalClose();
   const state = useAppStore();
 
   const [name, setName] = useState('');
-  const [icon, setIcon] = useState(CATEGORY_ICONS[0].key);
+  const [icon, setIcon] = useState<keyof typeof Ionicons.glyphMap>(DEFAULT_CATEGORY_ICON);
+  const [iconTouched, setIconTouched] = useState(false);
   const [cardId, setCardId] = useState<string | null>(state.cards[0]?.id ?? null);
   const [dueDay, setDueDay] = useState(1);
-  const [frequency, setFrequency] = useState<Frequency>('monthly');
+
+  function onNameChange(next: string) {
+    setName(next);
+    if (!iconTouched) {
+      const suggested = suggestCategoryIcon(next);
+      if (suggested) setIcon(suggested);
+    }
+  }
 
   function handleCreate() {
     const trimmed = name.trim();
@@ -46,47 +38,47 @@ export default function NewCategoryScreen() {
       cardId,
       icon,
       dueDay,
-      defaultFrequency: frequency,
+      // A category has no cadence of its own — only its bills do. New bills
+      // default to monthly (the schema default) and each sets its own "How
+      // often?" when added.
       sortOrder: state.categories.length,
     });
-    router.back();
+    closeModal();
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title="New category"
+      icon={icon}
+      iconColor={colors.accent}
+      heightPct={0.9}
+      scroll
+      footer={
+        <GradientButton
+          label="Create category"
+          icon="checkmark"
+          onPress={handleCreate}
+          disabled={!name.trim()}
+        />
+      }
     >
-      <View style={{ paddingTop: insets.top + space.md, paddingHorizontal: space.lg }}>
-        <SheetHeader title="New category" onClose={() => router.back()} />
-      </View>
-
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingTop: space.md,
-          paddingBottom: space.xl,
-          paddingHorizontal: space.lg,
-          gap: space.lg,
-        }}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
         <Field
           label="Name"
           value={name}
-          onChangeText={setName}
+          onChangeText={onNameChange}
           placeholder="e.g. Home Expenses"
           autoFocus
         />
 
-        <PillSelect label="Icon" options={CATEGORY_ICONS} selectedKey={icon} onSelect={setIcon} />
+        <IconPicker value={icon} onChange={(next) => { setIcon(next); setIconTouched(true); }} accent={colors.accent} />
 
         {state.cards.length > 0 ? (
-          <PillSelect
+          <AccountField
             label="Transfer money to"
-            options={state.cards.map((card) => ({ key: card.id, label: card.name }))}
-            selectedKey={cardId}
+            cards={state.cards}
+            selectedId={cardId}
             onSelect={setCardId}
           />
         ) : (
@@ -95,24 +87,7 @@ export default function NewCategoryScreen() {
           </T>
         )}
 
-        <PillSelect
-          label="Default frequency for new bills"
-          options={FREQUENCIES.map((f) => ({ key: f.key, label: f.label }))}
-          selectedKey={frequency}
-          onSelect={(key) => setFrequency(key as Frequency)}
-        />
-
         <DayPicker value={dueDay} onChange={setDueDay} />
-      </ScrollView>
-
-      <PinnedFooter>
-        <GradientButton
-          label="Create category"
-          icon="checkmark"
-          onPress={handleCreate}
-          disabled={!name.trim()}
-        />
-      </PinnedFooter>
-    </KeyboardAvoidingView>
+    </BottomSheet>
   );
 }

@@ -1,8 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
-import React from 'react';
-import { Pressable, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
+import React, { useState } from 'react';
+import { Pressable, ScrollView, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ALL_ICONS, CATEGORY_ICONS } from '../data/categoryIcons';
+import {
+  CATEGORY_DEFAULT_FREQUENCIES,
+  FREQUENCY_LABEL,
+  SUBCATEGORY_FREQUENCIES,
+  type SubcategoryFrequency,
+} from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
-import { Label, T } from './ui';
+import { BottomSheet, Label, T } from './ui';
 
 /** The single styled input used by every form. */
 export function Field({
@@ -127,117 +135,286 @@ export function PillSelect({
   );
 }
 
-export function ColorPicker({
-  label = 'Colour',
-  colors: swatches,
-  selectedIndex,
-  onSelect,
+/**
+ * A currency amount input. Two looks from one component:
+ *  - `hero` (default): a large, centered figure with the currency as a muted
+ *    prefix — the headline "how much" on add/log screens.
+ *  - non-hero: a bordered field like any other, for a secondary amount.
+ * Replaces the four separately-tuned big-number inputs across the app so the
+ * headline amount looks identical everywhere.
+ */
+export function AmountField({
+  value,
+  onChangeText,
+  currency,
+  label,
+  hero = true,
+  autoFocus,
+  placeholder = '0',
+}: {
+  value: string;
+  onChangeText: (text: string) => void;
+  currency: string;
+  label?: string;
+  hero?: boolean;
+  autoFocus?: boolean;
+  placeholder?: string;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  if (!hero) {
+    return (
+      <View style={{ gap: space.sm }}>
+        {label ? <Label>{label}</Label> : null}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: space.sm,
+            backgroundColor: colors.surface,
+            borderRadius: radius.md,
+            borderWidth: 1,
+            borderColor: colors.hairline,
+            paddingHorizontal: space.md,
+          }}
+        >
+          <T variant="small" tone="muted">
+            {currency}
+          </T>
+          <TextInput
+            value={value}
+            onChangeText={onChangeText}
+            keyboardType="numeric"
+            autoFocus={autoFocus}
+            placeholder={placeholder}
+            placeholderTextColor={colors.inkFaint}
+            accessibilityLabel={label ?? 'Amount'}
+            style={{ flex: 1, paddingVertical: 13, fontSize: 16, fontWeight: '400', color: colors.ink, letterSpacing: 0 }}
+          />
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ alignItems: 'center', gap: 4 }}>
+      {label ? <Label>{label}</Label> : null}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+        <T variant="title" tone="muted">
+          {currency}
+        </T>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          keyboardType="numeric"
+          autoFocus={autoFocus}
+          placeholder={placeholder}
+          placeholderTextColor={colors.inkFaint}
+          accessibilityLabel={label ?? 'Amount'}
+          style={{
+            fontSize: 42,
+            fontWeight: '800',
+            letterSpacing: -1.2,
+            color: colors.ink,
+            minWidth: 110,
+            textAlign: 'center',
+            padding: 0,
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+/** A single tappable icon tile — shared by the inline row and the picker sheet. */
+function IconTile({
+  icon,
+  selected,
+  accent,
+  onPress,
+  label,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  selected: boolean;
+  accent: string;
+  onPress: () => void;
+  label?: string;
+}) {
+  const { colors, radius } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={label}
+      style={{
+        width: 52,
+        height: 52,
+        borderRadius: radius.md,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1.5,
+        borderColor: selected ? accent : colors.hairline,
+        backgroundColor: selected ? `${accent}1F` : colors.surface,
+      }}
+    >
+      <Ionicons name={icon} size={22} color={selected ? accent : colors.inkSecondary} />
+    </Pressable>
+  );
+}
+
+/**
+ * The one category icon picker. Shows a SINGLE row: the currently-selected icon
+ * first (so a name-suggested icon leads), then the common quick-pick icons, then
+ * a "more" tile that opens a searchable sheet over the full catalog. Keeps the
+ * form compact while still giving access to every icon. Used by create- and
+ * edit-category so they always offer the same icons.
+ */
+export function IconPicker({
+  label = 'Icon',
+  value,
+  onChange,
+  accent,
 }: {
   label?: string;
-  colors: readonly string[];
-  selectedIndex: number;
-  onSelect: (index: number) => void;
+  value: keyof typeof Ionicons.glyphMap;
+  onChange: (icon: keyof typeof Ionicons.glyphMap) => void;
+  accent: string;
 }) {
-  const { colors, space } = useTheme();
+  const { colors, radius, space } = useTheme();
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [query, setQuery] = useState('');
+
+  // The inline row: selected icon first, then the quick-pick set, de-duped, so
+  // the chosen icon (which may be from the full catalog) is always visible.
+  const quick = CATEGORY_ICONS.map((e) => e.icon);
+  const row = [value, ...quick.filter((i) => i !== value)].slice(0, 5);
+
+  const results = ALL_ICONS.filter((e) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return e.label.toLowerCase().includes(q) || e.icon.toLowerCase().includes(q);
+  });
+
   return (
     <View style={{ gap: space.sm }}>
       <Label>{label}</Label>
-      <View style={{ flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' }}>
-        {swatches.map((swatch, index) => (
-          <Pressable
-            key={swatch}
-            onPress={() => onSelect(index)}
-            accessibilityRole="radio"
-            accessibilityState={{ selected: selectedIndex === index }}
-            accessibilityLabel={`Colour ${index + 1}`}
+      <View style={{ flexDirection: 'row', gap: space.sm }}>
+        {row.map((icon) => (
+          <IconTile
+            key={icon}
+            icon={icon}
+            selected={icon === value}
+            accent={accent}
+            onPress={() => onChange(icon)}
+          />
+        ))}
+        {/* "More" tile — opens the searchable catalog. */}
+        <Pressable
+          onPress={() => setSheetOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="More icons"
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: radius.md,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 1.5,
+            borderStyle: 'dashed',
+            borderColor: colors.hairlineStrong,
+            backgroundColor: colors.surface,
+          }}
+        >
+          <Ionicons name="ellipsis-horizontal" size={20} color={colors.inkSecondary} />
+        </Pressable>
+      </View>
+
+      <BottomSheet
+        visible={sheetOpen}
+        onClose={() => {
+          setSheetOpen(false);
+          setQuery('');
+        }}
+        title="Choose an icon"
+      >
+        <View style={{ paddingHorizontal: space.lg, paddingBottom: space.sm }}>
+          <View
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: 12,
-              backgroundColor: swatch,
+              flexDirection: 'row',
               alignItems: 'center',
-              justifyContent: 'center',
-              borderWidth: selectedIndex === index ? 3 : 0,
-              borderColor: colors.ink,
+              gap: space.sm,
+              backgroundColor: colors.surfaceSunken,
+              borderRadius: radius.md,
+              paddingHorizontal: space.md,
             }}
           >
-            {selectedIndex === index ? (
-              <Ionicons name="checkmark" size={17} color="#FFFFFF" />
+            <Ionicons name="search" size={16} color={colors.inkMuted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search icons…"
+              placeholderTextColor={colors.inkFaint}
+              accessibilityLabel="Search icons"
+              style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
+            />
+          </View>
+        </View>
+        <ScrollView contentContainerStyle={{ padding: space.lg, paddingTop: 0 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+            {results.map((entry) => (
+              <IconTile
+                key={entry.icon}
+                icon={entry.icon}
+                selected={entry.icon === value}
+                accent={accent}
+                label={entry.label}
+                onPress={() => {
+                  onChange(entry.icon);
+                  setSheetOpen(false);
+                  setQuery('');
+                }}
+              />
+            ))}
+            {results.length === 0 ? (
+              <T variant="small" tone="muted">
+                No icons match “{query}”.
+              </T>
             ) : null}
-          </Pressable>
-        ))}
-      </View>
+          </View>
+        </ScrollView>
+      </BottomSheet>
     </View>
   );
 }
 
 /**
- * The one modal header used across the whole app — a title and a close button
- * with identical structure, spacing and close target everywhere. The close
- * control is a 40pt circular tap target pulled to the edge, and there is a
- * consistent gap below the row. Do NOT hand-roll modal headers; use this (or
- * `ModalScreen`, which wraps it with the correct top spacing).
+ * The one frequency selector used everywhere a subcategory/bill cadence is
+ * chosen. Draws its options and labels from the schema's canonical source
+ * (FREQUENCY_LABEL / CATEGORY_DEFAULT_FREQUENCIES) so ordering and wording can
+ * never drift between screens. `includeUnplanned` adds the unplanned option for
+ * per-bill pickers; leave it off for a category's *default* cadence.
  */
-export function SheetHeader({ title, onClose }: { title: string; onClose: () => void }) {
-  const { colors, space } = useTheme();
-  return (
-    <View
-      style={{
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        // Breathing room below every header, so content never crowds the title.
-        marginBottom: space.md,
-        // Pull the close button's padding to the edge without shifting the row.
-        marginRight: -space.xs,
-      }}
-    >
-      <T variant="title">{title}</T>
-      <Pressable
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-        style={({ pressed }) => ({
-          width: 40,
-          height: 40,
-          borderRadius: 20,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-        })}
-      >
-        <Ionicons name="close" size={24} color={colors.inkSecondary} />
-      </Pressable>
-    </View>
-  );
-}
-
-/**
- * The standard chrome for a route-level modal screen (expo-router
- * `presentation: 'modal'`): a correctly-spaced header row over a flex body.
- *
- * iOS presents these as a card already inset from the top, so adding the full
- * safe-area top inset double-spaces the header — the "unwanted gap" that made
- * modals look inconsistent. This applies only a small fixed top padding, so
- * every modal's title sits the same distance from the sheet's edge. Wrap a
- * modal screen's content in this and pass the title; children fill the rest.
- */
-export function ModalScreen({
-  title,
-  onClose,
-  children,
+export function FrequencyPicker({
+  label = 'Frequency',
+  value,
+  onChange,
+  includeUnplanned = false,
 }: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
+  label?: string;
+  value: SubcategoryFrequency;
+  onChange: (value: SubcategoryFrequency) => void;
+  includeUnplanned?: boolean;
 }) {
-  const { colors, space } = useTheme();
+  const options = (includeUnplanned ? SUBCATEGORY_FREQUENCIES : CATEGORY_DEFAULT_FREQUENCIES).map(
+    (key) => ({ key, label: FREQUENCY_LABEL[key] }),
+  );
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      <View style={{ paddingTop: space.lg, paddingHorizontal: space.lg }}>
-        <SheetHeader title={title} onClose={onClose} />
-      </View>
-      {children}
-    </View>
+    <PillSelect
+      label={label}
+      options={options}
+      selectedKey={value}
+      onSelect={(key) => onChange(key as SubcategoryFrequency)}
+    />
   );
 }

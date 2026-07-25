@@ -1,10 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SheetHeader } from '../../src/components/forms';
-import { Label, Row, Surface, T } from '../../src/components/ui';
+import { View } from 'react-native';
+import { BottomSheet, Label, Row, Surface, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
@@ -17,25 +15,18 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  */
 export default function SmsAutomationGuide() {
   const { colors, radius, space } = useTheme();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
+  const closeModal = useModalClose();
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
-        <SheetHeader title="Auto-detect transactions" onClose={() => router.back()} />
-      </View>
-
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingHorizontal: space.lg,
-          paddingTop: space.md,
-          paddingBottom: insets.bottom + space.xxl,
-          gap: space.lg,
-        }}
-        showsVerticalScrollIndicator={false}
-      >
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title="Auto-detect transactions"
+      icon="flash-outline"
+      iconColor={colors.accent}
+      heightPct={0.9}
+      scroll
+    >
         {/* Short why. */}
         <T variant="small" tone="secondary">
           iOS won&apos;t let apps read your messages, so a quick{' '}
@@ -90,8 +81,7 @@ export default function SmsAutomationGuide() {
             under &ldquo;From your messages&rdquo;.
           </T>
         </Surface>
-      </ScrollView>
-    </View>
+    </BottomSheet>
   );
 }
 

@@ -1,27 +1,30 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { BankCardTile } from '../../src/components/BankCardTile';
 import { BankLogo } from '../../src/components/BankLogo';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
+import { Field, PillSelect } from '../../src/components/forms';
 import {
+  AppHeader,
+  BottomSheet,
   Button,
+  DetailRow,
   Divider,
   Empty,
   FundingBar,
   GradientButton,
   GradientCard,
   Label,
-  PinnedFooter,
+  ListRow,
   Row,
   Surface,
   T,
 } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { accountLabel, BANKS, resolveBrand } from '../../src/data/banks';
+import { accountLabel, BANKS } from '../../src/data/banks';
+import { useBrand } from '../../src/hooks/useBrand';
 import { selectCardViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import type { Card } from '../../src/db/schema';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -47,7 +50,6 @@ type CardKind = 'bank' | 'wallet' | 'savings' | 'goal';
 export default function CardsScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
   const state = useAppStore();
 
@@ -64,33 +66,11 @@ export default function CardsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      {/* Fixed header — stays put while the body scrolls. */}
-      <View
-        style={{
-          paddingTop: insets.top + space.md,
-          paddingHorizontal: space.lg,
-          paddingBottom: space.sm,
-          backgroundColor: colors.canvas,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.hairline,
-        }}
-      >
-        <Row justify="space-between" align="center">
-          <Pressable onPress={() => router.back()} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back">
-            <Ionicons name="chevron-back" size={24} color={colors.ink} />
-          </Pressable>
-          <T variant="title">Accounts & Cards</T>
-          <Pressable
-            onPress={() => setFormId('')}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Add account or card"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-          >
-            <Ionicons name="add-circle" size={28} color={colors.accent} />
-          </Pressable>
-        </Row>
-      </View>
+      <AppHeader
+        title="Accounts & Cards"
+        onBack={() => router.back()}
+        action={{ icon: 'add-circle', label: 'Add account or card', onPress: () => setFormId('') }}
+      />
 
       <ScrollView
         style={{ flex: 1 }}
@@ -183,63 +163,50 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
   const { colors, space } = useTheme();
   const { card } = view;
 
-  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
   const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
   const goalPct = hasGoal ? Math.min(100, (view.balanceMinor / card.targetMinor!) * 100) : 0;
 
+  const label = accountLabel(card);
   return (
-    <Pressable
-      onPress={onOpen}
-      accessibilityRole="button"
-      accessibilityLabel={`${card.name}, ${formatMoney(view.balanceMinor)}. Open details.`}
-      style={({ pressed }) => ({
-        paddingHorizontal: space.lg,
-        paddingVertical: space.md,
-        gap: hasGoal ? space.sm : 0,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      <Row gap={space.md}>
-        <BankLogo brand={brand} size={44} />
-
-        <View style={{ flex: 1 }}>
-          <Row gap={space.xs}>
-            <T variant="bodyStrong" numberOfLines={1}>
-              {accountLabel(card).primary}
-            </T>
-            {card.last4 ? (
-              <T variant="caption" tone="muted">
-                ·{card.last4}
+    <View style={{ gap: hasGoal ? space.sm : 0 }}>
+      <ListRow
+        leading={<BankLogo brand={brand} size={44} />}
+        title={label.primary}
+        subtitle={
+          label.secondary ??
+          (view.categoryNames.length > 0
+            ? view.categoryNames.join(' · ')
+            : 'No categories assigned')
+        }
+        trailing={
+          <View style={{ alignItems: 'flex-end' }}>
+            <T variant="figureLarge">{formatMoney(view.balanceMinor, { compact: true })}</T>
+            {view.committedMinor > 0 ? (
+              <T variant="caption" color={colors.pending}>
+                {formatMoney(view.committedMinor, { compact: true })} to pay
               </T>
-            ) : null}
-          </Row>
-          <T variant="caption" tone="muted" numberOfLines={1}>
-            {accountLabel(card).secondary
-              ? accountLabel(card).secondary
-              : view.categoryNames.length > 0
-                ? view.categoryNames.join(' · ')
-                : 'No categories assigned'}
-          </T>
-        </View>
-
-        <View style={{ alignItems: 'flex-end' }}>
-          <T variant="figureLarge">{formatMoney(view.balanceMinor, { compact: true })}</T>
-          {view.committedMinor > 0 ? (
-            <T variant="caption" color={colors.pending}>
-              {formatMoney(view.committedMinor, { compact: true })} to pay
-            </T>
-          ) : (
-            <T variant="caption" tone="muted">
-              balance
-            </T>
-          )}
-        </View>
-
-        <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-      </Row>
+            ) : (
+              <T variant="caption" tone="muted">
+                balance
+              </T>
+            )}
+          </View>
+        }
+        chevron
+        onPress={onOpen}
+        accessibilityLabel={`${label.primary}, ${formatMoney(view.balanceMinor)}. Open details.`}
+      />
 
       {hasGoal ? (
-        <View style={{ gap: 3, paddingLeft: 44 + space.md }}>
+        <View
+          style={{
+            gap: 3,
+            paddingLeft: space.lg + 44 + space.md,
+            paddingRight: space.lg,
+            paddingBottom: space.sm,
+          }}
+        >
           <FundingBar pct={goalPct} color={colors.accent} height={5} />
           <Row justify="space-between">
             <T variant="caption" tone="muted">
@@ -252,7 +219,7 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
           </Row>
         </View>
       ) : null}
-    </Pressable>
+    </View>
   );
 }
 
@@ -273,10 +240,9 @@ function DetailModal({
   onEdit: () => void;
 }) {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const state = useAppStore();
   const [revealed, setRevealed] = useState(false);
-  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
 
   function confirmDelete() {
     Alert.alert(`Delete ${card.name}?`, 'Categories pointing at it will need a new account.', [
@@ -293,20 +259,15 @@ function DetailModal({
   }
 
   return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
-          <SheetHeader title={card.isCard ? 'Card details' : 'Account details'} onClose={onClose} />
-        </View>
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{
-            padding: space.lg,
-            paddingTop: space.md,
-            paddingBottom: insets.bottom + space.xl,
-            gap: space.lg,
-          }}
-        >
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title={card.isCard ? 'Card details' : 'Account details'}
+      icon={card.isCard ? 'card-outline' : 'wallet-outline'}
+      iconColor={brand.color}
+      heightPct={0.9}
+      scroll
+    >
           <Row gap={space.md}>
             <BankLogo brand={brand} size={48} />
             <View style={{ flex: 1 }}>
@@ -383,40 +344,10 @@ function DetailModal({
             <Button label="Edit" icon="create-outline" variant="secondary" onPress={onEdit} style={{ flex: 1 }} />
             <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} style={{ flex: 1 }} />
           </Row>
-        </ScrollView>
-      </View>
-    </Modal>
+    </BottomSheet>
   );
 }
 
-function DetailRow({
-  label,
-  value,
-  action,
-}: {
-  label: string;
-  value: string;
-  action?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void };
-}) {
-  const { colors, space } = useTheme();
-  return (
-    <Row justify="space-between" style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
-      <T variant="small" tone="muted">
-        {label}
-      </T>
-      <Row gap={space.sm}>
-        <T variant="small" style={{ fontWeight: '600' }}>
-          {value}
-        </T>
-        {action ? (
-          <Pressable onPress={action.onPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={label}>
-            <Ionicons name={action.icon} size={18} color={colors.accent} />
-          </Pressable>
-        ) : null}
-      </Row>
-    </Row>
-  );
-}
 
 /**
  * Add / edit an account or card. The flow: choose card vs. account, pick the
@@ -477,19 +408,23 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   }
 
   return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1, backgroundColor: colors.canvas }}
-      >
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
-          <SheetHeader title={editId ? 'Edit' : 'Add account or card'} onClose={onClose} />
-        </View>
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
-          keyboardShouldPersistTaps="handled"
-        >
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title={editId ? 'Edit' : 'Add account or card'}
+      icon={isCard ? 'card-outline' : 'wallet-outline'}
+      iconColor={colors.accent}
+      heightPct={0.9}
+      scroll
+      footer={
+        <GradientButton
+          label={editId ? 'Save changes' : isCard ? 'Add card' : 'Add account'}
+          icon="checkmark"
+          onPress={handleSave}
+          disabled={!canSave}
+        />
+      }
+    >
           {/* Step 1: what is it? */}
           <PillSelect
             label="What are you adding?"
@@ -564,18 +499,7 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
               ) : null}
             </>
           )}
-        </ScrollView>
-
-        <PinnedFooter followsKeyboard>
-          <GradientButton
-            label={editId ? 'Save changes' : isCard ? 'Add card' : 'Add account'}
-            icon="checkmark"
-            onPress={handleSave}
-            disabled={!canSave}
-          />
-        </PinnedFooter>
-      </KeyboardAvoidingView>
-    </Modal>
+    </BottomSheet>
   );
 }
 

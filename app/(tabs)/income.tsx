@@ -1,11 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { Alert, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
+import { Field, PillSelect } from '../../src/components/forms';
+import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
 import {
+  AppHeader,
+  BottomSheet,
   Button,
   Divider,
   Empty,
@@ -13,7 +16,7 @@ import {
   GradientCard,
   Glyph,
   Label,
-  PinnedFooter,
+  ListRow,
   Row,
   Surface,
   T,
@@ -42,33 +45,11 @@ export default function IncomeScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
-      {/* Fixed header. */}
-      <View
-        style={{
-          paddingTop: insets.top + space.md,
-          paddingHorizontal: space.lg,
-          paddingBottom: space.sm,
-          backgroundColor: colors.canvas,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.hairline,
-        }}
-      >
-        <Row justify="space-between" align="center">
-          <Pressable onPress={() => router.back()} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back">
-            <Ionicons name="chevron-back" size={24} color={colors.ink} />
-          </Pressable>
-          <T variant="title">Income</T>
-          <Pressable
-            onPress={() => setFormId('')}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Add income"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-          >
-            <Ionicons name="add-circle" size={28} color={colors.accent} />
-          </Pressable>
-        </Row>
-      </View>
+      <AppHeader
+        title="Income"
+        onBack={() => router.back()}
+        action={{ icon: 'add-circle', label: 'Add income', onPress: () => setFormId('') }}
+      />
 
       <ScrollView
         style={{ flex: 1 }}
@@ -121,37 +102,23 @@ export default function IncomeScreen() {
               {state.incomes.map((item, index) => (
                 <View key={item.id}>
                   {index > 0 ? <Divider style={{ marginLeft: 62 }} /> : null}
-                  <Pressable
+                  <ListRow
+                    leading={<Glyph icon={item.icon as never} color={item.color} />}
+                    title={item.name}
+                    subtitle={
+                      item.foreignAmount
+                        ? `$${item.foreignAmount.toLocaleString()} @ ${item.foreignRate}`
+                        : (state.cards.find((c) => c.id === item.cardId)?.name ?? 'No account')
+                    }
+                    trailing={
+                      <T variant="figure" color={colors.completed}>
+                        {formatMoney(item.amountMinor)}
+                      </T>
+                    }
+                    chevron
                     onPress={() => setFormId(item.id)}
-                    accessibilityRole="button"
                     accessibilityLabel={`Edit ${item.name}, ${formatMoney(item.amountMinor)}`}
-                    style={({ pressed }) => ({
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: space.md,
-                      paddingVertical: space.md,
-                      paddingHorizontal: space.lg,
-                      opacity: pressed ? 0.7 : 1,
-                    })}
-                  >
-                    <Glyph icon={item.icon as never} color={item.color} />
-                    <View style={{ flex: 1, gap: 1 }}>
-                      <T variant="body">{item.name}</T>
-                      {item.foreignAmount ? (
-                        <T variant="caption" tone="muted">
-                          ${item.foreignAmount.toLocaleString()} @ {item.foreignRate}
-                        </T>
-                      ) : (
-                        <T variant="caption" tone="muted">
-                          {state.cards.find((c) => c.id === item.cardId)?.name ?? 'No account'}
-                        </T>
-                      )}
-                    </View>
-                    <T variant="figure" color={colors.completed}>
-                      {formatMoney(item.amountMinor)}
-                    </T>
-                    <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-                  </Pressable>
+                  />
                 </View>
               ))}
             </Surface>
@@ -238,19 +205,23 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
   }
 
   return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1, backgroundColor: colors.canvas }}
-      >
-        <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
-          <SheetHeader title={editId ? 'Edit income' : 'New income'} onClose={onClose} />
-        </View>
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
-          keyboardShouldPersistTaps="handled"
-        >
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title={editId ? 'Edit income' : 'New income'}
+      icon={isForeign ? 'logo-usd' : 'cash-outline'}
+      iconColor={colors.accent}
+      heightPct={0.85}
+      scroll
+      footer={
+        <GradientButton
+          label={editId ? 'Save changes' : 'Add income'}
+          icon={editId ? 'checkmark' : 'add'}
+          onPress={handleSave}
+          disabled={!canSave}
+        />
+      }
+    >
           <Field label="Name" value={name} onChangeText={setName} placeholder="e.g. LKR Salary" autoFocus={!editId} />
           <PillSelect
             label="Currency"
@@ -280,56 +251,17 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
             </>
           ) : null}
           {state.cards.length > 0 ? (
-            <View style={{ gap: space.sm }}>
-              <Label>PAID INTO</Label>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-                {state.cards.map((card) => {
-                  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
-                  const selected = cardId === card.id;
-                  return (
-                    <Pressable
-                      key={card.id}
-                      onPress={() => setCardId(card.id)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected }}
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: space.sm,
-                        paddingVertical: 7,
-                        paddingHorizontal: space.md,
-                        borderRadius: 999,
-                        borderWidth: 1.5,
-                        borderColor: selected ? brand.color : colors.hairline,
-                        backgroundColor: selected ? `${brand.color}14` : colors.surface,
-                        opacity: pressed ? 0.75 : 1,
-                      })}
-                    >
-                      <BankLogo brand={brand} size={20} />
-                      <T variant="small" style={{ fontWeight: selected ? '700' : '500' }}>
-                        {card.name}
-                      </T>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
+            <AccountField
+              label="Paid into"
+              cards={state.cards}
+              selectedId={cardId}
+              onSelect={setCardId}
+            />
           ) : null}
 
           {editId ? (
             <Button label="Delete income" variant="danger" icon="trash-outline" onPress={confirmDelete} />
           ) : null}
-        </ScrollView>
-
-        <PinnedFooter followsKeyboard>
-          <GradientButton
-            label={editId ? 'Save changes' : 'Add income'}
-            icon={editId ? 'checkmark' : 'add'}
-            onPress={handleSave}
-            disabled={!canSave}
-          />
-        </PinnedFooter>
-      </KeyboardAvoidingView>
-    </Modal>
+    </BottomSheet>
   );
 }

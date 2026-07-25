@@ -9,6 +9,7 @@ import {
   FundingBar,
   Glyph,
   Label,
+  ListRow,
   Row,
   Surface,
   T,
@@ -294,26 +295,14 @@ function SettingRow({
   leading?: React.ReactNode;
   onPress: () => void;
 }) {
-  const { colors, space } = useTheme();
   return (
-    <Pressable
+    <ListRow
+      leading={leading}
+      title={<T variant="body" tone="secondary">{label}</T>}
+      trailing={<T variant="bodyStrong">{value}</T>}
+      chevron
       onPress={onPress}
-      accessibilityRole="button"
       accessibilityLabel={`${label}: ${value}`}
-      style={({ pressed }) => ({
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: space.md,
-        padding: space.lg,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      {leading}
-      <T variant="body" tone="secondary" style={{ flex: 1 }}>
-        {label}
-      </T>
-      <T variant="bodyStrong">{value}</T>
-      <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-    </Pressable>
+    />
   );
 }

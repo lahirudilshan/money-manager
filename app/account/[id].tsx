@@ -1,13 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ModalScreen, SheetHeader } from '../../src/components/forms';
-import { Button, Divider, FundingBar, Label, Row, Surface, T } from '../../src/components/ui';
+import { Alert, View } from 'react-native';
+import { BottomSheet, Button, DetailRow, Divider, FundingBar, Label, Row, Surface, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { BankLogo } from '../../src/components/BankLogo';
 import { formatMoney } from '../../src/core/money';
-import { accountLabel, resolveBrand } from '../../src/data/banks';
+import { effectiveAmount } from '../../src/core/planning';
+import { accountLabel } from '../../src/data/banks';
+import { useBrand } from '../../src/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -18,9 +19,8 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  * that draw from it. Cards route here too but show number/CVV/expiry instead.
  */
 export default function AccountDetailScreen() {
-  const { colors, radius, space } = useTheme();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
+  const { colors, space } = useTheme();
+  const closeModal = useModalClose();
   const { id } = useLocalSearchParams<{ id: string }>();
   const state = useAppStore();
 
@@ -32,18 +32,24 @@ export default function AccountDetailScreen() {
 
   if (!view) {
     return (
-      <View style={{ flex: 1, backgroundColor: colors.canvas, padding: space.lg, paddingTop: insets.top + space.xl }}>
-        <SheetHeader title="Account" onClose={() => router.back()} />
+      <BottomSheet
+        visible
+        onClose={closeModal}
+        title="Account"
+        icon="card-outline"
+        iconColor={colors.accent}
+        heightPct={0.4}
+      >
         <T variant="small" tone="muted">
           This account no longer exists.
         </T>
-      </View>
+      </BottomSheet>
     );
   }
 
   const { card } = view;
   const label = accountLabel(card);
-  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
   const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
   const goalPct = hasGoal ? Math.min(100, (view.balanceMinor / card.targetMinor!) * 100) : 0;
 
@@ -62,7 +68,7 @@ export default function AccountDetailScreen() {
         lines: cv.subcategories.map((s) => ({
           id: s.id,
           name: s.name,
-          amountMinor: s.actualMinor ?? s.plannedMinor,
+          amountMinor: effectiveAmount(s),
           isActual: s.actualMinor != null,
         })),
       }));
@@ -76,23 +82,23 @@ export default function AccountDetailScreen() {
         style: 'destructive',
         onPress: () => {
           state.deleteCard(card.id);
-          router.back();
+          closeModal();
         },
       },
     ]);
   }
 
   return (
-    <ModalScreen title={card.isCard ? 'Card' : 'Account'} onClose={() => router.back()}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingHorizontal: space.lg,
-          paddingBottom: insets.bottom + space.xl,
-          gap: space.lg,
-        }}
-        showsVerticalScrollIndicator={false}
-      >
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title={label.primary}
+      eyebrow={card.isCard ? 'Card' : 'Account'}
+      icon={card.isCard ? 'card-outline' : 'wallet-outline'}
+      iconColor={brand.color}
+      heightPct={0.92}
+      scroll
+    >
         {/* Identity + balance — accented with the bank's brand colour. */}
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <View style={{ backgroundColor: `${brand.color}14`, padding: space.lg }}>
@@ -234,36 +240,7 @@ export default function AccountDetailScreen() {
         ) : null}
 
         <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} />
-      </ScrollView>
-    </ModalScreen>
+    </BottomSheet>
   );
 }
 
-function DetailRow({
-  label,
-  value,
-  action,
-}: {
-  label: string;
-  value: string;
-  action?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void };
-}) {
-  const { colors, space } = useTheme();
-  return (
-    <Row justify="space-between" style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
-      <T variant="small" tone="muted">
-        {label}
-      </T>
-      <Row gap={space.sm}>
-        <T variant="small" style={{ fontWeight: '600' }}>
-          {value}
-        </T>
-        {action ? (
-          <Pressable onPress={action.onPress} hitSlop={8} accessibilityRole="button" accessibilityLabel={label}>
-            <Ionicons name={action.icon} size={18} color={colors.accent} />
-          </Pressable>
-        ) : null}
-      </Row>
-    </Row>
-  );
-}

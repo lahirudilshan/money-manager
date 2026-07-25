@@ -13,6 +13,7 @@ import {
   GradientCard,
   Label,
   Row,
+  Stat,
   Surface,
   T,
 } from '../../src/components/ui';
@@ -477,11 +478,8 @@ function PeriodStep({
 
 function HeroStat({ label, value }: { label: string; value: string }) {
   return (
-    <View style={{ gap: 2, flex: 1 }}>
-      <Label color="rgba(255,255,255,0.65)">{label}</Label>
-      <T variant="figure" color="#FFFFFF" numberOfLines={1}>
-        {value}
-      </T>
+    <View style={{ flex: 1 }}>
+      <Stat label={label} value={value} onDark />
     </View>
   );
 }
@@ -534,16 +532,7 @@ function QuickAction({
 }
 
 function StatRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <Row justify="space-between">
-      <T variant="small" tone="secondary">
-        {label}
-      </T>
-      <T variant="figure" color={color}>
-        {value}
-      </T>
-    </Row>
-  );
+  return <Stat label={label} value={value} color={color} inline />;
 }
 
 /** One overdue/soon line, with how late or close it is stated in words. */

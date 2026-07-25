@@ -1,12 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
 import { DayPicker } from '../../src/components/DayPicker';
 import { DragList } from '../../src/components/DragList';
+import { FrequencyPicker } from '../../src/components/forms';
 import {
+  BottomSheet,
   Divider,
   GradientButton,
   Label,
@@ -308,11 +310,6 @@ function PlanRow({
   );
 }
 
-const FREQUENCIES = [
-  { key: 'monthly', label: 'Monthly' },
-  { key: 'one_time', label: 'One-time' },
-  { key: 'yearly', label: 'Yearly' },
-] as const;
 
 /**
  * Bottom-sheet editor for the selected line: amount, cadence, payment day and
@@ -322,72 +319,23 @@ const FREQUENCIES = [
  */
 function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClose: () => void }) {
   const { colors, radius, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const state = useAppStore();
   const draft = useOnboardingDraft();
 
   return (
-    <Modal
+    <BottomSheet
       visible={Boolean(line)}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
+      onClose={onClose}
+      title={line?.name ?? ''}
+      eyebrow={line ? (line.type === 'income' ? 'Income' : 'Expense') : undefined}
+      icon={line?.type === 'income' ? 'trending-up-outline' : 'pricetag-outline'}
+      iconColor={colors.accent}
+      heightPct={0.88}
+      scroll
+      footer={line ? <GradientButton label="Done" icon="checkmark" onPress={onClose} /> : undefined}
     >
-      <Pressable
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-        style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}
-      >
-        {/* Inner press is swallowed so tapping the sheet doesn't dismiss it. */}
-        <Pressable
-          onPress={() => {}}
-          style={{
-            backgroundColor: colors.canvas,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            paddingTop: space.sm,
-            paddingBottom: insets.bottom + space.lg,
-            maxHeight: '88%',
-          }}
-        >
-          {/* Grab handle. */}
-          <View
-            style={{
-              alignSelf: 'center',
-              width: 40,
-              height: 4,
-              borderRadius: 2,
-              backgroundColor: colors.hairlineStrong,
-              marginBottom: space.sm,
-            }}
-          />
-
           {line ? (
-            <ScrollView
-              contentContainerStyle={{ padding: space.lg, paddingTop: space.sm, gap: space.lg }}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              <Row justify="space-between" align="center">
-                <View style={{ flexShrink: 1 }}>
-                  <T variant="heading" numberOfLines={1}>
-                    {line.name}
-                  </T>
-                  <T variant="caption" tone="muted">
-                    {line.type === 'income' ? 'Income' : 'Expense'}
-                  </T>
-                </View>
-                <Pressable
-                  onPress={onClose}
-                  hitSlop={12}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close"
-                >
-                  <Ionicons name="close" size={25} color={colors.inkSecondary} />
-                </Pressable>
-              </Row>
-
+            <>
               <View style={{ gap: space.sm }}>
                 <Row justify="space-between" align="center">
                   <Label>AMOUNT</Label>
@@ -458,19 +406,17 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                 ) : null}
               </View>
 
-              <View style={{ gap: space.sm }}>
-                <Label>FREQUENCY</Label>
-                <Row gap={space.sm}>
-                  {FREQUENCIES.map((frequency) => (
-                    <Chip
-                      key={frequency.key}
-                      label={frequency.label}
-                      selected={line.frequency === frequency.key}
-                      onPress={() => draft.updateLine(line.id, { frequency: frequency.key })}
-                    />
-                  ))}
-                </Row>
-              </View>
+              <FrequencyPicker
+                label="Frequency"
+                value={line.frequency}
+                onChange={(frequency) =>
+                  // Onboarding offers only the category-default cadences, so the
+                  // narrow to DraftLine's frequency type is safe.
+                  draft.updateLine(line.id, {
+                    frequency: frequency as 'monthly' | 'one_time' | 'yearly',
+                  })
+                }
+              />
 
               <DayPicker
                 value={line.dueDay}
@@ -533,12 +479,9 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                 </View>
               ) : null}
 
-              <GradientButton label="Done" icon="checkmark" onPress={onClose} />
-            </ScrollView>
+            </>
           ) : null}
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }
 

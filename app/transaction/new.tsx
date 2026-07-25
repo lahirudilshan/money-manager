@@ -4,17 +4,15 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
   Image,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AccountField } from '../../src/components/AccountPicker';
-import { SheetHeader } from '../../src/components/forms';
-import { GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
+import { AmountField } from '../../src/components/forms';
+import { BottomSheet, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, STATUS_ORDER, type SubcategoryStatus } from '../../src/core/planning';
@@ -39,8 +37,8 @@ const STATUS_LABEL: Record<SubcategoryStatus, string> = {
  */
 export default function NewTransactionScreen() {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
+  const closeModal = useModalClose();
   const state = useAppStore();
   const views = useMemo(() => selectCategoryViews(state), [state]);
 
@@ -140,21 +138,20 @@ export default function NewTransactionScreen() {
       imageUri,
     });
 
-    router.back();
+    closeModal();
   }
 
   if (views.length === 0) {
     return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: colors.canvas,
-          paddingTop: insets.top + space.sm,
-          paddingHorizontal: space.lg,
-        }}
+      <BottomSheet
+        visible
+        onClose={closeModal}
+        title="Add transaction"
+        icon="swap-horizontal-outline"
+        iconColor={colors.accent}
+        heightPct={0.6}
       >
-        <SheetHeader title="Add transaction" onClose={() => router.back()} />
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md }}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md, paddingHorizontal: space.lg }}>
           <Ionicons name="albums-outline" size={48} color={colors.inkMuted} />
           <T variant="heading">No categories yet</T>
           <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 260 }}>
@@ -166,58 +163,35 @@ export default function NewTransactionScreen() {
             onPress={() => router.replace('/category/new')}
           />
         </View>
-      </View>
+      </BottomSheet>
     );
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title="Add transaction"
+      icon="swap-horizontal-outline"
+      iconColor={colors.accent}
+      heightPct={0.92}
+      scroll
+      footer={
+        <GradientButton
+          label="Save transaction"
+          icon="checkmark"
+          onPress={handleSave}
+          disabled={!canSave}
+        />
+      }
     >
-      <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
-        <SheetHeader title="Add transaction" onClose={() => router.back()} />
-      </View>
-
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingTop: space.md,
-          paddingBottom: space.xl,
-          paddingHorizontal: space.lg,
-          gap: space.lg,
-        }}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
         {/* 1 · Amount — the number in hand, front and centre. */}
-      <View style={{ alignItems: 'center', gap: 2, paddingVertical: space.sm }}>
-        <Label>AMOUNT</Label>
-        <Row gap={space.xs} align="center">
-          <T variant="title" tone="muted">
-            {state.currency}
-          </T>
-          <TextInput
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="numeric"
-            placeholder="0"
-            placeholderTextColor={colors.inkFaint}
-            style={{
-              fontSize: 44,
-              fontWeight: '800',
-              letterSpacing: -1.4,
-              color: colors.ink,
-              minWidth: 120,
-              textAlign: 'center',
-              padding: 0,
-            }}
-          />
-        </Row>
+      <View style={{ paddingVertical: space.sm }}>
+        <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} />
       </View>
 
       {/* 2 · Category. */}
-      <Field label="CATEGORY">
+      <LabeledField label="CATEGORY">
         <Chips
           options={views.map((view) => ({
             key: view.category.id,
@@ -228,11 +202,11 @@ export default function NewTransactionScreen() {
           selectedKey={categoryId}
           onSelect={selectCategory}
         />
-      </Field>
+      </LabeledField>
 
       {/* 3 · Line within the category (or a new one). */}
       {categoryId ? (
-        <Field label="LINE">
+        <LabeledField label="LINE">
           <Chips
             options={[
               ...lines.map((line) => ({
@@ -245,11 +219,11 @@ export default function NewTransactionScreen() {
             selectedKey={subcategoryId}
             onSelect={selectLine}
           />
-        </Field>
+        </LabeledField>
       ) : null}
 
       {creatingNew ? (
-        <Field label="NEW LINE NAME">
+        <LabeledField label="NEW LINE NAME">
           <TextInput
             value={newName}
             onChangeText={setNewName}
@@ -258,7 +232,7 @@ export default function NewTransactionScreen() {
             autoFocus
             style={inputStyle(colors, space)}
           />
-        </Field>
+        </LabeledField>
       ) : null}
 
       {/* 4 · Account it moved through — the shared picker, so "paid from" looks
@@ -271,7 +245,7 @@ export default function NewTransactionScreen() {
       />
 
       {/* 5 · Status. */}
-      <Field label="STATUS">
+      <LabeledField label="STATUS">
         <Row gap={space.sm}>
           {STATUS_ORDER.map((key) => {
             const selected = status === key;
@@ -310,10 +284,10 @@ export default function NewTransactionScreen() {
             );
           })}
         </Row>
-      </Field>
+      </LabeledField>
 
       {/* 6 · Note. */}
-      <Field label="NOTE (OPTIONAL)">
+      <LabeledField label="NOTE (OPTIONAL)">
         <TextInput
           value={note}
           onChangeText={setNote}
@@ -322,10 +296,10 @@ export default function NewTransactionScreen() {
           multiline
           style={[inputStyle(colors, space), { minHeight: 56, textAlignVertical: 'top' }]}
         />
-      </Field>
+      </LabeledField>
 
       {/* 7 · Photo. */}
-      <Field label="PHOTO (OPTIONAL)">
+      <LabeledField label="PHOTO (OPTIONAL)">
         {imageUri ? (
           <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
             <Image source={{ uri: imageUri }} style={{ width: 96, height: 96, borderRadius: 12 }} />
@@ -354,7 +328,7 @@ export default function NewTransactionScreen() {
             <PhotoButton label="Library" icon="image-outline" busy={imageBusy} onPress={() => pickImage('library')} />
           </Row>
         )}
-      </Field>
+      </LabeledField>
 
         {/* Planned-amount reminder for the chosen line. */}
         {subcategoryId && subcategoryId !== '__new__' ? (
@@ -373,22 +347,12 @@ export default function NewTransactionScreen() {
             })()}
           </Surface>
         ) : null}
-      </ScrollView>
-
-      <PinnedFooter>
-        <GradientButton
-          label="Save transaction"
-          icon="checkmark"
-          onPress={handleSave}
-          disabled={!canSave}
-        />
-      </PinnedFooter>
-    </KeyboardAvoidingView>
+    </BottomSheet>
   );
 }
 
 /** A labelled block — the shared skeleton for every field on the screen. */
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function LabeledField({ label, children }: { label: string; children: React.ReactNode }) {
   const { space } = useTheme();
   return (
     <View style={{ gap: space.sm }}>

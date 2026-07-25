@@ -1,15 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
   Pressable,
-  ScrollView,
   TextInput,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, ModalScreen, SheetHeader } from '../../src/components/forms';
-import { Button, GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
+import { Field } from '../../src/components/forms';
+import { BottomSheet, Button, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
 import { HINT_META } from '../../src/core/smsCategoryHints';
 import { cardForAccount } from '../../src/core/smsReconcile';
@@ -33,8 +32,7 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  */
 export default function SmsDraftModal() {
   const { colors, radius, space } = useTheme();
-  const insets = useSafeAreaInsets();
-  const router = useRouter();
+  const closeModal = useModalClose();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const state = useAppStore();
@@ -54,12 +52,18 @@ export default function SmsDraftModal() {
   // The draft may have been resolved on another screen; close cleanly if gone.
   if (!draft) {
     return (
-      <View style={{ flex: 1, backgroundColor: colors.canvas, padding: space.lg, paddingTop: insets.top + space.xl }}>
-        <SheetHeader title="Message" onClose={() => router.back()} />
-        <T variant="small" tone="muted" style={{ marginTop: space.lg }}>
+      <BottomSheet
+        visible
+        onClose={closeModal}
+        title="Message"
+        icon="chatbox-ellipses-outline"
+        iconColor={colors.accent}
+        heightPct={0.4}
+      >
+        <T variant="small" tone="muted">
           This draft has already been handled.
         </T>
-      </View>
+      </BottomSheet>
     );
   }
 
@@ -105,28 +109,26 @@ export default function SmsDraftModal() {
   // of `draft` from the early return above.
   const logIt = () => {
     state.confirmDraft(draft.id, { subcategoryId, amountMinor });
-    router.back();
+    closeModal();
   };
 
   const markAlreadyLogged = () => {
     // Nothing is written — the user recorded this by hand; just clear it.
     state.dismissDraft(draft.id);
-    router.back();
+    closeModal();
   };
 
   return (
-    <ModalScreen title="Review message" onClose={() => router.back()}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingTop: space.md,
-          paddingHorizontal: space.lg,
-          paddingBottom: space.xl,
-          gap: space.lg,
-        }}
-        keyboardShouldPersistTaps="handled"
-      >
-
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title="Review message"
+      icon={(hintMeta?.icon ?? 'chatbox-ellipses-outline') as keyof typeof Ionicons.glyphMap}
+      iconColor={colors.accent}
+      heightPct={0.92}
+      scroll
+      footer={<GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />}
+    >
         {/* Headline: the amount is the focus, with the merchant + account under. */}
         <Surface style={{ gap: space.md }}>
           <Row gap={space.md}>
@@ -266,11 +268,6 @@ export default function SmsDraftModal() {
           variant="ghost"
           onPress={markAlreadyLogged}
         />
-      </ScrollView>
-
-      <PinnedFooter followsKeyboard>
-        <GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />
-      </PinnedFooter>
-    </ModalScreen>
+    </BottomSheet>
   );
 }

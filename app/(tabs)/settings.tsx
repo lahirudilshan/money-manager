@@ -2,9 +2,9 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Modal, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomSheet, Button, Divider, Glyph, Label, Row, ScreenHeader, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, T } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { syncCategoryReminders, unavailableReason } from '../../src/services/notifications';
 import { confirmWithBiometrics } from '../../src/services/biometrics';
@@ -512,90 +512,63 @@ export default function SettingsScreen() {
       </BottomSheet>
 
       {/* Clear-all confirmation. */}
-      <Modal visible={confirmOpen} transparent animationType="fade" onRequestClose={closeConfirm}>
-        <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', padding: space.lg }}>
-          <Surface style={{ gap: space.md }}>
-            <Row gap={space.sm}>
-              <Glyph icon="warning-outline" color={colors.danger} size={32} />
-              <View style={{ flex: 1 }}>
-                <T variant="heading">Last check</T>
-                <T variant="caption" tone="muted">
-                  Type {CONFIRM_WORD} to erase everything on this device.
-                </T>
-              </View>
-            </Row>
-
-            <TextInput
-              value={confirmText}
-              onChangeText={setConfirmText}
-              placeholder={CONFIRM_WORD}
-              placeholderTextColor={colors.inkFaint}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              editable={!clearing}
-              style={{
-                borderWidth: 1,
-                borderColor: colors.hairlineStrong,
-                borderRadius: 10,
-                paddingHorizontal: space.md,
-                paddingVertical: 10,
-                color: colors.ink,
-                fontSize: 16,
-              }}
+      <BottomSheet
+        visible={confirmOpen}
+        onClose={closeConfirm}
+        title="Last check"
+        eyebrow="Erase all data"
+        icon="warning-outline"
+        iconColor={colors.danger}
+        heightPct={0.5}
+        footer={
+          <Row gap={space.sm}>
+            <Button
+              label="Cancel"
+              variant="secondary"
+              onPress={closeConfirm}
+              disabled={clearing}
+              style={{ flex: 1 }}
             />
+            <Button
+              label="Erase everything"
+              variant="danger"
+              icon="trash-outline"
+              onPress={confirmClear}
+              disabled={confirmText.trim().toUpperCase() !== CONFIRM_WORD}
+              loading={clearing}
+              style={{ flex: 1 }}
+            />
+          </Row>
+        }
+      >
+        <T variant="small" tone="secondary">
+          Type {CONFIRM_WORD} to erase everything on this device. This can&apos;t be undone.
+        </T>
 
-            <Row gap={space.sm}>
-              <Button
-                label="Cancel"
-                variant="secondary"
-                onPress={closeConfirm}
-                disabled={clearing}
-                style={{ flex: 1 }}
-              />
-              <Button
-                label="Erase everything"
-                variant="danger"
-                icon="trash-outline"
-                onPress={confirmClear}
-                disabled={confirmText.trim().toUpperCase() !== CONFIRM_WORD}
-                loading={clearing}
-                style={{ flex: 1 }}
-              />
-            </Row>
-          </Surface>
-        </View>
-      </Modal>
+        <TextInput
+          value={confirmText}
+          onChangeText={setConfirmText}
+          placeholder={CONFIRM_WORD}
+          placeholderTextColor={colors.inkFaint}
+          autoCapitalize="characters"
+          autoCorrect={false}
+          editable={!clearing}
+          style={{
+            borderWidth: 1,
+            borderColor: colors.hairlineStrong,
+            borderRadius: 10,
+            paddingHorizontal: space.md,
+            paddingVertical: 12,
+            color: colors.ink,
+            fontSize: 16,
+          }}
+        />
+      </BottomSheet>
     </>
   );
 }
 
 
-/** A titled group of setting rows in one surface. */
-function Section({
-  title,
-  note,
-  children,
-}: {
-  title: string;
-  note?: string;
-  children: React.ReactNode;
-}) {
-  const { space } = useTheme();
-  return (
-    <Surface style={{ gap: space.xs }} padded={false}>
-      <View style={{ padding: space.lg, paddingBottom: note ? space.xs : space.md, gap: space.xs }}>
-        <Label>{title}</Label>
-        {note ? (
-          <T variant="caption" tone="muted">
-            {note}
-          </T>
-        ) : null}
-      </View>
-      <Divider />
-      {children}
-    </Surface>
-  );
-}
 
 /** A setting row with a native on/off switch instead of a chevron. */
 function ToggleRow({
@@ -661,36 +634,23 @@ function SettingRow({
   disabled?: boolean;
   onPress: () => void;
 }) {
-  const { colors, space } = useTheme();
+  const { colors } = useTheme();
   return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="button"
+    <ListRow
+      leading={<Glyph icon={icon} color={color} />}
+      title={title}
+      titleColor={danger ? colors.danger : undefined}
+      subtitle={subtitle}
+      trailing={
+        valueLabel ? (
+          <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+            {valueLabel}
+          </T>
+        ) : undefined
+      }
+      chevron
+      onPress={disabled ? () => {} : onPress}
       accessibilityLabel={`${title}${valueLabel ? `, ${valueLabel}` : ''}`}
-      style={({ pressed }) => ({
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: space.md,
-        padding: space.lg,
-        opacity: pressed || disabled ? 0.6 : 1,
-      })}
-    >
-      <Glyph icon={icon} color={color} />
-      <View style={{ flex: 1 }}>
-        <T variant="bodyStrong" color={danger ? colors.danger : colors.ink}>
-          {title}
-        </T>
-        <T variant="caption" tone="muted">
-          {subtitle}
-        </T>
-      </View>
-      {valueLabel ? (
-        <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
-          {valueLabel}
-        </T>
-      ) : null}
-      <Ionicons name="chevron-forward" size={18} color={colors.inkMuted} />
-    </Pressable>
+    />
   );
 }

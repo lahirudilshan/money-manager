@@ -5,17 +5,16 @@ import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Field, PillSelect, SheetHeader } from '../../src/components/forms';
-import { BottomSheet, Button, Divider, GradientButton, Label, PinnedFooter, Row, Surface, T } from '../../src/components/ui';
+import { Field, FrequencyPicker } from '../../src/components/forms';
+import { BottomSheet, Button, Divider, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { useModalClose } from '../../src/hooks/useModalClose';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
@@ -42,6 +41,7 @@ export default function SubcategoryScreen() {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const closeModal = useModalClose();
   const { id } = useLocalSearchParams<{ id: string }>();
   const state = useAppStore();
 
@@ -103,7 +103,7 @@ export default function SubcategoryScreen() {
         }}
       >
         <T variant="heading">Not found</T>
-        <Button label="Go back" onPress={() => router.back()} variant="ghost" />
+        <Button label="Go back" onPress={() => closeModal()} variant="ghost" />
       </View>
     );
   }
@@ -187,7 +187,7 @@ export default function SubcategoryScreen() {
       });
     }
 
-    router.back();
+    closeModal();
   }
 
   function confirmDelete() {
@@ -198,7 +198,7 @@ export default function SubcategoryScreen() {
         style: 'destructive',
         onPress: () => {
           state.deleteSubcategory(subcategory!.id);
-          router.back();
+          closeModal();
         },
       },
     ]);
@@ -233,25 +233,24 @@ export default function SubcategoryScreen() {
     planChanged;
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={{ flex: 1, backgroundColor: colors.canvas }}
+    <BottomSheet
+      visible
+      onClose={closeModal}
+      title={subcategory.name}
+      eyebrow={category?.name}
+      icon={(subcategory.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
+      iconColor={category?.color ?? colors.accent}
+      heightPct={0.92}
+      scroll
+      footer={
+        <GradientButton
+          label="Save changes"
+          icon="checkmark"
+          onPress={handleSave}
+          disabled={!name.trim() || !isDirty}
+        />
+      }
     >
-      <View style={{ paddingTop: insets.top + space.sm, paddingHorizontal: space.lg }}>
-        <SheetHeader title="Subcategory" onClose={() => router.back()} />
-      </View>
-
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{
-          paddingTop: space.md,
-          paddingBottom: space.xl,
-          paddingHorizontal: space.lg,
-          gap: space.lg,
-        }}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
         {/* Hero: identity, amount, and where it's paid from at a glance. */}
         <Surface style={{ gap: space.md }}>
           <Row gap={space.md}>
@@ -443,17 +442,7 @@ export default function SubcategoryScreen() {
             />
           ) : null}
 
-          <PillSelect
-            label="Frequency"
-            options={[
-              { key: 'monthly', label: 'Monthly' },
-              { key: 'yearly', label: 'Yearly' },
-              { key: 'one_time', label: 'One-time' },
-              { key: 'unplanned', label: 'Unplanned' },
-            ]}
-            selectedKey={frequency}
-            onSelect={(key) => setFrequency(key as SubcategoryFrequency)}
-          />
+          <FrequencyPicker label="Frequency" value={frequency} onChange={setFrequency} includeUnplanned />
 
           {/* "Save up for this" — yearly lines only. */}
           {supportsSavingPlan(frequency) ? (
@@ -542,16 +531,6 @@ export default function SubcategoryScreen() {
             Delete subcategory
           </T>
         </Pressable>
-      </ScrollView>
-
-      <PinnedFooter>
-        <GradientButton
-          label="Save changes"
-          icon="checkmark"
-          onPress={handleSave}
-          disabled={!name.trim() || !isDirty}
-        />
-      </PinnedFooter>
 
     {imageUri ? (
       <Modal
@@ -653,7 +632,7 @@ export default function SubcategoryScreen() {
           })}
       </ScrollView>
     </BottomSheet>
-    </KeyboardAvoidingView>
+    </BottomSheet>
   );
 }
 

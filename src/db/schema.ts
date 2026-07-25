@@ -370,6 +370,26 @@ export const SUBCATEGORY_FREQUENCIES: SubcategoryFrequency[] = [
   'unplanned',
 ];
 
+/**
+ * Canonical human labels for every frequency — the single source of truth so
+ * every picker in the app shows the same words in the same order. `category`
+ * excludes `unplanned` (a category's *default* cadence for new bills; unplanned
+ * is a per-bill choice made on the subcategory itself).
+ */
+export const FREQUENCY_LABEL: Record<SubcategoryFrequency, string> = {
+  monthly: 'Monthly',
+  one_time: 'One-time',
+  yearly: 'Yearly',
+  unplanned: 'Unplanned',
+};
+
+/** Frequencies offered as a category's default cadence (no unplanned). */
+export const CATEGORY_DEFAULT_FREQUENCIES: SubcategoryFrequency[] = [
+  'monthly',
+  'one_time',
+  'yearly',
+];
+
 /** True for frequencies that support the "save up for this" saving plan. Per
  * product rule, only yearly lines can save up toward a future due date. */
 export function supportsSavingPlan(frequency: SubcategoryFrequency): boolean {

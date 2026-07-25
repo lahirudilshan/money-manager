@@ -2,16 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
   Pressable,
   ScrollView,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
-import { SheetHeader } from '../../src/components/forms';
 import {
   emptyLoanDraft,
   isLoanDraftValid,
@@ -20,6 +16,7 @@ import {
   type LoanDraft,
 } from '../../src/components/LoanForm';
 import {
+  BottomSheet,
   Divider,
   GradientButton,
   Label,
@@ -174,36 +171,25 @@ export default function OnboardingLoansScreen() {
       </View>
 
       {/* New-loan sheet, sharing the Loans tab's form. */}
-      <Modal
+      <BottomSheet
         visible={open}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setOpen(false)}
+        onClose={() => setOpen(false)}
+        title="New loan"
+        icon="cash-outline"
+        iconColor={colors.pending}
+        heightPct={0.9}
+        scroll
+        footer={
+          <GradientButton
+            label="Add loan"
+            icon="add"
+            onPress={handleAdd}
+            disabled={!isLoanDraftValid(draft)}
+          />
+        }
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={{ flex: 1, backgroundColor: colors.canvas }}
-        >
-          <View style={{ paddingHorizontal: space.lg, paddingTop: space.md }}>
-            <SheetHeader title="New loan" onClose={() => setOpen(false)} />
-          </View>
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ padding: space.lg, paddingTop: space.md, gap: space.lg }}
-            keyboardShouldPersistTaps="handled"
-          >
-            <LoanForm draft={draft} onChange={setDraft} />
-          </ScrollView>
-          <PinnedFooter>
-            <GradientButton
-              label="Add loan"
-              icon="add"
-              onPress={handleAdd}
-              disabled={!isLoanDraftValid(draft)}
-            />
-          </PinnedFooter>
-        </KeyboardAvoidingView>
-      </Modal>
+        <LoanForm draft={draft} onChange={setDraft} />
+      </BottomSheet>
     </>
   );
 }
