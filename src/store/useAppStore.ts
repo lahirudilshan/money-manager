@@ -24,6 +24,7 @@ import {
   type Ratios,
   type SubcategoryStatus,
 } from '../core/planning';
+import { suggestCategoryIcon } from '../data/categoryIcons';
 import { groupColors } from '../theme';
 import { parseSms } from '../core/smsParser';
 import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
@@ -214,6 +215,35 @@ export interface AppState {
   dismissDraft: (draftId: string) => void;
 }
 
+/**
+ * Icons that mean "nothing better was found", not "the user chose this".
+ *
+ * Categories created before the icon catalog was filled out were assigned one
+ * of these as a fallback, so a board can end up with four different bills all
+ * showing a shopping basket — which makes the category grid unscannable, since
+ * the icon is the first thing the eye lands on.
+ */
+const PLACEHOLDER_ICONS = new Set(['basket-outline', 'repeat-outline', 'albums-outline']);
+
+/**
+ * Re-suggest icons for categories still sitting on a placeholder.
+ *
+ * Only placeholders are touched: an icon the user picked deliberately, or one
+ * the catalog already matched well, is left exactly as it is. Idempotent — once
+ * a category has a real icon it never qualifies again, so this is a no-op on
+ * every launch after the first.
+ */
+function repairGenericCategoryIcons(): void {
+  for (const category of categoryRepo.all()) {
+    if (!PLACEHOLDER_ICONS.has(category.icon)) continue;
+    const suggested = suggestCategoryIcon(category.name);
+    // Only replace when the catalog has something genuinely different to say.
+    if (suggested && suggested !== category.icon) {
+      categoryRepo.update(category.id, { icon: suggested });
+    }
+  }
+}
+
 /** Round-robin tint so every new item stays visually distinct with zero picker. */
 function nextColor(existingCount: number): string {
   return groupColors[existingCount % groupColors.length];
@@ -244,6 +274,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Ship the well-known merchants before the first refresh reads them, so a
     // fresh install already recognises the common chains.
     merchantRuleRepo.seed();
+    repairGenericCategoryIcons();
     get().refresh();
     set({
       ready: true,

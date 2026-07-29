@@ -15,10 +15,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, FrequencyPicker } from '../../src/components/forms';
 import { BottomSheet, Button, Divider, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
-import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
+import { DueDateCalendar } from '../../src/components/DueDateCalendar';
+import { ImageUploader } from '../../src/components/ImageUploader';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import {
+  dueDateFor,
   formatPeriod,
+  isFlexibleDueDay,
   periodKey,
   resolveCardId,
   type SubcategoryStatus,
@@ -98,7 +101,6 @@ export default function SubcategoryScreen() {
     }),
   );
   const [imageUri, setImageUri] = useState<string | null>(stateRow?.imageUri ?? null);
-  const [imageBusy, setImageBusy] = useState(false);
   const [imageViewerOpen, setImageViewerOpen] = useState(false);
 
   if (!subcategory) {
@@ -130,35 +132,6 @@ export default function SubcategoryScreen() {
     [state, id, unplanned],
   );
   const unplannedTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
-
-  async function pickImage(source: 'camera' | 'library') {
-    const permission =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return;
-
-    const result =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ quality: 0.6 })
-        : await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
-    if (result.canceled || !result.assets[0]) return;
-
-    setImageBusy(true);
-    try {
-      setImageUri(await persistPickedImage(result.assets[0].uri));
-    } finally {
-      setImageBusy(false);
-    }
-  }
-
-  function removeImage() {
-    // Only delete the file if it's a newly-picked one; the saved slip is
-    // cleared from the row on save, and deleting it here would break the
-    // stored record if the user then backs out without saving.
-    if (imageUri && imageUri !== stateRow?.imageUri) deletePersistedImage(imageUri);
-    setImageUri(null);
-  }
 
   function handleSave() {
     const trimmed = name.trim();
@@ -457,6 +430,18 @@ export default function SubcategoryScreen() {
             />
           ) : null}
 
+          {/* When it is due, in month context — the reminder rows open this
+              screen, and "29 days overdue" says how urgent it is but never
+              which day the money actually leaves. Hidden for unplanned lines
+              and for bills with no fixed day, which have no date to show. */}
+          {!unplanned && !isFlexibleDueDay(subcategory.dueDay ?? category?.dueDay ?? 1) ? (
+            <DueDateCalendar
+              dueDate={dueDateFor(state.period, subcategory.dueDay ?? category?.dueDay ?? 1)}
+              tint={category?.color}
+              overdue={status !== 'paid' && dueDateFor(state.period, subcategory.dueDay ?? category?.dueDay ?? 1) < new Date()}
+            />
+          ) : null}
+
           <FrequencyPicker label="Frequency" value={frequency} onChange={setFrequency} includeUnplanned />
 
           {/* A one-time cost counts in exactly one month — the month it was
@@ -484,58 +469,19 @@ export default function SubcategoryScreen() {
           ) : null}
         </View>
 
-        {/* Slip / receipt — at the bottom, for normal bills only. */}
+        {/* Slip / receipt — the shared uploader, so attaching a photo looks
+            and behaves the same here as on the transaction sheet. Replacing
+            must not delete the saved file: the row still points at it until
+            this edit is saved, and backing out would break that record. */}
         {!unplanned ? (
-          <View style={{ gap: space.sm }}>
-            <Label>SLIP / RECEIPT</Label>
-            {imageUri ? (
-              <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
-                <Pressable
-                  onPress={() => setImageViewerOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="View slip"
-                >
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={{ width: 140, height: 140, borderRadius: 14 }}
-                  />
-                </Pressable>
-                <Pressable
-                  onPress={removeImage}
-                  accessibilityRole="button"
-                  accessibilityLabel="Remove slip"
-                  style={{
-                    position: 'absolute',
-                    top: -8,
-                    right: -8,
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    backgroundColor: colors.danger,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Ionicons name="close" size={16} color="#FFFFFF" />
-                </Pressable>
-              </View>
-            ) : (
-              <Row gap={space.sm}>
-                <UploadButton
-                  icon="camera-outline"
-                  label="Camera"
-                  busy={imageBusy}
-                  onPress={() => pickImage('camera')}
-                />
-                <UploadButton
-                  icon="image-outline"
-                  label="Upload"
-                  busy={imageBusy}
-                  onPress={() => pickImage('library')}
-                />
-              </Row>
-            )}
-          </View>
+          <ImageUploader
+            label="Slip / receipt"
+            value={imageUri}
+            onChange={setImageUri}
+            deleteOnReplace={false}
+            size={140}
+            onViewFullScreen={() => setImageViewerOpen(true)}
+          />
         ) : null}
 
         <Pressable
@@ -727,44 +673,4 @@ function UnplannedTransactions({
 }
 
 /** A dashed upload affordance for attaching a slip photo. */
-function UploadButton({
-  icon,
-  label,
-  busy,
-  onPress,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  busy: boolean;
-  onPress: () => void;
-}) {
-  const { colors, radius, space } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={busy}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      style={({ pressed }) => ({
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 7,
-        paddingVertical: 18,
-        borderRadius: radius.lg,
-        borderWidth: 1.5,
-        borderStyle: 'dashed',
-        borderColor: colors.hairlineStrong,
-        backgroundColor: colors.surface,
-        opacity: pressed || busy ? 0.6 : 1,
-      })}
-    >
-      <Ionicons name={icon} size={19} color={colors.accent} />
-      <T variant="small" tone="secondary" style={{ fontWeight: '600' }}>
-        {label}
-      </T>
-    </Pressable>
-  );
-}
 
