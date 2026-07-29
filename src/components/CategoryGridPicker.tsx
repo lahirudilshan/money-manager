@@ -65,7 +65,7 @@ export function CategoryGridPicker({
     onPress: () => void;
   };
 }) {
-  const { colors, space } = useTheme();
+  const { colors, radius, space } = useTheme();
   const [openId, setOpenId] = React.useState<string | null>(null);
 
   const billsOf = React.useCallback(
@@ -105,6 +105,10 @@ export function CategoryGridPicker({
     rows.push(shown.slice(i, i + COLUMNS));
   }
 
+  // The extra tile only starts a row of its own when the categories already
+  // filled the last one; otherwise it slots into the short final row.
+  const hasTrailingExtraRow = Boolean(extraTile) && shown.length % COLUMNS === 0;
+
   return (
     <View style={{ gap: space.sm }}>
       <Row justify="space-between" align="center">
@@ -130,18 +134,33 @@ export function CategoryGridPicker({
 
       <View
         style={{
-          borderTopWidth: 1,
-          borderLeftWidth: 1,
+          borderWidth: 1,
           borderColor: colors.hairline,
+          borderRadius: radius.md,
+          // Clips the cells' own square corners to the rounded frame, so the
+          // outer shape reads as one card rather than a grid of squares.
+          overflow: 'hidden',
         }}
       >
         {rows.map((row, rowIndex) => {
           const openInRow = row.find((category) => category.id === openId) ?? null;
 
+          /*
+           * Which element closes the grid decides who omits a bottom border —
+           * the container's frame already draws that edge, and a cell border
+           * there too would stack two 1px lines and look thicker.
+           *
+           * The closing element is: the trailing extra-tile row if one exists,
+           * else this row's expanded bills if it has any, else the last row.
+           */
+          const isFinalRow = rowIndex === rows.length - 1 && !hasTrailingExtraRow;
+          const rowClosesGrid = isFinalRow && !openInRow;
+          const billsCloseGrid = isFinalRow && Boolean(openInRow);
+
           return (
             <React.Fragment key={`row-${rowIndex}`}>
               <View style={{ flexDirection: 'row' }}>
-                {row.map((category) => (
+                {row.map((category, columnIndex) => (
                   <CategoryCell
                     key={category.id}
                     category={category}
@@ -149,17 +168,38 @@ export function CategoryGridPicker({
                     open={openId === category.id}
                     selected={selectedCategoryId === category.id}
                     onPress={() => press(category)}
+                    lastInRow={columnIndex === COLUMNS - 1}
+                    lastRow={rowClosesGrid}
                   />
                 ))}
+
                 {/* Only the final row can be short; pad it so the frame stays
                     rectangular. Rows above are always full. */}
                 {row.length < COLUMNS && !extraTile
                   ? Array.from({ length: COLUMNS - row.length }, (_, i) => (
-                      <FillerCell key={`tail-${rowIndex}-${i}`} />
+                      <FillerCell
+                        key={`tail-${rowIndex}-${i}`}
+                        lastInRow={row.length + i === COLUMNS - 1}
+                        lastRow={rowClosesGrid}
+                      />
                     ))
                   : null}
+
                 {row.length < COLUMNS && extraTile && rowIndex === rows.length - 1 ? (
-                  <ExtraCell tile={extraTile} />
+                  <>
+                    <ExtraCell
+                      tile={extraTile}
+                      lastInRow={row.length === COLUMNS - 1}
+                      lastRow={rowClosesGrid}
+                    />
+                    {Array.from({ length: COLUMNS - row.length - 1 }, (_, i) => (
+                      <FillerCell
+                        key={`tail-extra-${i}`}
+                        lastInRow={row.length + 1 + i === COLUMNS - 1}
+                        lastRow={rowClosesGrid}
+                      />
+                    ))}
+                  </>
                 ) : null}
               </View>
 
@@ -170,6 +210,7 @@ export function CategoryGridPicker({
                   category={openInRow}
                   bills={billsOf(openInRow.id)}
                   selectedId={selectedId}
+                  lastRow={billsCloseGrid}
                   onSelect={(billId) => {
                     animate();
                     setOpenId(null);
@@ -182,11 +223,11 @@ export function CategoryGridPicker({
         })}
 
         {/* When the last row was already full, the extra tile starts a new one. */}
-        {extraTile && shown.length % COLUMNS === 0 ? (
+        {hasTrailingExtraRow && extraTile ? (
           <View style={{ flexDirection: 'row' }}>
-            <ExtraCell tile={extraTile} />
+            <ExtraCell tile={extraTile} lastInRow={false} lastRow />
             {Array.from({ length: COLUMNS - 1 }, (_, i) => (
-              <FillerCell key={`extra-pad-${i}`} />
+              <FillerCell key={`extra-pad-${i}`} lastInRow={i === COLUMNS - 2} lastRow />
             ))}
           </View>
         ) : null}
@@ -206,12 +247,18 @@ function CategoryCell({
   open,
   selected,
   onPress,
+  lastInRow,
+  lastRow,
 }: {
   category: GridCategory;
   expandable: boolean;
   open: boolean;
   selected: boolean;
   onPress: () => void;
+  /** Omit the right border — the container's frame supplies that edge. */
+  lastInRow: boolean;
+  /** Omit the bottom border for the same reason. */
+  lastRow: boolean;
 }) {
   const { colors } = useTheme();
 
@@ -228,13 +275,16 @@ function CategoryCell({
           justifyContent: 'center',
           gap: 3,
           paddingHorizontal: 4,
-          borderRightWidth: 1,
-          borderBottomWidth: 1,
+          // Only internal separators: the container draws the outer frame, so a
+          // border here as well would stack two 1px lines on the last row and
+          // column and read as a thicker edge.
+          borderRightWidth: lastInRow ? 0 : 1,
+          borderBottomWidth: lastRow ? 0 : 1,
           borderColor: colors.hairline,
           backgroundColor: selected
             ? category.color
             : open
-              ? `${category.color}1F`
+              ? `${category.color}0F`
               : pressed
                 ? colors.surfaceSunken
                 : colors.surface,
@@ -297,41 +347,55 @@ function BillRows({
   bills,
   selectedId,
   onSelect,
+  lastRow,
 }: {
   category: GridCategory;
   bills: readonly GridDestination[];
   selectedId: string | null;
   onSelect: (billId: string) => void;
+  /** True when this block closes the grid, so it drops its bottom border. */
+  lastRow?: boolean;
 }) {
-  const { colors } = useTheme();
-  const remainder = bills.length % COLUMNS;
-  const padding = remainder === 0 ? 0 : COLUMNS - remainder;
+  const { colors, radius, space } = useTheme();
 
   return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', backgroundColor: colors.surfaceSunken }}>
-      {bills.map((bill) => {
+    <View
+      style={{
+        // The same wash the open category cell uses, so the block and the cell
+        // above it read as one continuous piece rather than two surfaces.
+        backgroundColor: `${category.color}0F`,
+        borderBottomWidth: lastRow ? 0 : 1,
+        borderColor: colors.hairline,
+        // Inset so the opened bills sit *within* the grey block rather than
+        // butting against the grid frame — the padding is what makes the
+        // expansion read as contained by its category.
+        padding: space.sm,
+      }}
+    >
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+        {bills.map((bill) => {
         const chosen = bill.id === selectedId;
         return (
-          <View key={bill.id} style={{ width: `${100 / COLUMNS}%` }}>
+          <View key={bill.id} style={{ width: `${100 / COLUMNS}%`, padding: 3 }}>
             <Pressable
               onPress={() => onSelect(bill.id)}
               accessibilityRole="button"
               accessibilityState={{ selected: chosen }}
               accessibilityLabel={bill.name}
               style={({ pressed }) => ({
-                height: 82,
+                height: 74,
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 3,
                 paddingHorizontal: 4,
-                borderRightWidth: 1,
-                borderBottomWidth: 1,
-                borderColor: colors.hairline,
+                borderRadius: radius.sm,
+                borderWidth: 1,
+                borderColor: chosen ? category.color : colors.hairline,
                 backgroundColor: chosen
                   ? category.color
                   : pressed
                     ? colors.hairline
-                    : 'transparent',
+                    : colors.surface,
               })}
             >
               <T
@@ -359,18 +423,7 @@ function BillRows({
         );
       })}
 
-      {Array.from({ length: padding }, (_, i) => (
-        <View
-          key={`bill-pad-${i}`}
-          style={{
-            width: `${100 / COLUMNS}%`,
-            height: 82,
-            borderRightWidth: 1,
-            borderBottomWidth: 1,
-            borderColor: colors.hairline,
-          }}
-        />
-      ))}
+      </View>
     </View>
   );
 }
@@ -378,8 +431,12 @@ function BillRows({
 /** The trailing "New line" cell, sized like any category cell. */
 function ExtraCell({
   tile,
+  lastInRow,
+  lastRow,
 }: {
   tile: { label: string; icon: keyof typeof Ionicons.glyphMap; selected: boolean; onPress: () => void };
+  lastInRow: boolean;
+  lastRow: boolean;
 }) {
   const { colors } = useTheme();
   return (
@@ -394,8 +451,8 @@ function ExtraCell({
           alignItems: 'center',
           justifyContent: 'center',
           gap: 5,
-          borderRightWidth: 1,
-          borderBottomWidth: 1,
+          borderRightWidth: lastInRow ? 0 : 1,
+          borderBottomWidth: lastRow ? 0 : 1,
           borderColor: colors.hairline,
           backgroundColor: tile.selected
             ? colors.accentSoft
@@ -423,15 +480,23 @@ function ExtraCell({
 }
 
 /** An empty cell, keeping the grid rectangular where a block doesn't divide. */
-function FillerCell({ tinted }: { tinted?: boolean }) {
+function FillerCell({
+  tinted,
+  lastInRow,
+  lastRow,
+}: {
+  tinted?: boolean;
+  lastInRow?: boolean;
+  lastRow?: boolean;
+}) {
   const { colors } = useTheme();
   return (
     <View
       style={{
         width: `${100 / COLUMNS}%`,
         height: 82,
-        borderRightWidth: 1,
-        borderBottomWidth: 1,
+        borderRightWidth: lastInRow ? 0 : 1,
+        borderBottomWidth: lastRow ? 0 : 1,
         borderColor: colors.hairline,
         backgroundColor: tinted ? colors.surfaceSunken : colors.surface,
       }}

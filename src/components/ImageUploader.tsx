@@ -168,7 +168,7 @@ function SlotButton({
           borderWidth: 1,
           borderStyle: 'dashed',
           borderColor: colors.hairlineStrong,
-          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+          backgroundColor: pressed ? colors.hairline : colors.surfaceSunken,
           opacity: busy ? 0.5 : 1,
         })}
       >
@@ -196,7 +196,7 @@ function SlotButton({
         borderWidth: 1.5,
         borderStyle: 'dashed',
         borderColor: pressed ? colors.accent : colors.hairlineStrong,
-        backgroundColor: pressed ? colors.accentSoft : colors.surfaceSunken,
+        backgroundColor: pressed ? colors.hairline : colors.surfaceSunken,
         opacity: busy ? 0.6 : 1,
       })}
     >
