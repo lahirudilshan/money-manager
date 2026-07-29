@@ -1,21 +1,25 @@
 import { Stack, useRouter } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
+import { extractSmsFromUrl } from '../src/core/smsIntakeUrl';
 import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
 import { syncCategoryReminders } from '../src/services/notifications';
 import { T } from '../src/components/ui';
 
 /**
  * Options for a route whose screen renders its content inside the shared
- * BottomSheet: the route itself is a transparent, non-animating overlay so the
- * BottomSheet owns the backdrop fade and slide. One constant so every sheet
- * route is configured identically.
+ * BottomSheet. The route presents as the native iOS sheet (`presentation:
+ * 'modal'` = pageSheet), and the screen renders `<BottomSheet asRoute ...>` so
+ * the BottomSheet draws only its chrome inside that one native sheet — same
+ * single-presentation behaviour as the inline "add bill" sheet. One constant so
+ * every sheet route is configured identically.
  */
-const SHEET_ROUTE = { presentation: 'transparentModal', animation: 'none' } as const;
+const SHEET_ROUTE = { presentation: 'modal' } as const;
 
 function RootNavigator() {
   const theme = useTheme();
@@ -69,6 +73,26 @@ function RootNavigator() {
       cancelled = true;
     };
   }, [initialise]);
+
+  /**
+   * Catch SMS deep links that arrive while the app is *already running*.
+   *
+   * The `sms/index` route handles a cold start, but on a warm start iOS hands
+   * the URL to this listener and expo-router may not remount that route at all
+   * — which is why a second bank SMS in the same session appeared to do
+   * nothing. Ingesting here makes every delivery behave the same, and the
+   * store's raw-text dedupe keeps a doubled event from queuing twice.
+   */
+  useEffect(() => {
+    if (!ready) return;
+
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      const text = extractSmsFromUrl(url);
+      if (text) useAppStore.getState().ingestSmsText(text);
+    });
+
+    return () => subscription.remove();
+  }, [ready]);
 
   // Redirect into onboarding only once the navigator below is actually
   // mounted — dispatching `router.replace` while this component is still

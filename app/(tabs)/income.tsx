@@ -211,7 +211,6 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
       title={editId ? 'Edit income' : 'New income'}
       icon={isForeign ? 'logo-usd' : 'cash-outline'}
       iconColor={colors.accent}
-      heightPct={0.85}
       scroll
       footer={
         <GradientButton

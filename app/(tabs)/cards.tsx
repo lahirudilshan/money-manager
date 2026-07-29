@@ -4,7 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { BankCardTile } from '../../src/components/BankCardTile';
 import { BankLogo } from '../../src/components/BankLogo';
-import { Field, PillSelect } from '../../src/components/forms';
+import { Field } from '../../src/components/forms';
 import {
   AppHeader,
   BottomSheet,
@@ -22,21 +22,12 @@ import {
   T,
 } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import { formatMoney, parseAmount } from '../../src/core/money';
+import { formatMoney } from '../../src/core/money';
 import { accountLabel, BANKS } from '../../src/data/banks';
 import { useBrand } from '../../src/hooks/useBrand';
 import { selectCardViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import type { Card } from '../../src/db/schema';
 import { useTheme } from '../../src/theme/ThemeProvider';
-
-const CARD_KINDS = [
-  { key: 'bank', label: 'Bank', icon: 'business-outline' as const },
-  { key: 'wallet', label: 'Wallet', icon: 'wallet-outline' as const },
-  { key: 'savings', label: 'Savings', icon: 'shield-checkmark-outline' as const },
-  { key: 'goal', label: 'Goal', icon: 'flag-outline' as const },
-];
-
-type CardKind = 'bank' | 'wallet' | 'savings' | 'goal';
 
 /**
  * Accounts & Cards.
@@ -165,7 +156,12 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
 
   const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
   const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
-  const goalPct = hasGoal ? Math.min(100, (view.balanceMinor / card.targetMinor!) * 100) : 0;
+  // Clamped at both ends: a balance can now go negative (spending can exceed
+  // what was funded in), and a negative percentage would render a bar with a
+  // negative width.
+  const goalPct = hasGoal
+    ? Math.max(0, Math.min(100, (view.balanceMinor / card.targetMinor!) * 100))
+    : 0;
 
   const label = accountLabel(card);
   return (
@@ -265,7 +261,6 @@ function DetailModal({
       title={card.isCard ? 'Card details' : 'Account details'}
       icon={card.isCard ? 'card-outline' : 'wallet-outline'}
       iconColor={brand.color}
-      heightPct={0.9}
       scroll
     >
           <Row gap={space.md}>
@@ -362,9 +357,7 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   const [isCard, setIsCard] = useState(existing?.isCard ?? false);
   const [bankId, setBankId] = useState<string | null>(existing?.bankId ?? null);
   const [name, setName] = useState(existing?.name ?? '');
-  const [kind, setKind] = useState<CardKind>((existing?.kind as CardKind) ?? 'bank');
   const [last4, setLast4] = useState(existing?.last4 ?? '');
-  const [target, setTarget] = useState(existing?.targetMinor ? String(existing.targetMinor / 100) : '');
   // Card fields
   const [cardNumber, setCardNumber] = useState(existing?.cardNumber ?? '');
   const [cvv, setCvv] = useState(existing?.cvv ?? '');
@@ -387,13 +380,15 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
 
     const patch = {
       name: trimmed,
-      kind,
+      // 'kind' (bank/wallet/savings/goal) was removed from the UI — every entry
+      // added here is a plain bank account or card. Existing rows keep their kind.
+      kind: existing?.kind ?? 'bank',
       isCard,
       bankId,
       bankName: brand?.name ?? existing?.bankName ?? null,
       last4: derivedLast4,
-      icon: isCard ? 'card-outline' : (CARD_KINDS.find((k) => k.key === kind)?.icon ?? 'wallet-outline'),
-      targetMinor: kind === 'goal' ? parseAmount(target) : null,
+      icon: isCard ? 'card-outline' : 'wallet-outline',
+      targetMinor: existing?.targetMinor ?? null,
       cardNumber: isCard ? cardNumber.trim() || null : null,
       cvv: isCard ? cvv.trim() || null : null,
       expiry: isCard ? expiry.trim() || null : null,
@@ -414,7 +409,6 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
       title={editId ? 'Edit' : 'Add account or card'}
       icon={isCard ? 'card-outline' : 'wallet-outline'}
       iconColor={colors.accent}
-      heightPct={0.9}
       scroll
       footer={
         <GradientButton
@@ -425,9 +419,8 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
         />
       }
     >
-          {/* Step 1: what is it? */}
-          <PillSelect
-            label="What are you adding?"
+          {/* Step 1: account or card — a clear segmented choice. */}
+          <Segmented
             options={[
               { key: 'account', label: 'Account', icon: 'wallet-outline' },
               { key: 'card', label: 'Card', icon: 'card-outline' },
@@ -436,7 +429,7 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             onSelect={(key) => setIsCard(key === 'card')}
           />
 
-          {/* Step 2: bank. */}
+          {/* Step 2: bank — a full grid so every option is visible at a glance. */}
           <BankPicker selectedId={bankId} onSelect={setBankId} />
 
           {/* Step 3: name. */}
@@ -447,7 +440,7 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             placeholder={isCard ? 'e.g. HNB Visa' : 'e.g. Salary account'}
           />
 
-          {/* Step 4: type-specific fields. */}
+          {/* Step 4: the identifying details for each type. */}
           {isCard ? (
             <>
               <Field
@@ -471,12 +464,6 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             </>
           ) : (
             <>
-              <PillSelect
-                label="Type"
-                options={CARD_KINDS}
-                selectedKey={kind}
-                onSelect={(key) => setKind(key as CardKind)}
-              />
               <Field
                 label="Account number"
                 value={accountNumber}
@@ -488,22 +475,89 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
                 <Field label="Branch" value={branch} onChangeText={setBranch} placeholder="e.g. Kelaniya" style={{ flex: 1 }} />
                 <Field label="Bank code" value={bankCode} onChangeText={setBankCode} placeholder="e.g. 7010" style={{ flex: 1 }} />
               </Row>
-              {kind === 'goal' ? (
-                <Field
-                  label="Target amount"
-                  value={target}
-                  onChangeText={setTarget}
-                  placeholder="e.g. 3000000"
-                  keyboardType="numeric"
-                />
-              ) : null}
             </>
           )}
     </BottomSheet>
   );
 }
 
-/** Horizontal strip of bank brands for choosing an entry's bank. */
+/**
+ * A two-option segmented control (Account / Card). Bigger tap targets and a
+ * clearer selected state than a pill row, since this is the first choice made.
+ */
+function Segmented({
+  options,
+  selectedKey,
+  onSelect,
+}: {
+  options: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap }[];
+  selectedKey: string;
+  onSelect: (key: string) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        backgroundColor: colors.surfaceSunken,
+        borderRadius: radius.md,
+        padding: 4,
+        gap: 4,
+      }}
+    >
+      {options.map((option) => {
+        const selected = selectedKey === option.key;
+        return (
+          <Pressable
+            key={option.key}
+            onPress={() => onSelect(option.key)}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={option.label}
+            style={{
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              paddingVertical: 11,
+              borderRadius: radius.sm,
+              backgroundColor: selected ? colors.surface : 'transparent',
+              ...(selected
+                ? {
+                    borderWidth: 1,
+                    borderColor: colors.hairline,
+                    shadowColor: '#000',
+                    shadowOpacity: 0.06,
+                    shadowRadius: 4,
+                    shadowOffset: { width: 0, height: 1 },
+                  }
+                : {}),
+            }}
+          >
+            <Ionicons
+              name={option.icon}
+              size={17}
+              color={selected ? colors.accent : colors.inkSecondary}
+            />
+            <T
+              variant="small"
+              color={selected ? colors.ink : colors.inkSecondary}
+              style={{ fontWeight: selected ? '800' : '600' }}
+            >
+              {option.label}
+            </T>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * Bank chooser as a wrapped grid — every brand visible at once (no hidden
+ * horizontal scroll), each a logo + short name tile with a clear selected ring.
+ */
 function BankPicker({
   selectedId,
   onSelect,
@@ -515,12 +569,8 @@ function BankPicker({
 
   return (
     <View style={{ gap: space.sm }}>
-      <Label>BANK</Label>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
-      >
+      <Label>Bank</Label>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
         {BANKS.map((brand) => {
           const selected = selectedId === brand.id;
           return (
@@ -531,23 +581,30 @@ function BankPicker({
               accessibilityState={{ selected }}
               accessibilityLabel={brand.name}
               style={({ pressed }) => ({
+                width: '23%',
                 alignItems: 'center',
-                gap: 4,
-                padding: 4,
+                gap: 5,
+                paddingVertical: space.sm,
                 borderRadius: radius.md,
-                borderWidth: 2,
-                borderColor: selected ? colors.ink : 'transparent',
+                borderWidth: 1.5,
+                borderColor: selected ? brand.color : colors.hairline,
+                backgroundColor: selected ? `${brand.color}12` : colors.surface,
                 opacity: pressed ? 0.75 : 1,
               })}
             >
-              <BankLogo brand={brand} size={44} />
-              <T variant="caption" tone={selected ? 'ink' : 'muted'} numberOfLines={1} style={{ maxWidth: 56 }}>
+              <BankLogo brand={brand} size={38} />
+              <T
+                variant="caption"
+                color={selected ? colors.ink : colors.inkMuted}
+                numberOfLines={1}
+                style={{ maxWidth: 60, fontWeight: selected ? '700' : '500' }}
+              >
                 {brand.shortName}
               </T>
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
     </View>
   );
 }

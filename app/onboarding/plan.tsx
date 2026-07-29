@@ -330,7 +330,6 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
       eyebrow={line ? (line.type === 'income' ? 'Income' : 'Expense') : undefined}
       icon={line?.type === 'income' ? 'trending-up-outline' : 'pricetag-outline'}
       iconColor={colors.accent}
-      heightPct={0.88}
       scroll
       footer={line ? <GradientButton label="Done" icon="checkmark" onPress={onClose} /> : undefined}
     >
@@ -383,7 +382,7 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                     }
                   }}
                   placeholder="0"
-                  placeholderTextColor={colors.inkFaint}
+                  placeholderTextColor={colors.inkMuted}
                   keyboardType="numeric"
                   autoFocus
                   style={{

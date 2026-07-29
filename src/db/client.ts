@@ -21,7 +21,7 @@ export { expoDb, DATABASE_NAME };
  * files: for a local-only app this removes a codegen step while staying
  * explicit. `user_version` gates destructive upgrades.
  */
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 8;
 
 const DDL = [
   `CREATE TABLE IF NOT EXISTS cards (
@@ -88,6 +88,7 @@ const DDL = [
     due_day INTEGER,
     card_id TEXT REFERENCES cards(id) ON DELETE SET NULL,
     loan_id TEXT REFERENCES loans(id) ON DELETE SET NULL,
+    once_in_period TEXT,
     plan_target_minor INTEGER,
     plan_due_date INTEGER,
     plan_start_date INTEGER,
@@ -162,6 +163,17 @@ const DDL = [
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+  // Learned merchant -> line associations; see `merchantRules` in schema.ts.
+  `CREATE TABLE IF NOT EXISTS merchant_rules (
+    id TEXT PRIMARY KEY NOT NULL,
+    pattern TEXT NOT NULL,
+    subcategory_id TEXT REFERENCES subcategories(id) ON DELETE CASCADE,
+    hint TEXT,
+    source TEXT NOT NULL DEFAULT 'learned',
+    hit_count INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
   `CREATE INDEX IF NOT EXISTS categories_card_idx ON categories(card_id)`,
   `CREATE INDEX IF NOT EXISTS subcategories_category_idx ON subcategories(category_id)`,
   `CREATE INDEX IF NOT EXISTS subcategory_states_period_idx ON subcategory_states(period)`,
@@ -172,6 +184,10 @@ const DDL = [
   `CREATE INDEX IF NOT EXISTS fundings_lookup_idx ON fundings(category_id, period)`,
   `CREATE INDEX IF NOT EXISTS transactions_sub_idx ON transactions(subcategory_id)`,
   `CREATE INDEX IF NOT EXISTS transactions_lookup_idx ON transactions(subcategory_id, period)`,
+  // Not unique: a merchant can legitimately gain a second rule pointing at a
+  // different line (a supermarket that is sometimes groceries, sometimes fuel).
+  // `matchMerchant` picks between them by hit count.
+  `CREATE INDEX IF NOT EXISTS merchant_rules_pattern_idx ON merchant_rules(pattern)`,
 ];
 
 /**
@@ -572,6 +588,8 @@ function ensureAdditiveColumns(): void {
       'plan_remind_days_before',
       'plan_remind_days_before INTEGER NOT NULL DEFAULT 14',
     );
+    // Which month a one-time cost belongs to — see `subcategories` in schema.ts.
+    ensureColumn('subcategories', 'once_in_period', 'once_in_period TEXT');
   }
 
   const hasSubcategoryStates = expoDb.getFirstSync(
@@ -633,6 +651,146 @@ function ensureCurrentColors(): void {
   if (hasCategories) normalizeStaleColors('categories');
 }
 
+/**
+ * Repair a `subcategories.category_id` foreign key left pointing at a table
+ * that no longer exists.
+ *
+ * `migrateV2ToV3`/`migrateV3ToV4` rename `categories` aside to `categories_old`
+ * before rebuilding it. SQLite propagates such a rename into every *child*
+ * table's REFERENCES clause, so `subcategories.category_id` silently became
+ * `REFERENCES "categories_old"(id)` and stayed that way after the old table was
+ * dropped — a dangling FK.
+ *
+ * It lies dormant because foreign keys are only enforced on write, so reads and
+ * inserts elsewhere are unaffected. But any UPDATE of `category_id` fails with
+ * "no such table: main.categories_old", which would break moving a bill between
+ * categories as well as the debt consolidation below.
+ *
+ * The fix is the standard SQLite table rebuild, guarded by `legacy_alter_table`
+ * so the rename does not rewrite the child clause again on the way through.
+ */
+function repairSubcategoryForeignKey(): void {
+  const row = expoDb.getFirstSync(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='subcategories'`,
+  ) as { sql: string } | null;
+  if (!row?.sql || !/REFERENCES\s+"?categories_old"?/i.test(row.sql)) return;
+
+  // Point the clause back at the real table, preserving every other column
+  // exactly as it is on this device (which may include added columns).
+  const fixed = row.sql.replace(/REFERENCES\s+"?categories_old"?/i, 'REFERENCES categories');
+  const rebuilt = fixed.replace(/CREATE TABLE\s+"?subcategories"?/i, 'CREATE TABLE subcategories_fixed');
+
+  expoDb.execSync('PRAGMA foreign_keys = OFF;');
+  expoDb.execSync('BEGIN IMMEDIATE;');
+  try {
+    expoDb.execSync(rebuilt);
+    // Column lists match by construction — the DDL above is this table's own.
+    const columns = (expoDb.getAllSync(`PRAGMA table_info(subcategories)`) as { name: string }[])
+      .map((c) => `"${c.name}"`)
+      .join(', ');
+    expoDb.execSync(
+      `INSERT INTO subcategories_fixed (${columns}) SELECT ${columns} FROM subcategories;`,
+    );
+    expoDb.execSync('DROP TABLE subcategories;');
+    expoDb.execSync('ALTER TABLE subcategories_fixed RENAME TO subcategories;');
+    // Indexes were dropped with the old table; the DDL pass recreates them.
+    expoDb.execSync('COMMIT;');
+  } catch (error) {
+    expoDb.execSync('ROLLBACK;');
+    throw error;
+  } finally {
+    expoDb.execSync('PRAGMA foreign_keys = ON;');
+  }
+}
+
+/** The single category every loan-linked budget line belongs to. */
+export const DEBT_CATEGORY_ID = 'cat_debt';
+
+/**
+ * Collapse every loan-linked line into one "Debt" category.
+ *
+ * Loans were added as a category each — "Personal Loan", "Vehicle Lease" — so
+ * the board showed one card per loan even though they are all the same kind of
+ * commitment. This gathers them under a single Debt category whose
+ * subcategories are the individual loans, which is how the user thinks about
+ * them and what the ratio block already assumed (it treats "contains a
+ * loan-linked line" as debt).
+ *
+ * Line ids are preserved, so every `subcategory_states` row, funding record and
+ * SMS rule keeps resolving to the same bill — only the parent changes. Any
+ * category left empty by the move is archived rather than deleted, so nothing
+ * is destroyed if the user had also put non-loan lines somewhere unexpected.
+ *
+ * Idempotent and driven by table shape, not `user_version`: it re-checks for
+ * stray loan lines on every launch, so a loan added before this shipped (or by
+ * an older build) is folded in the next time the app starts.
+ */
+function consolidateDebtCategories(): void {
+  const hasSubcategories = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='subcategories'`,
+  );
+  if (!hasSubcategories) return;
+
+  // Loan-linked lines that are not already under the Debt category.
+  const strays = expoDb.getAllSync(
+    `SELECT id, category_id FROM subcategories
+     WHERE loan_id IS NOT NULL AND archived_at IS NULL AND category_id <> ?`,
+    [DEBT_CATEGORY_ID],
+  ) as { id: string; category_id: string }[];
+  if (strays.length === 0) return;
+
+  expoDb.execSync('BEGIN IMMEDIATE;');
+  try {
+    // Create the Debt category if it does not exist yet, inheriting the due day
+    // and funding card of the first loan category being absorbed so the move
+    // does not silently change when or from where these bills are paid.
+    const existing = expoDb.getFirstSync(`SELECT id FROM categories WHERE id = ?`, [
+      DEBT_CATEGORY_ID,
+    ]);
+    if (!existing) {
+      const donor = expoDb.getFirstSync(
+        `SELECT card_id, due_day FROM categories WHERE id = ?`,
+        [strays[0].category_id],
+      ) as { card_id: string | null; due_day: number } | null;
+
+      expoDb.runSync(
+        `INSERT INTO categories (id, name, card_id, color, icon, due_day, sort_order, created_at, updated_at)
+         VALUES (?, 'Debt', ?, '#B7791F', 'trending-down-outline', ?, 0, unixepoch() * 1000, unixepoch() * 1000)`,
+        [DEBT_CATEGORY_ID, donor?.card_id ?? null, donor?.due_day ?? 1],
+      );
+    }
+
+    // Reparent every loan line, keeping its id so all history follows it.
+    expoDb.runSync(
+      `UPDATE subcategories SET category_id = ?, updated_at = unixepoch() * 1000
+       WHERE loan_id IS NOT NULL AND archived_at IS NULL AND category_id <> ?`,
+      [DEBT_CATEGORY_ID, DEBT_CATEGORY_ID],
+    );
+
+    // Archive the now-empty former loan categories. Anything that still holds a
+    // line is left alone — emptiness is checked, never assumed.
+    for (const categoryId of new Set(strays.map((s) => s.category_id))) {
+      const remaining = expoDb.getFirstSync(
+        `SELECT COUNT(*) AS count FROM subcategories
+         WHERE category_id = ? AND archived_at IS NULL`,
+        [categoryId],
+      ) as { count: number } | null;
+
+      if ((remaining?.count ?? 0) === 0) {
+        expoDb.runSync(
+          `UPDATE categories SET archived_at = unixepoch() * 1000 WHERE id = ?`,
+          [categoryId],
+        );
+      }
+    }
+
+    expoDb.execSync('COMMIT;');
+  } catch (error) {
+    expoDb.execSync('ROLLBACK;');
+    throw error;
+  }
+}
+
 let initialised = false;
 
 /** Create the schema if needed. Safe to call repeatedly; runs once per launch. */
@@ -677,11 +835,19 @@ export function initialiseDatabase(): void {
 
   // Unconditional and idempotent — see ensureAdditiveColumns' doc comment.
   ensureAdditiveColumns();
+  // Must run after columns are added (the rebuild copies whatever columns the
+  // device actually has) and before anything writes `category_id`.
+  repairSubcategoryForeignKey();
   ensureCurrentColors();
 
   for (const statement of DDL) {
     expoDb.execSync(statement);
   }
+
+  // Runs after the DDL so the tables it touches are guaranteed to exist. Like
+  // the helpers above it is idempotent and shape-driven, so a loan category
+  // created by an older build is folded in on the next launch.
+  consolidateDebtCategories();
 
   expoDb.execSync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   initialised = true;
@@ -700,6 +866,8 @@ export function resetDatabase(): void {
     'transactions',
     'subcategory_states',
     'fundings',
+    // Before `subcategories`, which it references.
+    'merchant_rules',
     'subcategories',
     'categories',
     'incomes',

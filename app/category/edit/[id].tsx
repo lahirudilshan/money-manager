@@ -1,23 +1,34 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { AccountField } from '../../../src/components/AccountPicker';
 import { DayPicker } from '../../../src/components/DayPicker';
-import { Field, IconPicker } from '../../../src/components/forms';
+import { IconPicker, NameWithIconField } from '../../../src/components/forms';
 import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '../../../src/data/categoryIcons';
-import { BottomSheet, Button, GradientButton, Label, T } from '../../../src/components/ui';
+import { BottomSheet, Button, GradientButton, Label, Row, T } from '../../../src/components/ui';
+import { formatMoney } from '../../../src/core/money';
+import { FREQUENCY_LABEL } from '../../../src/db/schema';
 import { useModalClose } from '../../../src/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '../../../src/theme/ThemeProvider';
 
 export default function EditCategoryScreen() {
-  const { colors, radius, space } = useTheme();
+  const { colors, space } = useTheme();
   const closeModal = useModalClose();
   const { id } = useLocalSearchParams<{ id: string }>();
   const state = useAppStore();
 
+  const router = useRouter();
   const category = useMemo(() => state.categories.find((c) => c.id === id), [state.categories, id]);
+
+  // The bills inside this category. Frequency lives on the bill, not the
+  // category, so this list is the route to it — without it a single-line
+  // category (e.g. a one-off "Down Payment") had no reachable frequency at all.
+  const bills = useMemo(
+    () => state.subcategories.filter((s) => s.categoryId === id),
+    [state.subcategories, id],
+  );
 
   const [name, setName] = useState(category?.name ?? '');
   const [icon, setIcon] = useState<keyof typeof Ionicons.glyphMap>(
@@ -66,11 +77,11 @@ export default function EditCategoryScreen() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="Edit category"
       icon={icon}
       iconColor={category.color}
-      heightPct={0.9}
       scroll
       footer={
         <GradientButton
@@ -83,26 +94,13 @@ export default function EditCategoryScreen() {
     >
           {/* Name + a live preview of the chosen icon, so the identity reads at
               a glance and the auto-suggested icon is visible as you type. */}
-          <View style={{ gap: space.sm }}>
-            <Label>Name</Label>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}>
-              <View
-                style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: radius.md,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: `${category.color}1F`,
-                }}
-              >
-                <Ionicons name={icon} size={24} color={category.color} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Field label="" value={name} onChangeText={onNameChange} placeholder="Category name" />
-              </View>
-            </View>
-          </View>
+          <NameWithIconField
+            value={name}
+            onChangeText={onNameChange}
+            icon={icon}
+            iconColor={category.color}
+            placeholder="Category name"
+          />
 
           {/* Icon grid — tap to override the auto-suggestion. */}
           <IconPicker
@@ -124,6 +122,56 @@ export default function EditCategoryScreen() {
           />
 
           <DayPicker value={dueDay} onChange={setDueDay} />
+
+          {/* The bills in this category, each showing how often it recurs.
+              Tapping one opens its editor, which is where frequency (monthly,
+              one-time, yearly) is actually set — a per-bill property, so it
+              cannot live on the category itself. */}
+          {bills.length > 0 ? (
+            <View style={{ gap: space.sm }}>
+              <Label>BILLS IN THIS CATEGORY</Label>
+              <View style={{ gap: 6 }}>
+                {bills.map((bill) => (
+                  <Pressable
+                    key={bill.id}
+                    onPress={() => router.push(`/subcategory/${bill.id}`)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${bill.name}, ${FREQUENCY_LABEL[bill.frequency]}. Edit.`}
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: space.md,
+                      paddingVertical: 11,
+                      paddingHorizontal: space.md,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: colors.hairline,
+                      backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
+                    })}
+                  >
+                    <Ionicons
+                      name={(bill.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
+                      size={17}
+                      color={colors.inkMuted}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <T variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
+                        {bill.name}
+                      </T>
+                      <T variant="caption" tone="muted">
+                        {FREQUENCY_LABEL[bill.frequency]} · {formatMoney(bill.plannedMinor)}
+                      </T>
+                    </View>
+                    <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
+                  </Pressable>
+                ))}
+              </View>
+              <T variant="caption" tone="muted">
+                Tap a bill to change how often it repeats — use One-time for a cost you paid once,
+                so it stops counting in later months.
+              </T>
+            </View>
+          ) : null}
     </BottomSheet>
   );
 }

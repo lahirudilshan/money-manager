@@ -10,12 +10,14 @@ import {
   View,
 } from 'react-native';
 import { AccountField } from '../../src/components/AccountPicker';
+import { DatePickerField } from '../../src/components/DatePickerField';
 import { AmountField } from '../../src/components/forms';
 import { BottomSheet, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, STATUS_ORDER, type SubcategoryStatus } from '../../src/core/planning';
+import { isUnplanned } from '../../src/db/schema';
 import { resolveBrand } from '../../src/data/banks';
 import { selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
 import { statusStyle } from '../../src/theme';
@@ -29,11 +31,20 @@ const STATUS_LABEL: Record<SubcategoryStatus, string> = {
 /**
  * Log a transaction against a budget line — the dock's centre "+" action.
  *
- * Everything is on one screen in the order you actually fill it: amount first
- * (the number in your hand), then where it belongs (category → line), then
- * which account it moved through, its state, and finally the optional note and
- * photo. No progressive reveal — seeing every field at once is faster than
- * discovering them one tap at a time, which is what the user asked for.
+ * The screen asks three things in the order you actually know them: how much,
+ * what it was for, and the details.
+ *
+ * "What it was for" used to be two separate chip rows — pick a category, then
+ * pick a line inside it — which made the user navigate the app's data model
+ * instead of just naming the thing they bought. They are now one searchable
+ * destination list: every line in the plan, labelled with its category,
+ * filtered by typing. Choosing "Groceries" in one tap is the whole interaction,
+ * and the category comes along implicitly because a line already knows its
+ * parent.
+ *
+ * Everything below the destination is secondary — account, status, note, photo
+ * — so it sits under a collapsed "More details" until asked for, keeping the
+ * common case (amount + line + save) to a single screen with no scrolling.
  */
 export default function NewTransactionScreen() {
   const { colors, space } = useTheme();
@@ -43,39 +54,76 @@ export default function NewTransactionScreen() {
   const views = useMemo(() => selectCategoryViews(state), [state]);
 
   const [amount, setAmount] = useState('');
-  const [categoryId, setCategoryId] = useState<string | null>(views[0]?.category.id ?? null);
+  // Defaults to today; the chosen date decides which month this counts toward.
+  const [date, setDate] = useState(() => new Date());
   const [subcategoryId, setSubcategoryId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
+  /** Which category a newly-created line goes into. Only used by "New line". */
+  const [newLineCategoryId, setNewLineCategoryId] = useState<string | null>(
+    views[0]?.category.id ?? null,
+  );
   const [cardId, setCardId] = useState<string | null>(null);
   const [status, setStatus] = useState<SubcategoryStatus>('paid');
   const [note, setNote] = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
+  const [search, setSearch] = useState('');
+  const [showDetails, setShowDetails] = useState(false);
 
-  const selectedCategory = views.find((view) => view.category.id === categoryId);
-  const lines = selectedCategory?.rawSubcategories ?? [];
   const creatingNew = subcategoryId === '__new__';
+
+  /**
+   * Every budget line in the plan, flattened with its category, so one list can
+   * stand in for the old category→line drill-down.
+   */
+  const destinations = useMemo(
+    () =>
+      views.flatMap((view) =>
+        view.rawSubcategories.map((line) => ({
+          line,
+          category: view.category,
+        })),
+      ),
+    [views],
+  );
+
+  const selected = destinations.find((d) => d.line.id === subcategoryId) ?? null;
+
+  /**
+   * The category a save targets: the chosen line's own, or the explicit pick
+   * when creating a new line.
+   *
+   * The "new line" pick is validated against the current categories rather than
+   * trusted, and falls back to the first one — the stored id can go stale if the
+   * category is archived while this sheet is open, and a dangling id would
+   * otherwise pass `canSave` and fail at the insert.
+   */
+  const newLineCategory =
+    views.find((view) => view.category.id === newLineCategoryId)?.category ??
+    views[0]?.category ??
+    null;
+  const categoryId = creatingNew ? (newLineCategory?.id ?? null) : (selected?.category.id ?? null);
 
   // The account defaults to whatever the chosen line (or its category) funds
   // from, so the common case needs no tap; the picker only overrides it.
   const effectiveCardId =
-    cardId ??
-    (() => {
-      const line = lines.find((l) => l.id === subcategoryId);
-      return resolveCardId(line?.cardId, selectedCategory?.category.cardId);
-    })();
+    cardId ?? resolveCardId(selected?.line.cardId, selected?.category.cardId);
 
-  function selectCategory(id: string) {
-    setCategoryId(id);
-    setSubcategoryId(null);
-    setCardId(null);
-  }
+  const query = search.trim().toLowerCase();
+  const filteredDestinations = useMemo(() => {
+    if (!query) return destinations;
+    return destinations.filter(
+      (d) =>
+        d.line.name.toLowerCase().includes(query) ||
+        d.category.name.toLowerCase().includes(query),
+    );
+  }, [destinations, query]);
 
   function selectLine(id: string) {
     setSubcategoryId(id);
     setCardId(null);
     if (id !== '__new__') {
-      const line = lines.find((l) => l.id === id);
+      const line = destinations.find((d) => d.line.id === id)?.line;
       // Prefill the plan so logging an as-expected bill is one tap.
       if (line && !amount) setAmount(String(line.plannedMinor / 100));
     }
@@ -131,12 +179,28 @@ export default function NewTransactionScreen() {
       return;
     }
 
-    state.logTransaction(targetId, {
-      status,
-      actualMinor: parsed > 0 ? parsed : null,
-      note: note.trim() || null,
-      imageUri,
-    });
+    // An unplanned line holds many individual dated entries rather than one
+    // status per month, so it takes a transaction row; everything else records
+    // the month's status. Both carry the chosen date, which decides the period.
+    const target = state.subcategories.find((s) => s.id === targetId);
+    if (target && isUnplanned(target.frequency)) {
+      state.addTransaction({
+        subcategoryId: targetId,
+        name: (selected?.line.name ?? newName.trim()) || 'Transaction',
+        amountMinor: parsed,
+        date,
+        note: note.trim() || null,
+        imageUri,
+      });
+    } else {
+      state.logTransaction(targetId, {
+        status,
+        actualMinor: parsed > 0 ? parsed : null,
+        note: note.trim() || null,
+        imageUri,
+        date,
+      });
+    }
 
     closeModal();
   }
@@ -145,11 +209,11 @@ export default function NewTransactionScreen() {
     return (
       <BottomSheet
         visible
+      asRoute
         onClose={closeModal}
         title="Add transaction"
         icon="swap-horizontal-outline"
         iconColor={colors.accent}
-        heightPct={0.6}
       >
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md, paddingHorizontal: space.lg }}>
           <Ionicons name="albums-outline" size={48} color={colors.inkMuted} />
@@ -170,11 +234,11 @@ export default function NewTransactionScreen() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="Add transaction"
       icon="swap-horizontal-outline"
       iconColor={colors.accent}
-      heightPct={0.92}
       scroll
       footer={
         <GradientButton
@@ -190,164 +254,326 @@ export default function NewTransactionScreen() {
         <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} />
       </View>
 
-      {/* 2 · Category. */}
-      <LabeledField label="CATEGORY">
-        <Chips
-          options={views.map((view) => ({
-            key: view.category.id,
-            label: view.category.name,
-            icon: view.category.icon as keyof typeof Ionicons.glyphMap,
-            color: view.category.color,
-          }))}
-          selectedKey={categoryId}
-          onSelect={selectCategory}
-        />
-      </LabeledField>
+      {/* When it happened. Sits with the amount rather than under "More
+          details" because it decides which month the entry counts toward —
+          it is part of the record, not an optional extra. */}
+      <DatePickerField label="Date" value={date} onChange={setDate} />
 
-      {/* 3 · Line within the category (or a new one). */}
-      {categoryId ? (
-        <LabeledField label="LINE">
-          <Chips
-            options={[
-              ...lines.map((line) => ({
-                key: line.id,
-                label: line.name,
-                icon: (line.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap,
-              })),
-              { key: '__new__', label: 'New line', icon: 'add' as const },
-            ]}
-            selectedKey={subcategoryId}
-            onSelect={selectLine}
-          />
-        </LabeledField>
-      ) : null}
-
-      {creatingNew ? (
-        <LabeledField label="NEW LINE NAME">
+      {/* 2 · What it was for — one searchable list of every budget line,
+          replacing the old category-then-line drill-down. */}
+      <LabeledField label="WHAT WAS IT FOR?">
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: space.sm,
+            backgroundColor: colors.surfaceSunken,
+            borderRadius: 12,
+            paddingHorizontal: space.md,
+          }}
+        >
+          <Ionicons name="search" size={15} color={colors.inkMuted} />
           <TextInput
-            value={newName}
-            onChangeText={setNewName}
-            placeholder="e.g. Groceries"
-            placeholderTextColor={colors.inkFaint}
-            autoFocus
-            style={inputStyle(colors, space)}
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Search your plan…"
+            placeholderTextColor={colors.inkMuted}
+            accessibilityLabel="Search budget lines"
+            style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
           />
-        </LabeledField>
+        </View>
+
+        <View style={{ gap: 6 }}>
+          {filteredDestinations.map(({ line, category }) => (
+            <DestinationRow
+              key={line.id}
+              name={line.name}
+              categoryName={category.name}
+              color={category.color}
+              icon={(line.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
+              plannedMinor={line.plannedMinor}
+              selected={line.id === subcategoryId}
+              onPress={() => selectLine(line.id)}
+            />
+          ))}
+
+          {filteredDestinations.length === 0 ? (
+            <T variant="small" tone="muted">
+              Nothing matches “{search.trim()}”. Add it as a new line below.
+            </T>
+          ) : null}
+
+          {/* Always last, so creating a line is available without clearing the
+              search — and its name is prefilled from whatever was typed. */}
+          <DestinationRow
+            name="New line"
+            categoryName="Create a budget line for this"
+            color={colors.accent}
+            icon="add"
+            selected={creatingNew}
+            onPress={() => {
+              setSubcategoryId('__new__');
+              setCardId(null);
+              if (!newName && search.trim()) setNewName(search.trim());
+            }}
+          />
+        </View>
+      </LabeledField>
+
+      {/* Creating a line needs its name and a home category — the only case
+          where the category is still asked for explicitly. */}
+      {creatingNew ? (
+        <>
+          <LabeledField label="NEW LINE NAME">
+            <TextInput
+              value={newName}
+              onChangeText={setNewName}
+              placeholder="e.g. Groceries"
+              placeholderTextColor={colors.inkMuted}
+              autoFocus
+              style={inputStyle(colors, space)}
+            />
+          </LabeledField>
+
+          <LabeledField label="ADD IT TO">
+            <Chips
+              options={views.map((view) => ({
+                key: view.category.id,
+                label: view.category.name,
+                icon: view.category.icon as keyof typeof Ionicons.glyphMap,
+                color: view.category.color,
+              }))}
+              selectedKey={newLineCategory?.id ?? null}
+              onSelect={setNewLineCategoryId}
+            />
+          </LabeledField>
+        </>
       ) : null}
 
-      {/* 4 · Account it moved through — the shared picker, so "paid from" looks
-          identical to "funded account" everywhere. */}
-      <AccountField
-        label="Paid from"
-        cards={state.cards}
-        selectedId={effectiveCardId}
-        onSelect={setCardId}
-      />
-
-      {/* 5 · Status. */}
-      <LabeledField label="STATUS">
-        <Row gap={space.sm}>
-          {STATUS_ORDER.map((key) => {
-            const selected = status === key;
-            const style = statusStyle(key, colors);
-            return (
-              <Pressable
-                key={key}
-                onPress={() => setStatus(key)}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  alignItems: 'center',
-                  gap: 3,
-                  paddingVertical: space.md,
-                  borderRadius: 14,
-                  borderWidth: 1.5,
-                  borderColor: selected ? style.fg : colors.hairline,
-                  backgroundColor: selected ? style.bg : colors.surface,
-                  opacity: pressed ? 0.8 : 1,
-                })}
-              >
-                <Ionicons
-                  name={style.icon as never}
-                  size={20}
-                  color={selected ? style.fg : colors.inkMuted}
-                />
-                <T
-                  variant="caption"
-                  color={selected ? style.fg : colors.inkSecondary}
-                  style={{ fontWeight: selected ? '700' : '500' }}
-                >
-                  {STATUS_LABEL[key]}
-                </T>
-              </Pressable>
-            );
-          })}
-        </Row>
-      </LabeledField>
-
-      {/* 6 · Note. */}
-      <LabeledField label="NOTE (OPTIONAL)">
-        <TextInput
-          value={note}
-          onChangeText={setNote}
-          placeholder="What was this for?"
-          placeholderTextColor={colors.inkFaint}
-          multiline
-          style={[inputStyle(colors, space), { minHeight: 56, textAlignVertical: 'top' }]}
-        />
-      </LabeledField>
-
-      {/* 7 · Photo. */}
-      <LabeledField label="PHOTO (OPTIONAL)">
-        {imageUri ? (
-          <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
-            <Image source={{ uri: imageUri }} style={{ width: 96, height: 96, borderRadius: 12 }} />
-            <Pressable
-              onPress={removeImage}
-              accessibilityRole="button"
-              accessibilityLabel="Remove photo"
-              style={{
-                position: 'absolute',
-                top: -8,
-                right: -8,
-                width: 24,
-                height: 24,
-                borderRadius: 12,
-                backgroundColor: colors.danger,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Ionicons name="close" size={14} color="#FFFFFF" />
-            </Pressable>
-          </View>
-        ) : (
-          <Row gap={space.sm}>
-            <PhotoButton label="Camera" icon="camera-outline" busy={imageBusy} onPress={() => pickImage('camera')} />
-            <PhotoButton label="Library" icon="image-outline" busy={imageBusy} onPress={() => pickImage('library')} />
+      {/* Planned-amount reminder, right under the choice it refers to. */}
+      {selected ? (
+        <Surface style={{ gap: space.xs }}>
+          <Row justify="space-between">
+            <T variant="small" tone="secondary">
+              Planned for this line
+            </T>
+            <T variant="figure">{formatMoney(selected.line.plannedMinor)}</T>
           </Row>
-        )}
-      </LabeledField>
+        </Surface>
+      ) : null}
 
-        {/* Planned-amount reminder for the chosen line. */}
-        {subcategoryId && subcategoryId !== '__new__' ? (
-          <Surface style={{ gap: space.xs }}>
-            {(() => {
-              const line = lines.find((l) => l.id === subcategoryId);
-              if (!line) return null;
-              return (
-                <Row justify="space-between">
-                  <T variant="small" tone="secondary">
-                    Planned for this line
-                  </T>
-                  <T variant="figure">{formatMoney(line.plannedMinor)}</T>
-                </Row>
-              );
-            })()}
-          </Surface>
-        ) : null}
+      {/* 3 · Everything optional, folded away so the common path is short. */}
+      <Pressable
+        onPress={() => setShowDetails((open) => !open)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: showDetails }}
+        accessibilityLabel="More details"
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+          paddingVertical: space.sm,
+          opacity: pressed ? 0.7 : 1,
+        })}
+      >
+        <Ionicons
+          name={showDetails ? 'chevron-down' : 'chevron-forward'}
+          size={16}
+          color={colors.accent}
+        />
+        <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+          {showDetails ? 'Hide details' : 'More details'}
+        </T>
+        <T variant="caption" tone="muted">
+          account · status · note · photo
+        </T>
+      </Pressable>
+
+      {showDetails ? (
+        <>
+          {/* Account it moved through — the shared picker, so "paid from" looks
+              identical to "funded account" everywhere. */}
+          <AccountField
+            label="Paid from"
+            cards={state.cards}
+            selectedId={effectiveCardId}
+            onSelect={setCardId}
+          />
+
+          <LabeledField label="STATUS">
+            <Row gap={space.sm}>
+              {STATUS_ORDER.map((key) => {
+                const isSelected = status === key;
+                const style = statusStyle(key, colors);
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => setStatus(key)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isSelected }}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      alignItems: 'center',
+                      gap: 3,
+                      paddingVertical: space.md,
+                      borderRadius: 14,
+                      borderWidth: 1.5,
+                      borderColor: isSelected ? style.fg : colors.hairline,
+                      backgroundColor: isSelected ? style.bg : colors.surface,
+                      opacity: pressed ? 0.8 : 1,
+                    })}
+                  >
+                    <Ionicons
+                      name={style.icon as never}
+                      size={20}
+                      color={isSelected ? style.fg : colors.inkMuted}
+                    />
+                    <T
+                      variant="caption"
+                      color={isSelected ? style.fg : colors.inkSecondary}
+                      style={{ fontWeight: isSelected ? '700' : '500' }}
+                    >
+                      {STATUS_LABEL[key]}
+                    </T>
+                  </Pressable>
+                );
+              })}
+            </Row>
+          </LabeledField>
+
+          <LabeledField label="NOTE (OPTIONAL)">
+            <TextInput
+              value={note}
+              onChangeText={setNote}
+              placeholder="What was this for?"
+              placeholderTextColor={colors.inkMuted}
+              multiline
+              style={[inputStyle(colors, space), { minHeight: 56, textAlignVertical: 'top' }]}
+            />
+          </LabeledField>
+
+          <LabeledField label="PHOTO (OPTIONAL)">
+            {imageUri ? (
+              <View style={{ position: 'relative', alignSelf: 'flex-start' }}>
+                <Image
+                  source={{ uri: imageUri }}
+                  style={{ width: 96, height: 96, borderRadius: 12 }}
+                />
+                <Pressable
+                  onPress={removeImage}
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove photo"
+                  style={{
+                    position: 'absolute',
+                    top: -8,
+                    right: -8,
+                    width: 24,
+                    height: 24,
+                    borderRadius: 12,
+                    backgroundColor: colors.danger,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Ionicons name="close" size={14} color="#FFFFFF" />
+                </Pressable>
+              </View>
+            ) : (
+              <Row gap={space.sm}>
+                <PhotoButton
+                  label="Camera"
+                  icon="camera-outline"
+                  busy={imageBusy}
+                  onPress={() => pickImage('camera')}
+                />
+                <PhotoButton
+                  label="Library"
+                  icon="image-outline"
+                  busy={imageBusy}
+                  onPress={() => pickImage('library')}
+                />
+              </Row>
+            )}
+          </LabeledField>
+        </>
+      ) : null}
     </BottomSheet>
+  );
+}
+
+/**
+ * One budget line in the destination list: what it is, which category it lives
+ * in, and what it was planned at. Showing the category on the row is what lets
+ * the separate category step disappear — the answer is visible rather than
+ * navigated to.
+ */
+function DestinationRow({
+  name,
+  categoryName,
+  color,
+  icon,
+  plannedMinor,
+  selected,
+  onPress,
+}: {
+  name: string;
+  categoryName: string;
+  color: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  plannedMinor?: number;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${name}, ${categoryName}`}
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        paddingVertical: 10,
+        paddingHorizontal: space.md,
+        borderRadius: radius.md,
+        borderWidth: 1.5,
+        borderColor: selected ? color : colors.hairline,
+        backgroundColor: selected ? `${color}14` : colors.surface,
+        opacity: pressed ? 0.75 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: radius.sm,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: selected ? `${color}22` : colors.surfaceSunken,
+        }}
+      >
+        <Ionicons name={icon} size={17} color={selected ? color : colors.inkMuted} />
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <T variant="small" style={{ fontWeight: selected ? '700' : '600' }} numberOfLines={1}>
+          {name}
+        </T>
+        <T variant="caption" tone="muted" numberOfLines={1}>
+          {categoryName}
+        </T>
+      </View>
+
+      {plannedMinor !== undefined && plannedMinor > 0 ? (
+        <T variant="caption" tone="muted">
+          {formatMoney(plannedMinor)}
+        </T>
+      ) : null}
+
+      {selected ? <Ionicons name="checkmark-circle" size={19} color={color} /> : null}
+    </Pressable>
   );
 }
 

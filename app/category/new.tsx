@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { AccountField } from '../../src/components/AccountPicker';
 import { DayPicker } from '../../src/components/DayPicker';
-import { Field, IconPicker } from '../../src/components/forms';
+import { IconPicker, NameWithIconField } from '../../src/components/forms';
 import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '../../src/data/categoryIcons';
 import { BottomSheet, GradientButton, T } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
@@ -49,11 +49,11 @@ export default function NewCategoryScreen() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="New category"
       icon={icon}
       iconColor={colors.accent}
-      heightPct={0.9}
       scroll
       footer={
         <GradientButton
@@ -64,10 +64,11 @@ export default function NewCategoryScreen() {
         />
       }
     >
-        <Field
-          label="Name"
+        <NameWithIconField
           value={name}
           onChangeText={onNameChange}
+          icon={icon}
+          iconColor={colors.accent}
           placeholder="e.g. Home Expenses"
           autoFocus
         />

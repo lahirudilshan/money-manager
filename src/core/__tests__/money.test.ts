@@ -75,12 +75,21 @@ describe('formatMoney', () => {
     expect(formatMoney(125_075, { showDecimals: true })).toBe('LKR 1,250.75');
   });
 
-  it('places the sign before the currency for negatives', () => {
-    expect(formatMoney(-23_600_000)).toBe('-LKR 236,000');
+  // The sign attaches to the number, not the currency code — "LKR -236,000".
+  it('places the sign on the number, after the currency, for negatives', () => {
+    expect(formatMoney(-23_600_000)).toBe('LKR -236,000');
   });
 
   it('adds an explicit plus when signed', () => {
-    expect(formatMoney(5000, { signed: true })).toBe('+LKR 50');
+    expect(formatMoney(5000, { signed: true })).toBe('LKR +50');
+  });
+
+  it('keeps the sign next to the number when compacted', () => {
+    expect(formatMoney(-1_355_000_000, { compact: true })).toBe('LKR -13.6M');
+  });
+
+  it('signs a bare number correctly when the currency is hidden', () => {
+    expect(formatMoney(-4_500_000, { showCurrency: false })).toBe('-45,000');
   });
 
   it('compacts millions and thousands', () => {

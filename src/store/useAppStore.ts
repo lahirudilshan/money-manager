@@ -6,6 +6,8 @@ import {
   daysUntil,
   dueDateFor,
   isFlexibleDueDay,
+  isSpend,
+  monthlyAmount,
   savingPlanProgress,
   type SavingPlan,
   type SavingPlanProgress,
@@ -25,8 +27,9 @@ import {
 import { groupColors } from '../theme';
 import { parseSms } from '../core/smsParser';
 import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
+import { planRuleUpsert, type MerchantRule } from '../core/merchantRules';
 import { createId } from '../db/repositories';
-import { initialiseDatabase, resetDatabase } from '../db/client';
+import { DEBT_CATEGORY_ID, initialiseDatabase, resetDatabase } from '../db/client';
 import {
   cardRepo,
   categoryRepo,
@@ -34,6 +37,7 @@ import {
   fundingRepo,
   incomeRepo,
   loanRepo,
+  merchantRuleRepo,
   settingsRepo,
   stateRepo,
   subcategoryRepo,
@@ -95,6 +99,13 @@ export interface AppState {
    */
   smsDrafts: SmsDraft[];
 
+  /**
+   * The learned merchant → line map, mirrored from the database so
+   * `ingestSmsText` can reconcile synchronously. Grows whenever the user
+   * resolves a draft (see `confirmDraft`).
+   */
+  merchantRules: MerchantRule[];
+
   initialise: () => Promise<void>;
   refresh: () => void;
   setPeriod: (period: string) => void;
@@ -117,6 +128,8 @@ export interface AppState {
       actualMinor?: Minor | null;
       note?: string | null;
       imageUri?: string | null;
+      /** When it happened. Decides the month; defaults to the viewed period. */
+      date?: Date;
     },
   ) => void;
   /** Mark every bill in a category paid or pending at once. */
@@ -224,9 +237,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   themeMode: 'system',
   hapticsEnabled: true,
   smsDrafts: [],
+  merchantRules: [],
 
   async initialise() {
     initialiseDatabase();
+    // Ship the well-known merchants before the first refresh reads them, so a
+    // fresh install already recognises the common chains.
+    merchantRuleRepo.seed();
     get().refresh();
     set({
       ready: true,
@@ -246,6 +263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       transactionTotals: transactionRepo.totalsByPeriod(period),
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
+      merchantRules: merchantRuleRepo.all(),
       currency: settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR',
       usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
       themeMode:
@@ -325,7 +343,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   logTransaction(subcategoryId, input) {
-    stateRepo.logTransaction(subcategoryId, get().period, input);
+    // A caller that supplies a date is stating which month this belongs to, so
+    // it wins over the month currently on screen — otherwise back-dating an
+    // entry would silently file it under whichever period was being viewed.
+    const period = input.date ? periodKey(input.date) : get().period;
+    stateRepo.logTransaction(subcategoryId, period, input);
     get().refresh();
   },
 
@@ -395,6 +417,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refresh();
   },
   deleteCategory(id) {
+    /*
+     * Deleting a category cascades to its lines. For the shared Debt category
+     * that would silently destroy every loan's board line while leaving the
+     * loans themselves behind — a bill vanishing from the plan with the debt
+     * still owed. Loans are removed from the Loans screen, which cleans up both.
+     */
+    const holdsLoan = get().subcategories.some(
+      (sub) => sub.categoryId === id && sub.loanId,
+    );
+    if (holdsLoan) return;
+
     categoryRepo.remove(id);
     get().refresh();
   },
@@ -497,11 +530,53 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refresh();
   },
 
+  /**
+   * Record a loan and put its installment on the board as a line under the one
+   * shared "Debt" category.
+   *
+   * Every loan is the same kind of commitment, so they belong together as
+   * sibling lines rather than a category each — which is also what the ratio
+   * block already assumed (it treats "contains a loan-linked line" as debt).
+   * Creating the line here means a loan can never again exist without appearing
+   * in the plan, which is how a loan could previously be invisible in PLANNED.
+   */
   addLoan(input) {
-    loanRepo.create(input);
+    const loan = loanRepo.create(input);
+
+    // The installment is derived, never stored, so the line always agrees with
+    // the loan's terms (see core/amortization.ts).
+    const { installmentMinor } = buildSchedule({
+      principalMinor: loan.principalMinor,
+      annualRatePct: loan.annualRatePct,
+      termMonths: loan.termMonths,
+    });
+
+    const debtCategory =
+      get().categories.find((category) => category.id === DEBT_CATEGORY_ID) ??
+      categoryRepo.create({
+        id: DEBT_CATEGORY_ID,
+        name: 'Debt',
+        color: '#B7791F',
+        icon: 'trending-down-outline',
+        dueDay: 1,
+      });
+
+    subcategoryRepo.create({
+      name: loan.name,
+      categoryId: debtCategory.id,
+      plannedMinor: installmentMinor,
+      frequency: 'monthly',
+      icon: 'trending-down-outline',
+      loanId: loan.id,
+    });
+
     get().refresh();
   },
+  /** Remove a loan and the board line it created, so no orphan bill remains. */
   deleteLoan(id) {
+    for (const sub of get().subcategories.filter((s) => s.loanId === id)) {
+      subcategoryRepo.remove(sub.id);
+    }
     loanRepo.remove(id);
     get().refresh();
   },
@@ -510,7 +585,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const parsed = parseSms(text);
     if (!parsed) return null;
 
-    const { smsDrafts, subcategories, categories, cards } = get();
+    const { smsDrafts, subcategories, categories, cards, merchantRules } = get();
 
     // Ignore an identical raw text that is already waiting — re-firing the same
     // deep link (iOS Shortcuts can deliver a message more than once) should not
@@ -521,6 +596,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       parsed,
       { subcategories, categories, cards },
       createId(),
+      merchantRules,
     );
 
     set({ smsDrafts: [draft, ...smsDrafts] });
@@ -558,6 +634,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         note: overrides?.note ?? `From SMS: ${draft.parsed.raw}`,
       });
     }
+
+    // Learn from the resolution. Whether the user accepted our guess or picked
+    // a different line, the merchant now has a confirmed mapping — so the next
+    // message from the same shop is recognised outright. Correcting a wrong
+    // guess re-points the existing rule, which is how accuracy improves.
+    const upsert = planRuleUpsert(
+      draft.parsed.merchant,
+      subcategoryId,
+      draft.hint,
+      get().merchantRules,
+    );
+    if (upsert) merchantRuleRepo.apply(upsert);
 
     set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
     get().refresh();
@@ -603,6 +691,10 @@ function toPlanned(
       plannedMinor: 0,
       actualMinor: total,
       status: total > 0 ? 'paid' : 'pending',
+      type: subcategory.type,
+      // Real money already spent this month — never spread across the year.
+      frequency: 'unplanned',
+      period: periodKey(subcategory.createdAt),
     };
   }
 
@@ -612,6 +704,27 @@ function toPlanned(
     plannedMinor: subcategory.plannedMinor,
     actualMinor: state?.actualMinor ?? null,
     status: (state?.status as SubcategoryStatus) ?? 'pending',
+    // Carried through so the summary can keep income out of planned spend.
+    type: subcategory.type,
+    /*
+     * A yearly line is reported as yearly so the summary can spread it over the
+     * months it is saved for — EXCEPT when it carries a saving plan, where
+     * `plannedMinor` is already the monthly set-aside (the annual total lives in
+     * `planTargetMinor`). Dividing that again would understate the plan by 12x,
+     * so such lines are declared monthly, which they effectively are.
+     */
+    frequency:
+      subcategory.planTargetMinor != null && subcategory.frequency === 'yearly'
+        ? 'monthly'
+        : subcategory.frequency,
+    /*
+     * The month a one-time cost belongs to: the month the user says it was
+     * paid, falling back to the month the line was created for rows written
+     * before that field existed. The distinction matters — a cost paid in May
+     * can be recorded in July, and anchoring to creation would then count it in
+     * the wrong month.
+     */
+    period: subcategory.onceInPeriod ?? periodKey(subcategory.createdAt),
   };
 }
 
@@ -628,7 +741,8 @@ export function selectCategoryViews(state: AppState): CategoryView[] {
       card: state.cards.find((c) => c.id === category.cardId),
       subcategories: planned,
       rawSubcategories: subs,
-      summary: summariseCategory(planned, funded),
+      // Scoped to the viewed month so a one-time cost counts only in its own.
+      summary: summariseCategory(planned, funded, state.period),
       transferStatus: state.categoryStates.get(category.id)?.status ?? 'pending',
       isIncomeOnly: subs.length > 0 && subs.every((s) => s.type === 'income'),
     };
@@ -669,8 +783,20 @@ export function selectBoardTotals(state: AppState): BoardTotals {
   return summariseBoard(selectCategoryViews(state).map((view) => view.summary));
 }
 
+/**
+ * Everything expected to come in this month.
+ *
+ * Income arrives two ways and both must count, or the dashboard compares spend
+ * against only part of the money: the dedicated `incomes` table (salary and the
+ * like), plus any board line explicitly typed as income. Without the second,
+ * a plan whose income lives on the board reads as spending far beyond its means.
+ */
 export function selectTotalIncome(state: AppState): Minor {
-  return sumMinor(state.incomes.map((income) => income.amountMinor));
+  const declared = sumMinor(state.incomes.map((income) => income.amountMinor));
+  const onBoard = sumMinor(
+    selectCategoryViews(state).map((view) => view.summary.incomeMinor),
+  );
+  return declared + onBoard;
 }
 
 /**
@@ -684,10 +810,22 @@ export function selectRatios(state: AppState): Ratios {
   let loan = 0;
   let living = 0;
 
+  /*
+   * Split per *line*, not per category. Every loan now lives under the one
+   * shared Debt category, so a category-level test would count anything else
+   * filed there as debt — and, before consolidation, would have counted a whole
+   * mixed category as debt because of a single loan line in it. The loan link
+   * is a property of the line, so that is what decides.
+   */
   for (const view of views) {
-    const isDebt = view.rawSubcategories.some((s) => s.loanId);
-    if (isDebt) loan += view.summary.totalMinor;
-    else living += view.summary.totalMinor;
+    for (const line of view.subcategories) {
+      // Income is not spend and belongs to neither bucket.
+      if (!isSpend(line)) continue;
+      const raw = view.rawSubcategories.find((s) => s.id === line.id);
+      const amount = monthlyAmount(line);
+      if (raw?.loanId) loan += amount;
+      else living += amount;
+    }
   }
 
   return calculateRatios({
@@ -700,9 +838,11 @@ export function selectRatios(state: AppState): Ratios {
 /** Per-card view: what it holds and which categories draw from it. */
 export interface CardView {
   card: Card;
-  /** Opening balance plus everything funded into it this period. */
+  /** Opening balance, plus what was funded in, minus what has been paid out. */
   balanceMinor: Minor;
   fundedInMinor: Minor;
+  /** Value of bills drawing on this card already marked paid this period. */
+  spentMinor: Minor;
   /** Total every leaf resolved to this card still plans to spend. */
   committedMinor: Minor;
   categoryNames: string[];
@@ -715,24 +855,33 @@ export function selectCardViews(state: AppState): CardView[] {
     const attachedCategories = views.filter((view) => view.category.cardId === card.id);
     const fundedIn = sumMinor(attachedCategories.map((view) => view.summary.fundedMinor));
 
-    // Committed is resolved per-leaf, since a subcategory can override its
-    // category's default funding card.
+    // Committed and spent are resolved per-leaf, since a subcategory can
+    // override its category's default funding card.
     let committed = 0;
+    let spent = 0;
     for (const view of views) {
       for (const sub of view.rawSubcategories) {
         const resolved = resolveCardId(sub.cardId, view.category.cardId);
         if (resolved !== card.id) continue;
         const planned = view.subcategories.find((p) => p.id === sub.id);
         if (!planned) continue;
+        // Income arrives in the account; it is neither a bill to pay nor a
+        // deduction from the balance, so it takes no part in either figure.
+        if (sub.type === 'income') continue;
         const amount = planned.actualMinor ?? planned.plannedMinor;
-        if (planned.status !== 'paid') committed += amount;
+        if (planned.status === 'paid') spent += amount;
+        else committed += amount;
       }
     }
 
     return {
       card,
-      balanceMinor: card.openingBalanceMinor + fundedIn,
+      // A balance is money in *minus money out*. Funding moves money onto the
+      // card and paying a bill takes it off again; without the subtraction the
+      // figure only ever grows and overstates what the account actually holds.
+      balanceMinor: card.openingBalanceMinor + fundedIn - spent,
       fundedInMinor: fundedIn,
+      spentMinor: spent,
       committedMinor: committed,
       categoryNames: attachedCategories.map((view) => view.category.name),
     };

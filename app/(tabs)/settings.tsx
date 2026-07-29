@@ -348,7 +348,7 @@ export default function SettingsScreen() {
               onChangeText={setRateText}
               keyboardType="decimal-pad"
               placeholder="300"
-              placeholderTextColor={colors.inkFaint}
+              placeholderTextColor={colors.inkMuted}
               style={{
                 borderWidth: 1,
                 borderColor: colors.hairlineStrong,
@@ -411,7 +411,7 @@ export default function SettingsScreen() {
               value={currencyQuery}
               onChangeText={setCurrencyQuery}
               placeholder="Search currency…"
-              placeholderTextColor={colors.inkFaint}
+              placeholderTextColor={colors.inkMuted}
               autoCapitalize="characters"
               style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
             />
@@ -519,7 +519,6 @@ export default function SettingsScreen() {
         eyebrow="Erase all data"
         icon="warning-outline"
         iconColor={colors.danger}
-        heightPct={0.5}
         footer={
           <Row gap={space.sm}>
             <Button
@@ -549,7 +548,7 @@ export default function SettingsScreen() {
           value={confirmText}
           onChangeText={setConfirmText}
           placeholder={CONFIRM_WORD}
-          placeholderTextColor={colors.inkFaint}
+          placeholderTextColor={colors.inkMuted}
           autoCapitalize="characters"
           autoCorrect={false}
           editable={!clearing}

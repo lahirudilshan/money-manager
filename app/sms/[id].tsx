@@ -20,15 +20,21 @@ import {
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
- * Detail modal for one SMS draft — opened by tapping a row or its "Not this"
- * action on the dashboard. Everything the user needs to resolve the draft lives
- * here, so the dashboard rows stay clean and price-focused:
+ * Detail modal for one SMS draft — the screen where the app's category
+ * detection is confirmed, corrected, and *taught*.
  *
- *   - see the parsed transaction and the original message
- *   - adjust the amount
- *   - remap it to any bill (a plain searchable list — no auto-filter)
- *   - Log it against the chosen bill, or
- *   - Mark already logged, which just dismisses it (I recorded this by hand)
+ * It has two shapes, chosen by how sure the reconciler is (see
+ * `SmsDraft.confidence`):
+ *
+ *   confident (a learned rule recognised this exact merchant, or the score
+ *     was strong)  → lead with the suggested category and two actions:
+ *     "Yes, that's right" logs it in one tap, "Wrong category" opens the
+ *     picker. Either way the merchant→line rule is written, so a confirmed
+ *     guess gets stronger and a corrected one is fixed for next time.
+ *
+ *   unknown (a merchant we've never seen, e.g. the first "F L I TRADING")
+ *     → the picker is open from the start, because there is nothing to
+ *     confirm; the user's choice is what teaches the system.
  */
 export default function SmsDraftModal() {
   const { colors, radius, space } = useTheme();
@@ -48,17 +54,22 @@ export default function SmsDraftModal() {
     draft ? toMajor(draft.amountMinor).toFixed(2) : '0',
   );
   const [query, setQuery] = useState('');
+  // The picker starts collapsed only when there is a real suggestion to
+  // confirm; with nothing detected there is nothing to hide behind.
+  const [picking, setPicking] = useState(
+    !draft?.subcategoryId || draft.confidence === 'unknown',
+  );
 
   // The draft may have been resolved on another screen; close cleanly if gone.
   if (!draft) {
     return (
       <BottomSheet
         visible
+      asRoute
         onClose={closeModal}
         title="Message"
         icon="chatbox-ellipses-outline"
         iconColor={colors.accent}
-        heightPct={0.4}
       >
         <T variant="small" tone="muted">
           This draft has already been handled.
@@ -105,10 +116,21 @@ export default function SmsDraftModal() {
     );
   }, [draft.matches, subcategories, query, state]);
 
+  // The suggested line, when the reconciler produced one worth confirming.
+  const suggested = subcategories.find((s) => s.id === draft.subcategoryId) ?? null;
+  const showConfirmCard = !picking && suggested !== null;
+
   // Arrow consts (not hoisted declarations) so TS keeps the non-null narrowing
   // of `draft` from the early return above.
   const logIt = () => {
     state.confirmDraft(draft.id, { subcategoryId, amountMinor });
+    closeModal();
+  };
+
+  /** "Yes, that's right" — accept the suggestion and let the store learn it. */
+  const acceptSuggestion = () => {
+    if (!suggested) return;
+    state.confirmDraft(draft.id, { subcategoryId: suggested.id, amountMinor });
     closeModal();
   };
 
@@ -121,13 +143,33 @@ export default function SmsDraftModal() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="Review message"
       icon={(hintMeta?.icon ?? 'chatbox-ellipses-outline') as keyof typeof Ionicons.glyphMap}
       iconColor={colors.accent}
-      heightPct={0.92}
       scroll
-      footer={<GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />}
+      footer={
+        showConfirmCard ? (
+          // Confident path: the primary action is a single confirming tap, and
+          // the correction is one tap away beside it.
+          <View style={{ gap: space.sm }}>
+            <GradientButton
+              label="Yes, that's right"
+              icon="checkmark-circle"
+              onPress={acceptSuggestion}
+            />
+            <Button
+              label="Wrong category"
+              icon="swap-horizontal-outline"
+              variant="secondary"
+              onPress={() => setPicking(true)}
+            />
+          </View>
+        ) : (
+          <GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />
+        )
+      }
     >
         {/* Headline: the amount is the focus, with the merchant + account under. */}
         <Surface style={{ gap: space.md }}>
@@ -181,9 +223,34 @@ export default function SmsDraftModal() {
           placeholder="0"
         />
 
-        {/* Remap: a plain searchable list of every bill. */}
+        {/* What the system detected, and how sure it is. Shown instead of the
+            picker when there is a real suggestion, so the common case is read-
+            and-confirm rather than hunt-through-a-list. */}
+        {showConfirmCard && suggested ? (
+          <DetectedCategoryCard
+            confidence={draft.confidence}
+            name={suggested.name}
+            categoryName={categoryNameOf(state, suggested.id)}
+            icon={(hintMeta?.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
+          />
+        ) : null}
+
+        {/* Remap: a plain searchable list of every bill. Hidden behind the
+            confirm card until the user says the guess was wrong. */}
+        {picking ? (
         <View style={{ gap: space.sm }}>
-          <Label>Log against which bill?</Label>
+          <Label>
+            {draft.confidence === 'unknown'
+              ? 'Which bill is this? (we’ll remember)'
+              : 'Log against which bill?'}
+          </Label>
+
+          {draft.confidence === 'unknown' ? (
+            <T variant="caption" tone="muted">
+              We don’t recognise “{parsed.merchant || 'this merchant'}” yet. Pick the right bill once
+              and we’ll detect it automatically next time.
+            </T>
+          ) : null}
 
           <View
             style={{
@@ -200,7 +267,7 @@ export default function SmsDraftModal() {
               value={query}
               onChangeText={setQuery}
               placeholder="Search bills…"
-              placeholderTextColor={colors.inkFaint}
+              placeholderTextColor={colors.inkMuted}
               accessibilityLabel="Search bills"
               style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
             />
@@ -260,6 +327,7 @@ export default function SmsDraftModal() {
             </View>
           )}
         </View>
+        ) : null}
 
         {/* Secondary escape hatch: I already recorded this by hand. */}
         <Button
@@ -269,5 +337,78 @@ export default function SmsDraftModal() {
           onPress={markAlreadyLogged}
         />
     </BottomSheet>
+  );
+}
+
+/**
+ * The "we think this is X" card — the confident half of the review flow.
+ *
+ * An `exact` match means a learned rule fired on this precise merchant, so it
+ * is presented as recognition ("we've seen this before") rather than a guess;
+ * `likely` is honestly labelled as a suggestion. The distinction matters
+ * because it tells the user how much to trust the one-tap confirm below.
+ */
+function DetectedCategoryCard({
+  confidence,
+  name,
+  categoryName,
+  icon,
+}: {
+  confidence: 'exact' | 'likely' | 'unknown';
+  name: string;
+  categoryName: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
+  const { colors, radius, space } = useTheme();
+  const isExact = confidence === 'exact';
+  const tint = isExact ? colors.completed : colors.accent;
+
+  return (
+    <View
+      style={{
+        gap: space.md,
+        padding: space.lg,
+        borderRadius: radius.lg,
+        borderWidth: 1.5,
+        borderColor: tint,
+        backgroundColor: isExact ? colors.completedSoft : colors.accentSoft,
+      }}
+    >
+      <Row gap={6}>
+        <Ionicons
+          name={isExact ? 'sparkles' : 'bulb-outline'}
+          size={14}
+          color={tint}
+        />
+        <T variant="caption" color={tint} style={{ fontWeight: '800' }}>
+          {isExact ? 'RECOGNISED — YOU CONFIRMED THIS BEFORE' : 'SUGGESTED CATEGORY'}
+        </T>
+      </Row>
+
+      <Row gap={space.md}>
+        <View
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: radius.md,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surface,
+          }}
+        >
+          <Ionicons name={icon} size={21} color={tint} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <T variant="bodyStrong" numberOfLines={1}>
+            {name}
+          </T>
+          {categoryName ? (
+            <T variant="caption" tone="muted" numberOfLines={1}>
+              {categoryName}
+            </T>
+          ) : null}
+        </View>
+      </Row>
+    </View>
   );
 }

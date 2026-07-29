@@ -34,11 +34,11 @@ export default function AccountDetailScreen() {
     return (
       <BottomSheet
         visible
+      asRoute
         onClose={closeModal}
         title="Account"
         icon="card-outline"
         iconColor={colors.accent}
-        heightPct={0.4}
       >
         <T variant="small" tone="muted">
           This account no longer exists.
@@ -51,7 +51,11 @@ export default function AccountDetailScreen() {
   const label = accountLabel(card);
   const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
   const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
-  const goalPct = hasGoal ? Math.min(100, (view.balanceMinor / card.targetMinor!) * 100) : 0;
+  // Clamped low as well as high — a balance can go negative once spending is
+  // deducted, and a negative width is not renderable.
+  const goalPct = hasGoal
+    ? Math.max(0, Math.min(100, (view.balanceMinor / card.targetMinor!) * 100))
+    : 0;
 
   // Categories funded from this account, each with its bills and their
   // effective (actual-or-planned) amounts — so the detail shows *where the
@@ -91,12 +95,12 @@ export default function AccountDetailScreen() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title={label.primary}
       eyebrow={card.isCard ? 'Card' : 'Account'}
       icon={card.isCard ? 'card-outline' : 'wallet-outline'}
       iconColor={brand.color}
-      heightPct={0.92}
       scroll
     >
         {/* Identity + balance — accented with the bank's brand colour. */}
@@ -121,10 +125,37 @@ export default function AccountDetailScreen() {
               <T variant="small" tone="secondary">
                 Balance
               </T>
-              <T variant="figureLarge" color={brand.color}>
+              <T
+                variant="figureLarge"
+                color={view.balanceMinor < 0 ? colors.danger : brand.color}
+              >
                 {formatMoney(view.balanceMinor)}
               </T>
             </Row>
+
+            {/* How that balance was reached, so the figure is checkable rather
+                than a number the user has to trust. */}
+            {view.fundedInMinor > 0 || view.spentMinor > 0 ? (
+              <>
+                <Row justify="space-between">
+                  <T variant="caption" tone="muted">
+                    Funded in this month
+                  </T>
+                  <T variant="caption" tone="secondary">
+                    + {formatMoney(view.fundedInMinor)}
+                  </T>
+                </Row>
+                <Row justify="space-between">
+                  <T variant="caption" tone="muted">
+                    Paid out this month
+                  </T>
+                  <T variant="caption" tone="secondary">
+                    − {formatMoney(view.spentMinor)}
+                  </T>
+                </Row>
+              </>
+            ) : null}
+
             {view.committedMinor > 0 ? (
               <Row justify="space-between">
                 <T variant="small" tone="secondary">

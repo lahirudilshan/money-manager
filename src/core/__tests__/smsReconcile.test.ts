@@ -106,3 +106,66 @@ describe('reconcileSms', () => {
     expect(draft.amountMinor).toBe(9_900_000);
   });
 });
+
+/**
+ * The learning half: a rule the user taught us must beat the shipped keyword
+ * heuristics, and must degrade safely when the line it points at is gone.
+ */
+describe('reconcileSms with learned merchant rules', () => {
+  const rule = (pattern: string, subcategoryId: string | null, hitCount = 1) => ({
+    id: `rule-${pattern}`,
+    pattern,
+    subcategoryId,
+    hint: null,
+    source: 'learned' as const,
+    hitCount,
+    updatedAt: 0,
+  });
+
+  const unknownMerchantSms =
+    'LKR 4,500.00 debited from AC XXXXXXXX1234 as POS TXN on 20 Jul 2026 at F L I TRADING. Avl Bal 1,000.00';
+
+  it('is unknown for a merchant with no rule and no keyword match', () => {
+    const draft = reconcileSms(parseSms(unknownMerchantSms)!, board, 'd1');
+    expect(draft.confidence).toBe('unknown');
+    expect(draft.subcategoryId).toBe('');
+  });
+
+  it('matches an unrecognisable merchant once a rule has been learned', () => {
+    const draft = reconcileSms(parseSms(unknownMerchantSms)!, board, 'd2', [
+      rule('fli trading', 'sub-elec'),
+    ]);
+    expect(draft.confidence).toBe('exact');
+    expect(draft.subcategoryId).toBe('sub-elec');
+  });
+
+  it('lets a learned rule override the keyword-based guess', () => {
+    // "water" would normally pull this to sub-water via the hint keywords.
+    const parsed = parseSms(
+      'LKR 2,300.00 debited from AC XXXXXXXX1234 as POS TXN on 20 Jul 2026 at NATIONAL WATER SUPPLY. Avl Bal 1,000.00',
+    )!;
+    const keywordDraft = reconcileSms(parsed, board, 'd3');
+    expect(keywordDraft.subcategoryId).toBe('sub-water');
+
+    const learnedDraft = reconcileSms(parsed, board, 'd4', [
+      rule('national water supply', 'sub-elec'),
+    ]);
+    expect(learnedDraft.subcategoryId).toBe('sub-elec');
+  });
+
+  it('ignores a rule whose line no longer exists, falling back to scoring', () => {
+    const draft = reconcileSms(parseSms(unknownMerchantSms)!, board, 'd5', [
+      rule('fli trading', 'sub-deleted'),
+    ]);
+    expect(draft.subcategoryId).toBe('');
+    expect(draft.confidence).toBe('unknown');
+  });
+
+  it('ignores a rule pointing at the wrong direction of line', () => {
+    // A debit must never resolve onto an income line, learned or not.
+    const draft = reconcileSms(parseSms(unknownMerchantSms)!, board, 'd6', [
+      rule('fli trading', 'sub-salary'),
+    ]);
+    expect(draft.subcategoryId).toBe('');
+  });
+});

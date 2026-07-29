@@ -67,6 +67,20 @@ export default function DashboardScreen() {
   const loanMonthly = loanViews.reduce((sum, l) => sum + l.installmentMinor, 0);
   const loanOutstanding = loanViews.reduce((sum, l) => sum + l.remainingMinor, 0);
 
+  /**
+   * Segment widths for the "where the income goes" bar, as percentages of the
+   * bar itself.
+   *
+   * The raw ratios can exceed 100% together (an overspent month) or be negative
+   * (`freePct` when the plan costs more than the income). Both are meaningful
+   * numbers to *show*, but neither can be a segment width, so they are clamped
+   * here and the overspend is communicated by colour and the legend instead.
+   */
+  const barLoanPct = Math.max(0, Math.min(100, ratios.loanPct));
+  // Living takes whatever room is left, so the two never overflow the bar.
+  const barLivingPct = Math.max(0, Math.min(100 - barLoanPct, ratios.livingPct));
+  const barFreePct = Math.max(0, Math.min(100 - barLoanPct - barLivingPct, ratios.freePct));
+
   const greeting = (() => {
     const h = new Date().getHours();
     if (h < 12) return 'Good morning';
@@ -137,7 +151,9 @@ export default function DashboardScreen() {
       <GradientCard>
         <View style={{ gap: space.lg }}>
           <View style={{ gap: 2 }}>
-            <Label color="rgba(255,255,255,0.75)">LEFT AFTER PLAN</Label>
+            {/* One label in both directions — this is simply income minus
+                expenses, and the sign on the figure says which way it went. */}
+            <Label color="rgba(255,255,255,0.75)">BALANCE</Label>
             <T variant="hero" color="#FFFFFF">
               {formatMoney(ratios.disposableMinor)}
             </T>
@@ -150,9 +166,17 @@ export default function DashboardScreen() {
             <HeroStat label="INCOME" value={formatMoney(income, { compact: true, showCurrency: false })} />
             <HeroStat label="PLANNED" value={formatMoney(totals.plannedMinor, { compact: true, showCurrency: false })} />
             <HeroStat label="SPENT" value={formatMoney(totals.paidMinor, { compact: true, showCurrency: false })} />
-            <HeroStat label="DEBT" value={formatMoney(loanOutstanding, { compact: true, showCurrency: false })} />
+            {/* This month's loan cost, not the lifetime balance: all four
+                figures are monthly, so they are actually comparable. Total
+                outstanding still leads the Debt card further down. */}
+            <HeroStat label="LOANS" value={formatMoney(loanMonthly, { compact: true, showCurrency: false })} />
           </Row>
 
+          {/* Where the income goes. Widths are an explicit share of the *bar*,
+              not `flex` of the raw percentages: flex is proportional, so an
+              overspent month (loans + living > 100%) would silently renormalise
+              and look exactly like a balanced one. Clamping instead fills the
+              bar completely and lets the "over budget" note carry the news. */}
           <View style={{ gap: space.sm }}>
             <View
               style={{
@@ -164,22 +188,30 @@ export default function DashboardScreen() {
                 backgroundColor: 'rgba(255,255,255,0.22)',
               }}
             >
-              {ratios.loanPct > 0 ? (
-                <View style={{ flex: ratios.loanPct, backgroundColor: '#FFFFFF' }} />
+              {barLoanPct > 0 ? (
+                <View style={{ width: `${barLoanPct}%`, backgroundColor: '#FFFFFF' }} />
               ) : null}
-              {ratios.livingPct > 0 ? (
+              {barLivingPct > 0 ? (
                 <View
-                  style={{ flex: ratios.livingPct, backgroundColor: 'rgba(255,255,255,0.65)' }}
+                  style={{ width: `${barLivingPct}%`, backgroundColor: 'rgba(255,255,255,0.65)' }}
                 />
               ) : null}
-              {ratios.freePct > 0 ? (
-                <View style={{ flex: ratios.freePct, backgroundColor: 'rgba(255,255,255,0.3)' }} />
+              {barFreePct > 0 ? (
+                <View
+                  style={{ width: `${barFreePct}%`, backgroundColor: 'rgba(255,255,255,0.3)' }}
+                />
               ) : null}
             </View>
             <Row gap={space.lg}>
               <LegendDot shade={1} label={`Loans ${ratios.loanPct.toFixed(0)}%`} />
               <LegendDot shade={0.65} label={`Living ${ratios.livingPct.toFixed(0)}%`} />
-              <LegendDot shade={0.4} label={`Saving ${ratios.freePct.toFixed(0)}%`} />
+              {/* The remainder after loans and living. Labelled "Balance" in
+                  both directions — a negative one is still the balance, just
+                  an overspent one, and the signed figure carries that. */}
+              <LegendDot
+                shade={0.4}
+                label={`Balance ${ratios.freePct > 0 ? '+' : ''}${ratios.freePct.toFixed(0)}%`}
+              />
             </Row>
           </View>
         </View>

@@ -43,11 +43,11 @@ export default function PasteSmsScreen() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="Paste a message"
       icon="chatbox-ellipses-outline"
       iconColor={colors.accent}
-      heightPct={0.85}
       scroll
       footer={<GradientButton label="Add draft" icon="add" onPress={onAdd} />}
     >

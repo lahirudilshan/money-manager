@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ALL_ICONS, CATEGORY_ICONS } from '../data/categoryIcons';
 import {
@@ -40,7 +40,7 @@ export function Field({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={colors.inkFaint}
+        placeholderTextColor={colors.inkMuted}
         keyboardType={keyboardType}
         autoFocus={autoFocus}
         multiline={multiline}
@@ -62,6 +62,88 @@ export function Field({
           textAlignVertical: multiline ? 'top' : 'center',
         }}
       />
+    </View>
+  );
+}
+
+/**
+ * The category identity field: the chosen icon as a leading tile INSIDE the
+ * input box, then the name. One aligned control (tile height = input height) so
+ * create- and edit-category read identically, and the live-suggested icon sits
+ * right where you type. The tile is tappable to jump to the icon picker.
+ */
+export function NameWithIconField({
+  label = 'Name',
+  value,
+  onChangeText,
+  icon,
+  iconColor,
+  placeholder,
+  autoFocus,
+  onPressIcon,
+}: {
+  label?: string;
+  value: string;
+  onChangeText: (text: string) => void;
+  icon: keyof typeof Ionicons.glyphMap;
+  iconColor: string;
+  placeholder?: string;
+  autoFocus?: boolean;
+  /** Optional: tap the leading tile (e.g. to open the icon picker). */
+  onPressIcon?: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  const Tile = onPressIcon ? Pressable : View;
+  return (
+    <View style={{ gap: space.sm }}>
+      <Label>{label}</Label>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.surface,
+          borderRadius: radius.md,
+          borderWidth: 1,
+          borderColor: colors.hairline,
+          paddingLeft: space.md,
+          paddingRight: space.md,
+        }}
+      >
+        {/* Plain suggested-icon glyph (no tinted tile), with a hairline divider
+            separating it from the text so it reads as a leading affordance. */}
+        <Tile
+          {...(onPressIcon ? { onPress: onPressIcon, accessibilityRole: 'button' as const, accessibilityLabel: 'Change icon', hitSlop: 8 } : {})}
+          style={{ alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Ionicons name={icon} size={22} color={iconColor} />
+        </Tile>
+        <View
+          style={{
+            width: StyleSheet.hairlineWidth,
+            alignSelf: 'stretch',
+            marginVertical: 10,
+            marginLeft: space.md,
+            backgroundColor: colors.hairline,
+          }}
+        />
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor={colors.inkMuted}
+          autoFocus={autoFocus}
+          accessibilityLabel={label}
+          style={{
+            flex: 1,
+            paddingLeft: space.md,
+            paddingVertical: 14,
+            fontSize: 16,
+            fontWeight: '400',
+            letterSpacing: 0,
+            color: colors.ink,
+          }}
+        />
+      </View>
     </View>
   );
 }
@@ -187,7 +269,7 @@ export function AmountField({
             keyboardType="numeric"
             autoFocus={autoFocus}
             placeholder={placeholder}
-            placeholderTextColor={colors.inkFaint}
+            placeholderTextColor={colors.inkMuted}
             accessibilityLabel={label ?? 'Amount'}
             style={{ flex: 1, paddingVertical: 13, fontSize: 16, fontWeight: '400', color: colors.ink, letterSpacing: 0 }}
           />
@@ -209,7 +291,7 @@ export function AmountField({
           keyboardType="numeric"
           autoFocus={autoFocus}
           placeholder={placeholder}
-          placeholderTextColor={colors.inkFaint}
+          placeholderTextColor={colors.inkMuted}
           accessibilityLabel={label ?? 'Amount'}
           style={{
             fontSize: 42,
@@ -354,7 +436,7 @@ export function IconPicker({
               value={query}
               onChangeText={setQuery}
               placeholder="Search icons…"
-              placeholderTextColor={colors.inkFaint}
+              placeholderTextColor={colors.inkMuted}
               accessibilityLabel="Search icons"
               style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
             />

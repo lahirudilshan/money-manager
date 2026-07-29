@@ -39,11 +39,80 @@ export interface PlannedCategory {
   /** Overrides plannedMinor when the real amount differed. */
   actualMinor?: Minor | null;
   status: SubcategoryStatus;
+  /**
+   * Whether this line is money going out or money coming in. Income lines live
+   * on the board alongside expenses, but they are NOT planned spend — counting
+   * them as such is what made a category's total (and the dashboard's PLANNED)
+   * exceed the income it was supposed to be measured against.
+   */
+  type?: 'income' | 'expense';
+  /**
+   * How often the line recurs. Needed so a yearly bill can be spread across the
+   * months it is actually saved for, rather than counted at full value every
+   * month. Absent means monthly, the historic default.
+   */
+  frequency?: 'monthly' | 'one_time' | 'yearly' | 'unplanned';
+  /**
+   * "YYYY-MM" a one-time cost belongs to. A one-off is real spending in its own
+   * month and nothing at all in any other, so it needs an anchor; without one
+   * it would recur forever, which is exactly what a one-time cost is not.
+   * Ignored for every other frequency.
+   */
+  period?: string;
+}
+
+/**
+ * Whether a line counts toward a given month's plan.
+ *
+ * Only one-time costs are month-specific: they belong to the month they were
+ * incurred and must not reappear in later ones. Everything else recurs (or, for
+ * unplanned lines, is already scoped to the period by its transactions).
+ */
+export function appliesToPeriod(category: PlannedCategory, period: string): boolean {
+  if (category.frequency !== 'one_time') return true;
+  // No anchor means we cannot say it belongs elsewhere; count it, so an older
+  // line without the field behaves as it always did rather than vanishing.
+  if (!category.period) return true;
+  return category.period === period;
 }
 
 /** Amount that actually counts for a category — actual if set, else planned. */
 export function effectiveAmount(category: PlannedCategory): Minor {
   return category.actualMinor ?? category.plannedMinor;
+}
+
+/**
+ * What a line costs *in a single month* — the figure the monthly plan should
+ * be built from.
+ *
+ * A yearly bill is paid once but budgeted for all year, so its monthly cost is
+ * a twelfth of its face value. Counting it at full value every month inflated
+ * the plan roughly elevenfold for that line and made PLANNED exceed income on
+ * boards that were actually affordable.
+ *
+ * Everything else already recurs monthly (or, for one-time and unplanned lines,
+ * is a real cost in the month it appears) and is taken at face value.
+ *
+ * A saving plan is the exception among yearly lines: its `plannedMinor` is
+ * already the monthly set-aside, so it must NOT be divided again. Callers pass
+ * such lines with `frequency: 'monthly'`, or use `monthlyAmount` only where
+ * that distinction has been resolved.
+ */
+export function monthlyAmount(category: PlannedCategory): Minor {
+  const amount = effectiveAmount(category);
+  if (category.frequency !== 'yearly') return amount;
+  // Round to the cent so twelve months sum back to the annual figure closely;
+  // exactness per-month matters less than never overstating the monthly plan.
+  return Math.round(amount / 12);
+}
+
+/**
+ * True for a line that represents money leaving — everything except an income
+ * line. Untyped lines are treated as expenses, which is the historic default
+ * and keeps old callers behaving exactly as before.
+ */
+export function isSpend(category: PlannedCategory): boolean {
+  return category.type !== 'income';
 }
 
 /** Toggle a bill between pending and paid — the only two states it has. */
@@ -77,20 +146,49 @@ export interface CategorySummary {
   isSettled: boolean;
   /** True when transfers cover the full plan. */
   isFullyFunded: boolean;
+  /**
+   * Money *expected in* from this category's income lines. Kept separate from
+   * `totalMinor` (which is spend only) so a category holding both can report
+   * each without one masking the other.
+   */
+  incomeMinor: Minor;
 }
 
+/**
+ * Roll a category's lines into the figures the board displays.
+ *
+ * Only *spend* lines contribute to `totalMinor`, `paidMinor` and the funding
+ * maths: an income line sitting in a category is money arriving, so adding it
+ * to the planned total would overstate what the category costs — and, summed
+ * across the board, would push PLANNED above INCOME on the dashboard.
+ */
 export function summariseCategory(
   subcategories: readonly PlannedCategory[],
   fundedMinor: Minor,
+  /**
+   * The month being summarised, so a one-time cost only counts in its own.
+   * Optional: omitting it keeps every line, which is the pre-existing behaviour
+   * and what callers that summarise a whole board (rather than a month) want.
+   */
+  period?: string,
 ): CategorySummary {
-  const total = sumMinor(subcategories.map(effectiveAmount));
+  const applicable = period
+    ? subcategories.filter((s) => appliesToPeriod(s, period))
+    : subcategories;
+  const spend = applicable.filter(isSpend);
+  // Monthly cost, not face value — a yearly bill is spread over the year it is
+  // saved for rather than charged in full every month.
+  const total = sumMinor(spend.map(monthlyAmount));
+  const incomeMinor = sumMinor(
+    applicable.filter((s) => !isSpend(s)).map(monthlyAmount),
+  );
 
   const counts: Record<SubcategoryStatus, number> = { pending: 0, paid: 0 };
 
   let paid = 0;
-  for (const subcategory of subcategories) {
+  for (const subcategory of spend) {
     counts[subcategory.status] += 1;
-    if (subcategory.status === 'paid') paid += effectiveAmount(subcategory);
+    if (subcategory.status === 'paid') paid += monthlyAmount(subcategory);
   }
 
   const difference = fundedMinor - total;
@@ -104,9 +202,12 @@ export function summariseCategory(
     paidMinor: paid,
     outstandingMinor: total - paid,
     counts,
-    subcategoryCount: subcategories.length,
-    isSettled: subcategories.length > 0 && counts.paid === subcategories.length,
+    // Counts describe the checklist, which is the spend lines — an income line
+    // is never "paid", so including it would leave a category always unsettled.
+    subcategoryCount: spend.length,
+    isSettled: spend.length > 0 && counts.paid === spend.length,
     isFullyFunded: total > 0 && fundedMinor >= total,
+    incomeMinor,
   };
 }
 

@@ -177,7 +177,6 @@ export default function OnboardingLoansScreen() {
         title="New loan"
         icon="cash-outline"
         iconColor={colors.pending}
-        heightPct={0.9}
         scroll
         footer={
           <GradientButton

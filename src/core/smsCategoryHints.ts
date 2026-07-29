@@ -150,3 +150,26 @@ export function billMatchesHint(hint: CategoryHint, billText: string): boolean {
   const patterns = HINT_KEYWORDS.find(([h]) => h === hint)?.[1] ?? [];
   return patterns.some((pattern) => pattern.test(billText));
 }
+
+/**
+ * Named merchants worth seeding into the learned `merchant_rules` table, as
+ * plain text keyed by the tag they imply.
+ *
+ * The keyword list above is regex and matches whole *messages*; the rules table
+ * is plain text and matches *merchant names*. Only the entries that are real
+ * merchant names cross over — generic words like "super" or "transfer" would
+ * fire on far too much once containment matching is applied, so they stay
+ * message-level keywords only.
+ *
+ * Seed rules carry no `subcategoryId` (the app cannot know which of the user's
+ * lines to point at); they contribute the *hint*, and the moment the user
+ * resolves a draft the rule is re-pointed at a real line and becomes 'learned'.
+ */
+export const SEED_MERCHANT_PATTERNS: [CategoryHint, string[]][] = [
+  ['water', ['nwsdb', 'national water supply', 'water board']],
+  ['electricity', ['ceb', 'leco', 'ceylon electricity']],
+  ['telecom', ['dialog', 'mobitel', 'hutch', 'airtel', 'slt']],
+  ['groceries', ['keells', 'cargills', 'food city', 'arpico', 'glomark', 'laughs']],
+  ['fuel', ['ceypetco', 'ioc', 'filling station']],
+  ['subscription', ['netflix', 'spotify', 'youtube', 'anthropic', 'openai', 'icloud']],
+];

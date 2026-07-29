@@ -13,6 +13,7 @@
 import type { ParsedSms } from './smsParser';
 import { resolveCardId } from './planning';
 import { billMatchesHint, inferCategoryHint, type CategoryHint } from './smsCategoryHints';
+import { matchMerchant, type MatchConfidence, type MerchantRule } from './merchantRules';
 import type { Minor } from './money';
 
 /** The minimum a leaf's plan/actual and the SMS must be within to count as an
@@ -47,6 +48,13 @@ export interface SmsDraft {
   amountMinor: Minor;
   /** Ranked alternatives for the "pick a different bill" dropdown. */
   matches: DraftMatch[];
+  /**
+   * How sure we are of `subcategoryId`, which decides what the review UI
+   * offers: `exact` means a learned rule recognised this merchant outright and
+   * the user need only tap Yes; `likely` is a guess worth showing; `unknown`
+   * means the user must choose (and that choice is what teaches the system).
+   */
+  confidence: MatchConfidence;
   /** When the draft was created, for ordering the queue newest-first. */
   createdAt: number;
 }
@@ -157,12 +165,24 @@ export const CONFIDENT_MATCH_SCORE = 0.4;
  * income line. Returns matches ranked best-first; the top one is pre-selected
  * only if it clears CONFIDENT_MATCH_SCORE.
  */
-export function reconcileSms(parsed: ParsedSms, board: BoardSlice, id: string): SmsDraft {
+export function reconcileSms(
+  parsed: ParsedSms,
+  board: BoardSlice,
+  id: string,
+  /** Learned merchant rules; omitted (empty) falls back to keyword-only behaviour. */
+  rules: readonly MerchantRule[] = [],
+): SmsDraft {
   // A credit is money in (an income line); debit/bill are money out (expense).
   const wantType: 'income' | 'expense' = parsed.direction === 'credit' ? 'income' : 'expense';
 
-  // Read what the SMS is *for* from its merchant + full text, once.
-  const hint = inferCategoryHint(`${parsed.merchant} ${parsed.raw}`);
+  // What the *learned* table makes of this merchant. This is checked before the
+  // keyword guess because a rule the user taught us is better evidence than any
+  // shipped heuristic — that is the whole point of learning.
+  const learned = matchMerchant(parsed.merchant, rules);
+
+  // Read what the SMS is *for*: the learned hint when we have one, else the
+  // static keywords over the merchant + full text.
+  const hint = learned.hint ?? inferCategoryHint(`${parsed.merchant} ${parsed.raw}`);
 
   const matches: DraftMatch[] = board.subcategories
     .filter((sub) => sub.type === wantType)
@@ -170,8 +190,26 @@ export function reconcileSms(parsed: ParsedSms, board: BoardSlice, id: string): 
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score);
 
+  // A learned rule pointing at a line that still exists and is the right type
+  // wins outright — the user already told us this merchant maps here.
+  const learnedTarget =
+    learned.subcategoryId &&
+    board.subcategories.find((sub) => sub.id === learned.subcategoryId && sub.type === wantType)
+      ? learned.subcategoryId
+      : null;
+
   const best = matches[0];
-  const subcategoryId = best && best.score >= CONFIDENT_MATCH_SCORE ? best.subcategoryId : '';
+  const scoreTarget = best && best.score >= CONFIDENT_MATCH_SCORE ? best.subcategoryId : '';
+  const subcategoryId = learnedTarget ?? scoreTarget;
+
+  // `exact` is reserved for a learned rule that resolved to a real line: only
+  // then can the UI honestly offer a one-tap confirm. A rule whose line was
+  // since deleted degrades to the score-based guess.
+  const confidence: MatchConfidence = learnedTarget
+    ? learned.confidence
+    : subcategoryId
+      ? 'likely'
+      : 'unknown';
 
   return {
     id,
@@ -180,6 +218,7 @@ export function reconcileSms(parsed: ParsedSms, board: BoardSlice, id: string): 
     subcategoryId,
     amountMinor: parsed.amountMinor,
     matches,
+    confidence,
     createdAt: Date.now(),
   };
 }

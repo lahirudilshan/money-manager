@@ -41,6 +41,9 @@ export function SmsDraftCard({
   const hintMeta = hint ? HINT_META[hint] : null;
   const isCredit = parsed.direction === 'credit';
   const isMatched = draft.subcategoryId !== '' || Boolean(matchedBillName);
+  // A learned rule fired on this exact merchant — the user has confirmed this
+  // mapping before, so "Log it" is genuinely a one-tap confirmation.
+  const isExact = draft.confidence === 'exact';
 
   const kindLabel = {
     purchase: 'Purchase',
@@ -106,15 +109,36 @@ export function SmsDraftCard({
           <T variant="caption" tone="muted" numberOfLines={1}>
             {subtitle}
           </T>
-          {/* Matched bill on its own line so the price column stays uncluttered. */}
+          {/* What the detector made of it, on its own line so the price column
+              stays uncluttered. An exact match is a merchant the user has
+              already confirmed once, so it is badged differently from a guess —
+              and an unrecognised merchant says so plainly, since that row needs
+              a decision rather than a confirmation. */}
           {matchedBillName ? (
             <Row inline gap={4}>
-              <Ionicons name="arrow-forward" size={11} color={colors.completed} />
-              <T variant="caption" color={colors.completed} numberOfLines={1} style={{ fontWeight: '600' }}>
+              <Ionicons
+                name={isExact ? 'sparkles' : 'bulb-outline'}
+                size={11}
+                color={isExact ? colors.completed : colors.accent}
+              />
+              <T
+                variant="caption"
+                color={isExact ? colors.completed : colors.accent}
+                numberOfLines={1}
+                style={{ fontWeight: '600' }}
+              >
                 {matchedBillName}
+                {isExact ? '' : ' · suggested'}
               </T>
             </Row>
-          ) : null}
+          ) : (
+            <Row inline gap={4}>
+              <Ionicons name="help-circle-outline" size={11} color={colors.pending} />
+              <T variant="caption" color={colors.pending} numberOfLines={1} style={{ fontWeight: '600' }}>
+                New merchant — tap to categorise
+              </T>
+            </Row>
+          )}
         </View>
 
         {/* The price — the biggest, boldest thing in the row. */}
@@ -133,14 +157,14 @@ export function SmsDraftCard({
         }}
       >
         <RowAction
-          label="Not this"
+          label="Wrong category"
           icon="swap-horizontal-outline"
           tone="muted"
           onPress={onOpen}
         />
         <View style={{ width: 1, backgroundColor: colors.hairline }} />
         {isMatched ? (
-          <RowAction label="Log it" icon="checkmark" tone="success" onPress={onConfirm} />
+          <RowAction label="Confirm" icon="checkmark" tone="success" onPress={onConfirm} />
         ) : (
           <RowAction label="Choose bill" icon="pricetags-outline" tone="accent" onPress={onOpen} />
         )}

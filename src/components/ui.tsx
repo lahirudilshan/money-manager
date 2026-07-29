@@ -3,7 +3,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Keyboard,
   Modal,
   Platform,
@@ -19,9 +18,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { STATUS_ICON, statusStyle, type StatusKey } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
-
-/** Pressable that can take Animated styles (for the fading sheet backdrop). */
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 type TypeKey =
   | 'hero'
@@ -301,30 +297,22 @@ export function PinnedFooter({
 }
 
 /**
- * THE single modal for the whole app — a sheet that slides up from the bottom
- * over a fading backdrop, with a grab handle, a rich header, a scroll/content
- * area, and an optional pinned footer. Every modal and sheet uses this so they
- * all look and behave identically (the "new bill in" style).
+ * THE single modal for the whole app — presented as the native iOS sheet
+ * (`presentationStyle="pageSheet"`): the OS card that slides up from the bottom
+ * with the system grab handle, a gap at the top showing the screen behind, and
+ * swipe-down-to-dismiss. Inside it we render our own consistent chrome — a rich
+ * header, a scroll/content area, and an optional pinned footer — so every modal
+ * and sheet looks identical (the "new bill in" style).
  *
  * Header: always an icon tile + `title`; an optional `eyebrow` shows a small
  * uppercase context line above the title (e.g. "NEW BILL IN"). A close button
- * sits at the right. Pass `footer` for a pinned bottom action bar (it lifts
- * with the keyboard). `heightPct` sizes the sheet — forms want a tall sheet,
- * short pickers can size to content via `maxHeightPct` instead.
+ * sits at the right (alongside the native swipe-down). Pass `footer` for a
+ * pinned bottom action bar (it lifts with the keyboard).
+ *
+ * Note: the native sheet owns its own height and grab handle, so there is no
+ * `heightPct`/`maxHeightPct` here — the OS sizes it, and the user can drag it.
  */
-export function BottomSheet({
-  visible,
-  onClose,
-  title,
-  eyebrow,
-  icon,
-  iconColor,
-  footer,
-  children,
-  maxHeightPct = 0.85,
-  heightPct,
-  scroll = false,
-}: {
+type SheetProps = {
   visible: boolean;
   onClose: () => void;
   title?: string;
@@ -337,170 +325,137 @@ export function BottomSheet({
   /** Pinned footer action bar (keyboard-aware) — usually a GradientButton. */
   footer?: React.ReactNode;
   children: React.ReactNode;
-  /** Cap on the sheet's height as a fraction of the screen. */
-  maxHeightPct?: number;
-  /** Fixed height as a fraction of the screen — use for forms so the footer pins. */
-  heightPct?: number;
   /** Wrap children in a keyboard-aware ScrollView (for forms). */
   scroll?: boolean;
-}) {
+  /**
+   * Set when the sheet IS an expo-router route screen already presented as the
+   * native sheet (`presentation: 'modal'`). Then this renders the chrome only —
+   * no own `<Modal>` — so it doesn't double-present. Inline sheets omit it and
+   * get their own native `<Modal presentationStyle="pageSheet">`.
+   */
+  asRoute?: boolean;
+};
+
+/** The shared chrome: header + body + footer. Identical in every sheet. */
+function SheetChrome({ onClose, title, eyebrow, icon, iconColor, footer, children, scroll }: SheetProps) {
   const { colors, radius, space } = useTheme();
   const insets = useSafeAreaInsets();
   const keyboardHeight = useKeyboardHeight(Boolean(footer));
 
-  // Keep the modal mounted through the exit animation: `mounted` gates the
-  // native Modal, `anim` drives the backdrop fade and sheet slide together.
-  const [mounted, setMounted] = React.useState(visible);
-  const anim = React.useRef(new Animated.Value(0)).current;
-
-  React.useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      Animated.timing(anim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
-    } else if (mounted) {
-      Animated.timing(anim, { toValue: 0, duration: 180, useNativeDriver: true }).start(
-        ({ finished }) => {
-          if (finished) setMounted(false);
-        },
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
-
-  if (!mounted) return null;
-
-  // Backdrop fades in/out; the sheet slides up from just below the screen.
-  const backdropOpacity = anim;
-  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [600, 0] });
-
   return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        {/* Fading backdrop — tap outside the sheet to dismiss. */}
-        <AnimatedPressable
-          onPress={onClose}
-          accessibilityRole="button"
-          accessibilityLabel="Close"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: colors.overlay,
-            opacity: backdropOpacity,
-          }}
-        />
-        {/* Sliding sheet; swallows taps so they don't close it. */}
-        <Animated.View
-          style={{
-            transform: [{ translateY }],
-            backgroundColor: colors.surface,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            overflow: 'hidden',
-            ...(heightPct
-              ? { height: `${Math.round(heightPct * 100)}%` }
-              : { maxHeight: `${Math.round(maxHeightPct * 100)}%` }),
-          }}
-        >
-          {/* Grab handle. */}
-          <View style={{ alignItems: 'center', paddingTop: space.sm, paddingBottom: space.xs }}>
-            <View
-              style={{ width: 40, height: 5, borderRadius: radius.pill, backgroundColor: colors.hairlineStrong }}
-            />
-          </View>
-
-          {/* Rich header: icon tile + optional eyebrow + title + close. */}
-          {title ? (
-            <>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: space.md,
-                  paddingLeft: space.lg,
-                  paddingRight: space.lg - space.xs,
-                  paddingTop: space.xs,
-                  paddingBottom: space.md,
-                }}
-              >
-                <View
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: radius.md,
-                    backgroundColor: iconColor ?? colors.accent,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Ionicons name={(icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  {eyebrow ? (
-                    <T variant="caption" tone="muted">
-                      {eyebrow.toUpperCase()}
-                    </T>
-                  ) : null}
-                  <T variant="heading" numberOfLines={1}>
-                    {title}
-                  </T>
-                </View>
-                <Pressable
-                  onPress={onClose}
-                  accessibilityRole="button"
-                  accessibilityLabel="Close"
-                  style={({ pressed }) => ({
-                    width: 40,
-                    height: 40,
-                    borderRadius: radius.pill,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-                  })}
-                >
-                  <Ionicons name="close" size={24} color={colors.inkSecondary} />
-                </Pressable>
-              </View>
-              <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.hairline }} />
-            </>
-          ) : null}
-
-          {/* Body — optionally a keyboard-aware scroll area so it flexes and the
-              footer pins to the bottom. */}
-          {scroll ? (
-            <ScrollView
-              style={{ flex: 1 }}
-              contentContainerStyle={{ padding: space.lg, gap: space.lg }}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {children}
-            </ScrollView>
-          ) : (
-            children
-          )}
-
-          {/* Pinned footer — lifts with the keyboard when open. */}
-          {footer ? (
+    <View style={{ flex: 1, backgroundColor: colors.surface }}>
+      {/* Rich header: icon tile + optional eyebrow + title + close. Sits just
+          below the native grabber. */}
+      {title ? (
+        <>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.md,
+              paddingLeft: space.lg,
+              paddingRight: space.lg - space.xs,
+              paddingTop: space.md,
+              paddingBottom: space.md,
+            }}
+          >
             <View
               style={{
-                paddingHorizontal: space.lg,
-                paddingTop: space.sm,
-                paddingBottom: (keyboardHeight > 0 ? keyboardHeight : insets.bottom) + space.sm,
-                borderTopWidth: StyleSheet.hairlineWidth,
-                borderTopColor: colors.hairline,
-                backgroundColor: colors.surface,
+                width: 40,
+                height: 40,
+                borderRadius: radius.md,
+                backgroundColor: iconColor ?? colors.accent,
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              {footer}
+              <Ionicons name={(icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
             </View>
-          ) : (
-            <View style={{ height: insets.bottom + space.md }} />
-          )}
-        </Animated.View>
-      </View>
+            <View style={{ flex: 1 }}>
+              {eyebrow ? (
+                <T variant="caption" tone="muted">
+                  {eyebrow.toUpperCase()}
+                </T>
+              ) : null}
+              <T variant="heading" numberOfLines={1}>
+                {title}
+              </T>
+            </View>
+            <Pressable
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              style={({ pressed }) => ({
+                width: 40,
+                height: 40,
+                borderRadius: radius.pill,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+              })}
+            >
+              <Ionicons name="close" size={24} color={colors.inkSecondary} />
+            </Pressable>
+          </View>
+          <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.hairline }} />
+        </>
+      ) : null}
+
+      {/* Body — optionally a keyboard-aware scroll area so it flexes and the
+          footer pins to the bottom. */}
+      {scroll ? (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {children}
+        </ScrollView>
+      ) : (
+        children
+      )}
+
+      {/* Pinned footer — lifts with the keyboard when open. */}
+      {footer ? (
+        <View
+          style={{
+            paddingHorizontal: space.lg,
+            paddingTop: space.sm,
+            paddingBottom: (keyboardHeight > 0 ? keyboardHeight : insets.bottom) + space.sm,
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: colors.hairline,
+            backgroundColor: colors.surface,
+          }}
+        >
+          {footer}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+export function BottomSheet(props: SheetProps) {
+  // Route sheets are already the native sheet (the expo-router 'modal' screen),
+  // so they render the chrome directly — one presentation, identical to the
+  // inline "add bill" sheet. Inline sheets wrap the chrome in their own native
+  // `<Modal presentationStyle="pageSheet">`.
+  if (props.asRoute) {
+    if (!props.visible) return null;
+    return <SheetChrome {...props} />;
+  }
+
+  return (
+    <Modal
+      visible={props.visible}
+      // The native iOS card sheet: slides up, shows the screen behind at the
+      // top, has the system grabber, and can be swiped down to dismiss.
+      presentationStyle="pageSheet"
+      animationType="slide"
+      // Fires for both the swipe-down dismiss and the Android hardware back.
+      onRequestClose={props.onClose}
+    >
+      <SheetChrome {...props} />
     </Modal>
   );
 }

@@ -17,6 +17,8 @@ import {
   savingPlanProgress,
   shiftPeriod,
   summariseBoard,
+  appliesToPeriod,
+  monthlyAmount,
   summariseCategory,
   urgencyFor,
   type CategoryStatus,
@@ -378,5 +380,259 @@ describe('isPlanExpiringSoon', () => {
 
   it('stays quiet once past due', () => {
     expect(isPlanExpiringSoon(plan, 14, new Date(2026, 6, 1))).toBe(false);
+  });
+});
+
+/**
+ * Income lines live on the board next to expenses, but they are money coming
+ * *in*. Counting them as planned spend is what made a category's total — and
+ * the dashboard's PLANNED figure — exceed the income it is measured against.
+ */
+describe('summariseCategory with income lines', () => {
+  const salary = {
+    id: 'inc',
+    name: 'Salary',
+    plannedMinor: toMinor(300_000),
+    status: 'pending' as const,
+    type: 'income' as const,
+  };
+  const rent = {
+    id: 'rent',
+    name: 'Rent',
+    plannedMinor: toMinor(50_000),
+    status: 'pending' as const,
+    type: 'expense' as const,
+  };
+
+  it('keeps income out of the planned spend total', () => {
+    expect(summariseCategory([salary, rent], 0).totalMinor).toBe(toMinor(50_000));
+  });
+
+  it('reports income separately rather than discarding it', () => {
+    expect(summariseCategory([salary, rent], 0).incomeMinor).toBe(toMinor(300_000));
+  });
+
+  it('counts only spend lines in the checklist', () => {
+    expect(summariseCategory([salary, rent], 0).subcategoryCount).toBe(1);
+  });
+
+  it('settles once every spend line is paid, ignoring income lines', () => {
+    const summary = summariseCategory([salary, { ...rent, status: 'paid' as const }], 0);
+    expect(summary.isSettled).toBe(true);
+  });
+
+  it('an income-only category plans no spend at all', () => {
+    const summary = summariseCategory([salary], 0);
+    expect(summary.totalMinor).toBe(0);
+    expect(summary.incomeMinor).toBe(toMinor(300_000));
+  });
+
+  it('treats an untyped line as spend, preserving old behaviour', () => {
+    const untyped = { id: 'x', name: 'Old', plannedMinor: toMinor(1_000), status: 'pending' as const };
+    expect(summariseCategory([untyped], 0).totalMinor).toBe(toMinor(1_000));
+  });
+
+  it('never lets income inflate the funding shortfall', () => {
+    // Funding 50k against a 50k rent bill is fully funded, even though a
+    // 300k income line shares the category.
+    const summary = summariseCategory([salary, rent], toMinor(50_000));
+    expect(summary.isFullyFunded).toBe(true);
+    expect(summary.shortfallMinor).toBe(0);
+  });
+});
+
+/**
+ * A yearly bill is paid once but budgeted all year, so the monthly plan must
+ * carry a twelfth of it. Counting the full amount every month inflated PLANNED
+ * roughly elevenfold per yearly line and pushed it above income on boards that
+ * were genuinely affordable.
+ */
+describe('monthlyAmount', () => {
+  const line = (amount: number, frequency?: 'monthly' | 'one_time' | 'yearly' | 'unplanned') => ({
+    id: 'x',
+    name: 'x',
+    plannedMinor: toMinor(amount),
+    status: 'pending' as const,
+    frequency,
+  });
+
+  it('spreads a yearly bill across twelve months', () => {
+    expect(monthlyAmount(line(120_000, 'yearly'))).toBe(toMinor(10_000));
+  });
+
+  it('leaves a monthly bill at face value', () => {
+    expect(monthlyAmount(line(50_000, 'monthly'))).toBe(toMinor(50_000));
+  });
+
+  it('leaves a one-time cost at face value in the month it lands', () => {
+    expect(monthlyAmount(line(9_000, 'one_time'))).toBe(toMinor(9_000));
+  });
+
+  it('leaves unplanned spend at face value — it is real money already spent', () => {
+    expect(monthlyAmount(line(4_500, 'unplanned'))).toBe(toMinor(4_500));
+  });
+
+  it('treats an unspecified frequency as monthly, preserving old behaviour', () => {
+    expect(monthlyAmount(line(7_000))).toBe(toMinor(7_000));
+  });
+
+  it('prefers the actual amount over the plan when one was recorded', () => {
+    expect(
+      monthlyAmount({ ...line(120_000, 'yearly'), actualMinor: toMinor(60_000) }),
+    ).toBe(toMinor(5_000));
+  });
+
+  it('sums back to roughly the annual figure over twelve months', () => {
+    const monthly = monthlyAmount(line(120_000, 'yearly'));
+    expect(monthly * 12).toBe(toMinor(120_000));
+  });
+});
+
+describe('summariseCategory pro-rates yearly bills', () => {
+  const expense = (id: string, amount: number, frequency: 'monthly' | 'yearly') => ({
+    id,
+    name: id,
+    plannedMinor: toMinor(amount),
+    status: 'pending' as const,
+    type: 'expense' as const,
+    frequency,
+  });
+
+  it('counts a yearly line at its monthly share', () => {
+    const summary = summariseCategory(
+      [expense('rent', 50_000, 'monthly'), expense('insurance', 120_000, 'yearly')],
+      0,
+    );
+    expect(summary.totalMinor).toBe(toMinor(60_000));
+  });
+
+  it('uses the same basis for the paid total', () => {
+    const summary = summariseCategory(
+      [{ ...expense('insurance', 120_000, 'yearly'), status: 'paid' as const }],
+      0,
+    );
+    expect(summary.paidMinor).toBe(toMinor(10_000));
+    expect(summary.outstandingMinor).toBe(0);
+  });
+});
+
+/**
+ * A one-time cost belongs to the month it was incurred and to no other. Without
+ * an anchor it recurred in every month forever, which is the opposite of what
+ * "one time" means — a past down payment kept inflating this month's plan.
+ */
+describe('appliesToPeriod', () => {
+  const oneTime = (period?: string) => ({
+    id: 'dp',
+    name: 'Down Payment',
+    plannedMinor: toMinor(250_000),
+    status: 'paid' as const,
+    frequency: 'one_time' as const,
+    period,
+  });
+
+  it('counts a one-time cost in its own month', () => {
+    expect(appliesToPeriod(oneTime('2026-07'), '2026-07')).toBe(true);
+  });
+
+  it('drops a one-time cost from every later month', () => {
+    expect(appliesToPeriod(oneTime('2026-07'), '2026-08')).toBe(false);
+  });
+
+  it('drops a one-time cost from earlier months too', () => {
+    expect(appliesToPeriod(oneTime('2026-07'), '2026-06')).toBe(false);
+  });
+
+  it('keeps a one-time line with no anchor, so old rows do not vanish', () => {
+    expect(appliesToPeriod(oneTime(undefined), '2026-08')).toBe(true);
+  });
+
+  it('never restricts a recurring line', () => {
+    const monthly = { ...oneTime('2026-07'), frequency: 'monthly' as const };
+    expect(appliesToPeriod(monthly, '2026-12')).toBe(true);
+  });
+});
+
+describe('summariseCategory excludes past one-time costs', () => {
+  const rent = {
+    id: 'rent',
+    name: 'Rent',
+    plannedMinor: toMinor(35_000),
+    status: 'pending' as const,
+    type: 'expense' as const,
+    frequency: 'monthly' as const,
+    period: '2026-07',
+  };
+  const downPayment = {
+    id: 'dp',
+    name: 'Down Payment',
+    plannedMinor: toMinor(250_000),
+    status: 'paid' as const,
+    type: 'expense' as const,
+    frequency: 'one_time' as const,
+    period: '2026-07',
+  };
+
+  it('includes the one-time cost in the month it happened', () => {
+    expect(summariseCategory([rent, downPayment], 0, '2026-07').totalMinor).toBe(
+      toMinor(285_000),
+    );
+  });
+
+  it('excludes it from a later month', () => {
+    expect(summariseCategory([rent, downPayment], 0, '2026-08').totalMinor).toBe(
+      toMinor(35_000),
+    );
+  });
+
+  it('keeps every line when no period is given', () => {
+    expect(summariseCategory([rent, downPayment], 0).totalMinor).toBe(toMinor(285_000));
+  });
+});
+
+/**
+ * The anchor is the month a one-time cost was PAID, which is not necessarily
+ * the month its line was created — a cost paid in June can be recorded in July
+ * when the board is first set up. Anchoring to creation counted it in the wrong
+ * month, so it kept inflating the month the user was actually looking at.
+ */
+describe('one-time costs anchor to the month they were paid', () => {
+  const paidInJune = {
+    id: 'dp',
+    name: 'Down Payment',
+    plannedMinor: toMinor(250_000),
+    status: 'paid' as const,
+    type: 'expense' as const,
+    frequency: 'one_time' as const,
+    period: '2026-06',
+  };
+
+  it('counts in the month it was paid, not the month it was recorded', () => {
+    expect(appliesToPeriod(paidInJune, '2026-06')).toBe(true);
+  });
+
+  it('is excluded from the month the line was created in', () => {
+    expect(appliesToPeriod(paidInJune, '2026-07')).toBe(false);
+  });
+
+  it('stays excluded in later months', () => {
+    expect(appliesToPeriod(paidInJune, '2026-12')).toBe(false);
+  });
+
+  it('drops out of a category total for every other month', () => {
+    const rent = {
+      id: 'rent',
+      name: 'Rent',
+      plannedMinor: toMinor(35_000),
+      status: 'pending' as const,
+      type: 'expense' as const,
+      frequency: 'monthly' as const,
+    };
+    expect(summariseCategory([rent, paidInJune], 0, '2026-06').totalMinor).toBe(
+      toMinor(285_000),
+    );
+    expect(summariseCategory([rent, paidInJune], 0, '2026-07').totalMinor).toBe(
+      toMinor(35_000),
+    );
   });
 });

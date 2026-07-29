@@ -133,6 +133,14 @@ export const subcategories = sqliteTable(
     dueDay: integer('due_day'),
     /** Overrides the parent category's funding card when set. */
     cardId: text('card_id').references(() => cards.id, { onDelete: 'set null' }),
+    /**
+     * "YYYY-MM" a `one_time` line belongs to — the month the cost was actually
+     * incurred, which is not necessarily the month the line was created (a cost
+     * paid in May can be recorded in July). It counts in that month and in no
+     * other. Null on recurring lines, and on one-time lines that predate this
+     * field, where the creation month is used as a fallback.
+     */
+    onceInPeriod: text('once_in_period'),
     /** Set when this line is a loan installment, to link back to the loan. */
     loanId: text('loan_id').references(() => loans.id, { onDelete: 'set null' }),
 
@@ -333,6 +341,42 @@ export const loans = sqliteTable('loans', {
   ...timestamps,
 });
 
+/**
+ * Learned merchant → budget-line associations, the memory behind auto-detected
+ * categories.
+ *
+ * A row says "SMS text matching `pattern` belongs to this line". Rows arrive
+ * two ways: seeded from the static keyword list at first launch, and — the
+ * point of the table — written whenever the user confirms or corrects a draft's
+ * category. `hitCount` rises on every confirmation, so a repeatedly-confirmed
+ * mapping outranks a one-off, and detection accuracy improves with use.
+ *
+ * `pattern` is normalised merchant text (see core/merchantRules.ts), not a
+ * regex — it is compared by equality/containment, never executed.
+ */
+export const merchantRules = sqliteTable(
+  'merchant_rules',
+  {
+    id: text('id').primaryKey(),
+    /** Normalised merchant key this rule fires on. Unique across the table. */
+    pattern: text('pattern').notNull(),
+    /** The line to log against; null for a seed rule that only carries a hint. */
+    subcategoryId: text('subcategory_id').references(() => subcategories.id, {
+      onDelete: 'cascade',
+    }),
+    /** Semantic bucket, so the rule still helps after its line is deleted. */
+    hint: text('hint'),
+    /** 'seed' (shipped) or 'learned' (written from a user correction). */
+    source: text('source', { enum: ['seed', 'learned'] })
+      .notNull()
+      .default('learned'),
+    /** Times the user has confirmed this mapping — the confidence signal. */
+    hitCount: integer('hit_count').notNull().default(1),
+    ...timestamps,
+  },
+  (t) => [index('merchant_rules_pattern_idx').on(t.pattern)],
+);
+
 /** Key/value app settings (currency, USD rate, onboarding marker). */
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
@@ -360,6 +404,8 @@ export type Income = typeof incomes.$inferSelect;
 export type NewIncome = typeof incomes.$inferInsert;
 export type Loan = typeof loans.$inferSelect;
 export type NewLoan = typeof loans.$inferInsert;
+export type MerchantRuleRow = typeof merchantRules.$inferSelect;
+export type NewMerchantRuleRow = typeof merchantRules.$inferInsert;
 
 /** How often a subcategory recurs. */
 export type SubcategoryFrequency = Subcategory['frequency'];

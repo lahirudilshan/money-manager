@@ -2,8 +2,8 @@ import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { Field } from '../../src/components/forms';
-import { BottomSheet, GradientButton, Label, T } from '../../src/components/ui';
-import { DayPicker } from '../../src/components/DayPicker';
+import { BottomSheet, GradientButton, T } from '../../src/components/ui';
+import { DatePickerField } from '../../src/components/DatePickerField';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { parseAmount } from '../../src/core/money';
 import { useAppStore } from '../../src/store/useAppStore';
@@ -28,18 +28,18 @@ export default function AddUnplannedTransaction() {
 
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
-  const [day, setDay] = useState(new Date().getDate());
+  // Defaults to today — the overwhelmingly common case is logging an entry the
+  // day it happened, so that costs no taps and back-dating stays possible.
+  const [date, setDate] = useState(() => new Date());
 
   const amountMinor = parseAmount(amount) ?? 0;
   const canSave = Boolean(subcategoryId) && name.trim().length > 0 && amountMinor > 0;
 
   function handleSave() {
     if (!canSave || !subcategoryId) return;
-    // Anchor the entry to the month the user is *viewing* (not necessarily the
-    // current calendar month), on the chosen day, so it shows up in the list
-    // they're looking at. The store derives the period from this date.
-    const [year, month] = state.period.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
+    // The chosen date decides the month this counts toward (the store derives
+    // the period from it), so an entry back-dated into last month lands there
+    // rather than being forced into whichever month is on screen.
     state.addTransaction({ subcategoryId, name: name.trim(), amountMinor, date });
     closeModal();
   }
@@ -47,12 +47,12 @@ export default function AddUnplannedTransaction() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="Add entry"
       eyebrow={subcategory ? `Entry in ${subcategory.name}` : undefined}
       icon="add-circle-outline"
       iconColor={colors.accent}
-      heightPct={0.85}
       scroll
       footer={<GradientButton label="Add entry" icon="add" onPress={handleSave} disabled={!canSave} />}
     >
@@ -71,10 +71,7 @@ export default function AddUnplannedTransaction() {
         placeholder="0"
       />
 
-      <View style={{ gap: space.sm }}>
-        <Label>Day of month</Label>
-        <DayPicker value={day} onChange={setDay} />
-      </View>
+      <DatePickerField label="Date" value={date} onChange={setDate} />
     </BottomSheet>
   );
 }

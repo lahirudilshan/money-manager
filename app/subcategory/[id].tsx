@@ -17,7 +17,12 @@ import { BottomSheet, Button, Divider, GradientButton, Label, Row, Surface, T } 
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { deletePersistedImage, persistPickedImage } from '../../src/core/imageStorage';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
+import {
+  formatPeriod,
+  periodKey,
+  resolveCardId,
+  type SubcategoryStatus,
+} from '../../src/core/planning';
 import {
   supportsSavingPlan,
   isUnplanned,
@@ -77,6 +82,11 @@ export default function SubcategoryScreen() {
   const [note, setNote] = useState(stateRow?.note ?? '');
   const [frequency, setFrequency] = useState<SubcategoryFrequency>(
     subcategory?.frequency ?? 'monthly',
+  );
+  // Which month a one-time cost belongs to. Defaults to the stored anchor, or
+  // the line's creation month for rows written before that field existed.
+  const [oncePeriod, setOncePeriod] = useState(
+    subcategory?.onceInPeriod ?? (subcategory ? periodKey(subcategory.createdAt) : ''),
   );
   const [parentId, setParentId] = useState(subcategory?.categoryId ?? '');
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
@@ -164,6 +174,9 @@ export default function SubcategoryScreen() {
       // Unplanned lines have no single planned amount (it's the sum of entries).
       plannedMinor: unplanned ? 0 : planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
       frequency,
+      // Only a one-time line carries a month anchor; any other frequency
+      // recurs, so a stale anchor is cleared rather than left behind.
+      onceInPeriod: frequency === 'one_time' ? oncePeriod : null,
       planTargetMinor: planPatch?.planTargetMinor ?? null,
       planDueDate: planPatch?.planDueDate ?? null,
       planStartDate: planPatch?.planStartDate ?? subcategory!.planStartDate ?? null,
@@ -230,17 +243,19 @@ export default function SubcategoryScreen() {
     note.trim() !== (stateRow?.note ?? '') ||
     imageUri !== (stateRow?.imageUri ?? null) ||
     frequency !== subcategory.frequency ||
+    // Changing only which month a one-time cost lands in is a real edit.
+    (frequency === 'one_time' && oncePeriod !== subcategory.onceInPeriod) ||
     planChanged;
 
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title={subcategory.name}
       eyebrow={category?.name}
       icon={(subcategory.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
       iconColor={category?.color ?? colors.accent}
-      heightPct={0.92}
       scroll
       footer={
         <GradientButton
@@ -444,6 +459,15 @@ export default function SubcategoryScreen() {
 
           <FrequencyPicker label="Frequency" value={frequency} onChange={setFrequency} includeUnplanned />
 
+          {/* A one-time cost counts in exactly one month — the month it was
+              logged in — and in no other. Stated plainly so the bill silently
+              leaving every other month is understood rather than surprising. */}
+          {frequency === 'one_time' ? (
+            <T variant="caption" tone="muted">
+              Counts only in {formatPeriod(oncePeriod)} — it won&apos;t affect any other month.
+            </T>
+          ) : null}
+
           {/* "Save up for this" — yearly lines only. */}
           {supportsSavingPlan(frequency) ? (
             <SavingPlanFields draft={plan} onChange={setPlan} />
@@ -589,7 +613,7 @@ export default function SubcategoryScreen() {
             value={categoryQuery}
             onChangeText={setCategoryQuery}
             placeholder="Search categories…"
-            placeholderTextColor={colors.inkFaint}
+            placeholderTextColor={colors.inkMuted}
             style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
           />
         </View>
@@ -743,3 +767,4 @@ function UploadButton({
     </Pressable>
   );
 }
+

@@ -76,9 +76,12 @@ export function formatMoney(minor: Minor, options: FormatOptions = {}): string {
     }).format(major);
   }
 
+  // The sign belongs to the number, not to the currency code: "LKR -45,000",
+  // never "-LKR 45,000". This shows up on the dashboard whenever disposable
+  // income goes negative, which is precisely when the figure must read cleanly.
   const sign = negative ? '-' : signed ? '+' : '';
   const prefix = showCurrency ? `${currency} ` : '';
-  return `${sign}${prefix}${body}`;
+  return `${prefix}${sign}${body}`;
 }
 
 function trimZeros(value: string): string {

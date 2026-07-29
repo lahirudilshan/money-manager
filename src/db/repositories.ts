@@ -1,4 +1,10 @@
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import {
+  merchantKey,
+  type MerchantRule,
+  type RuleUpsert,
+} from '../core/merchantRules';
+import { SEED_MERCHANT_PATTERNS } from '../core/smsCategoryHints';
 import { db } from './client';
 import {
   cards,
@@ -7,6 +13,7 @@ import {
   fundings,
   incomes,
   loans,
+  merchantRules,
   settings,
   subcategories,
   subcategoryStates,
@@ -18,6 +25,7 @@ import {
   type Funding,
   type Income,
   type Loan,
+  type MerchantRuleRow,
   type NewCard,
   type NewCategory,
   type NewFunding,
@@ -463,6 +471,102 @@ export const loanRepo = {
     db.delete(loans).where(eq(loans.id, id)).run();
   },
 };
+
+/**
+ * The learned merchant → line map (see core/merchantRules.ts for the matching
+ * logic, which stays pure; this is only storage).
+ *
+ * Reads return the plain `MerchantRule` shape the core module expects, so the
+ * ranking code never sees a Drizzle row or a nullable timestamp.
+ */
+export const merchantRuleRepo = {
+  all(): MerchantRule[] {
+    return db
+      .select()
+      .from(merchantRules)
+      .orderBy(desc(merchantRules.hitCount))
+      .all()
+      .map(toMerchantRule);
+  },
+
+  /**
+   * Apply the edit `planRuleUpsert` decided on. Inserting records a brand-new
+   * merchant; strengthening bumps `hitCount` and re-points the rule at the line
+   * the user actually chose — which is what turns a correction into learning.
+   */
+  apply(upsert: RuleUpsert): void {
+    if (upsert.kind === 'insert') {
+      db.insert(merchantRules)
+        .values({
+          id: createId(),
+          pattern: upsert.pattern,
+          subcategoryId: upsert.subcategoryId,
+          hint: upsert.hint,
+          source: 'learned',
+          hitCount: 1,
+        })
+        .run();
+      return;
+    }
+
+    db.update(merchantRules)
+      .set({
+        subcategoryId: upsert.subcategoryId,
+        // A corrected rule is now user-authored, whatever it started as.
+        source: 'learned',
+        hitCount: sql`${merchantRules.hitCount} + 1`,
+        updatedAt: now(),
+      })
+      .where(eq(merchantRules.id, upsert.id))
+      .run();
+  },
+
+  /**
+   * Populate the shipped merchant patterns once, so a brand-new install already
+   * recognises the common Sri Lankan chains instead of asking about every one.
+   * Idempotent: patterns that already exist are skipped, so this is safe to run
+   * on every launch and never overwrites what the user has taught.
+   */
+  seed(): void {
+    const existing = new Set(
+      db.select({ pattern: merchantRules.pattern }).from(merchantRules).all().map((r) => r.pattern),
+    );
+
+    const rows = SEED_MERCHANT_PATTERNS.flatMap(([hint, patterns]) =>
+      patterns
+        .map((pattern) => merchantKey(pattern))
+        .filter((pattern) => pattern && !existing.has(pattern))
+        .map((pattern) => ({
+          id: createId(),
+          pattern,
+          // Seeds carry the hint only — they cannot know the user's lines.
+          subcategoryId: null,
+          hint,
+          source: 'seed' as const,
+          hitCount: 0,
+        })),
+    );
+
+    if (rows.length > 0) db.insert(merchantRules).values(rows).run();
+  },
+
+  remove(id: string): void {
+    db.delete(merchantRules).where(eq(merchantRules.id, id)).run();
+  },
+};
+
+/** Drizzle row → the plain shape core/merchantRules.ts ranks over. */
+function toMerchantRule(row: MerchantRuleRow): MerchantRule {
+  return {
+    id: row.id,
+    pattern: row.pattern,
+    subcategoryId: row.subcategoryId,
+    hint: (row.hint as MerchantRule['hint']) ?? null,
+    source: row.source,
+    hitCount: row.hitCount,
+    updatedAt: row.updatedAt.getTime(),
+  };
+}
 
 export const settingsRepo = {
   get(key: string): string | undefined {

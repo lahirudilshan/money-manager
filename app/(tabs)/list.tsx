@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
@@ -6,6 +7,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   TextInput,
   UIManager,
   View,
@@ -30,17 +32,21 @@ import {
   GradientButton,
   Label,
   Row,
-  Stat,
   Surface,
   T,
 } from '../../src/components/ui';
 import { formatMoney, parseAmount } from '../../src/core/money';
-import { effectiveAmount, formatPeriod, isFlexibleDueDay, resolveCardId } from '../../src/core/planning';
+import {
+  effectiveAmount,
+  formatPeriod,
+  isFlexibleDueDay,
+  monthlyAmount,
+  resolveCardId,
+} from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
   selectCategoryViews,
-  selectTotalIncome,
   useAppStore,
   type CategoryView,
 } from '../../src/store/useAppStore';
@@ -80,7 +86,10 @@ export default function ListScreen() {
   const state = useAppStore();
   const views = useMemo(() => selectCategoryViews(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
-  const income = useMemo(() => selectTotalIncome(state), [state]);
+
+  // Plan insights for the top card — the "what stands out" the dashboard
+  // doesn't already show. Derived here from the same views the list renders.
+  const insights = useMemo(() => computePlanInsights(views), [views]);
 
   // Everything starts expanded — the plan is meant to be worked through, not
   // hunted for. Collapsing is opt-in per card, or all at once.
@@ -135,76 +144,63 @@ export default function ListScreen() {
       .filter((view) => view.subcategories.length > 0);
   }, [views, filter, query]);
 
-  const left = income - totals.plannedMinor;
   const paidPct =
     totals.plannedMinor > 0 ? Math.round((totals.paidMinor / totals.plannedMinor) * 100) : 0;
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: colors.canvas }}
-      contentContainerStyle={{
-        paddingTop: insets.top + space.md,
-        paddingBottom: tabClearance,
-        paddingHorizontal: space.lg,
-        gap: space.md,
-      }}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Header + compact plan summary in one block. */}
-      <Row justify="space-between" align="flex-start">
-        <View style={{ gap: 1 }}>
-          <Label>{formatPeriod(state.period)}</Label>
-          <T variant="title">Your plan</T>
-        </View>
-        <Pressable
-          onPress={() => router.push('/category/new')}
-          accessibilityRole="button"
-          accessibilityLabel="New category"
-          style={({ pressed }) => ({
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 4,
-            paddingVertical: 8,
-            paddingHorizontal: space.md,
-            borderRadius: 999,
-            backgroundColor: colors.accent,
-            opacity: pressed ? 0.85 : 1,
-          })}
-        >
-          <Ionicons name="add" size={16} color={colors.inkInverse} />
-          <T variant="caption" color={colors.inkInverse} style={{ fontWeight: '700' }}>
-            Category
-          </T>
-        </Pressable>
-      </Row>
-
-      {views.length > 0 ? (
-        <Surface style={{ gap: space.md }}>
-          <Row justify="space-between">
-            <SummaryStat label="Income" value={formatMoney(income, { compact: true })} />
-            <SummaryStat
-              label="Planned"
-              value={formatMoney(totals.plannedMinor, { compact: true })}
-            />
-            <SummaryStat
-              label="Left"
-              value={formatMoney(left, { compact: true })}
-              color={left >= 0 ? colors.ink : colors.danger}
-            />
-          </Row>
-          <View style={{ gap: 4 }}>
-            <ProgressBar pct={paidPct} color={colors.completed} />
-            <Row justify="space-between">
-              <T variant="caption" tone="muted">
-                {formatMoney(totals.paidMinor, { compact: true })} paid
-              </T>
-              <T variant="caption" tone="muted">
-                {paidPct}% of plan
-              </T>
-            </Row>
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      {/* Fixed header — stays pinned while the plan scrolls beneath it. */}
+      <View
+        style={{
+          paddingTop: insets.top + space.sm,
+          paddingBottom: space.sm,
+          paddingHorizontal: space.lg,
+          backgroundColor: colors.canvas,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomColor: colors.hairline,
+        }}
+      >
+        <Row justify="space-between" align="center">
+          <View style={{ gap: 1 }}>
+            <Label>{formatPeriod(state.period)}</Label>
+            <T variant="title">Your plan</T>
           </View>
-        </Surface>
-      ) : null}
+          <Pressable
+            onPress={() => router.push('/category/new')}
+            accessibilityRole="button"
+            accessibilityLabel="New category"
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+              paddingVertical: 8,
+              paddingHorizontal: space.md,
+              borderRadius: 999,
+              backgroundColor: colors.accent,
+              opacity: pressed ? 0.85 : 1,
+            })}
+          >
+            <Ionicons name="add" size={16} color={colors.inkInverse} />
+            <T variant="caption" color={colors.inkInverse} style={{ fontWeight: '700' }}>
+              Category
+            </T>
+          </Pressable>
+        </Row>
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: space.md,
+          paddingBottom: tabClearance,
+          paddingHorizontal: space.lg,
+          gap: space.md,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        {views.length > 0 ? (
+          <PlanInsightsCard insights={insights} paidPct={paidPct} />
+        ) : null}
 
       {/* Search — find a bill without scrolling the whole plan. */}
       {views.length > 0 ? (
@@ -224,7 +220,7 @@ export default function ListScreen() {
             value={search}
             onChangeText={setSearch}
             placeholder="Search bills or categories"
-            placeholderTextColor={colors.inkFaint}
+            placeholderTextColor={colors.inkMuted}
             accessibilityLabel="Search bills"
             returnKeyType="search"
             style={{
@@ -347,16 +343,220 @@ export default function ListScreen() {
         </View>
       )}
 
-      <AddSubcategorySheet
-        category={addingToCategory}
-        onClose={() => setAddingToCategoryId(null)}
-      />
-    </ScrollView>
+        <AddSubcategorySheet
+          category={addingToCategory}
+          onClose={() => setAddingToCategoryId(null)}
+        />
+      </ScrollView>
+    </View>
   );
 }
 
-function SummaryStat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return <Stat label={label} value={value} color={color} large />;
+interface PlanInsights {
+  /** The single largest category by planned/effective spend. */
+  biggest: { name: string; color: string; icon: string; totalMinor: number } | null;
+  /** Categories whose logged actuals exceed their plan, and by how much. */
+  overBudget: { count: number; overspendMinor: number; topName: string | null };
+  /** Bills still to pay this month. */
+  unpaid: { count: number; amountMinor: number };
+}
+
+/** Derive the "what stands out" insights the dashboard doesn't already show. */
+function computePlanInsights(views: CategoryView[]): PlanInsights {
+  let biggest: PlanInsights['biggest'] = null;
+  let overCount = 0;
+  let overspend = 0;
+  let overTopName: string | null = null;
+  let overTopAmount = 0;
+  let unpaidCount = 0;
+  let unpaidAmount = 0;
+
+  for (const view of views) {
+    const total = view.summary.totalMinor;
+    if (!biggest || total > biggest.totalMinor) {
+      biggest = {
+        name: view.category.name,
+        color: view.category.color,
+        icon: view.category.icon,
+        totalMinor: total,
+      };
+    }
+
+    // Category-level over-budget: sum of actuals beyond their planned amounts.
+    let catOver = 0;
+    for (const line of view.subcategories) {
+      if (line.actualMinor != null && line.actualMinor > line.plannedMinor) {
+        catOver += line.actualMinor - line.plannedMinor;
+      }
+      if (line.status !== 'paid') {
+        unpaidCount += 1;
+        // Monthly basis, matching the PLANNED total this sits beside — a yearly
+        // bill contributes its monthly share, not its full face value.
+        unpaidAmount += monthlyAmount(line);
+      }
+    }
+    if (catOver > 0) {
+      overCount += 1;
+      overspend += catOver;
+      if (catOver > overTopAmount) {
+        overTopAmount = catOver;
+        overTopName = view.category.name;
+      }
+    }
+  }
+
+  return {
+    biggest,
+    overBudget: { count: overCount, overspendMinor: overspend, topName: overTopName },
+    unpaid: { count: unpaidCount, amountMinor: unpaidAmount },
+  };
+}
+
+/**
+ * The plan's headline card — plan *insights*, not the income/planned totals the
+ * dashboard already shows. Leads with how much of the plan is paid off, then
+ * surfaces what stands out: the biggest category, anything over budget, and
+ * what's still to pay. Each is a scannable row so you know where to look.
+ */
+function PlanInsightsCard({ insights, paidPct }: { insights: PlanInsights; paidPct: number }) {
+  const { colors, radius, space } = useTheme();
+  const { biggest, overBudget, unpaid } = insights;
+
+  return (
+    <View style={{ borderRadius: radius.xl, overflow: 'hidden' }}>
+      <LinearGradient
+        colors={['#1D4ED8', '#0E9F8E']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ padding: space.lg, gap: space.md }}
+      >
+        {/* Paid-off progress headline. */}
+        <View style={{ gap: 6 }}>
+          <Row justify="space-between" align="flex-end">
+            <Label color="rgba(255,255,255,0.75)">PLAN PAID OFF</Label>
+            <T variant="figureLarge" color="#FFFFFF">
+              {paidPct}%
+            </T>
+          </Row>
+          <View
+            style={{
+              height: 8,
+              borderRadius: radius.pill,
+              backgroundColor: 'rgba(255,255,255,0.25)',
+              overflow: 'hidden',
+            }}
+          >
+            <View
+              style={{
+                width: `${Math.max(0, Math.min(100, paidPct))}%`,
+                height: '100%',
+                borderRadius: radius.pill,
+                backgroundColor: '#FFFFFF',
+              }}
+            />
+          </View>
+        </View>
+
+        {/* Insight rows on a translucent panel. */}
+        <View
+          style={{
+            backgroundColor: 'rgba(255,255,255,0.14)',
+            borderRadius: radius.lg,
+            paddingHorizontal: space.md,
+          }}
+        >
+          {biggest && biggest.totalMinor > 0 ? (
+            <InsightRow
+              icon={(biggest.icon as keyof typeof Ionicons.glyphMap) ?? 'albums-outline'}
+              label="Biggest category"
+              detail={biggest.name}
+              value={formatMoney(biggest.totalMinor, { compact: true })}
+              first
+            />
+          ) : null}
+
+          {overBudget.count > 0 ? (
+            <InsightRow
+              icon="trending-up"
+              label={overBudget.count === 1 ? 'Over budget' : `${overBudget.count} over budget`}
+              detail={overBudget.topName ? `${overBudget.topName} the most` : undefined}
+              value={`+${formatMoney(overBudget.overspendMinor, { compact: true })}`}
+              valueColor="#FFD9DE"
+            />
+          ) : null}
+
+          <InsightRow
+            icon={unpaid.count === 0 ? 'checkmark-circle' : 'time-outline'}
+            label={unpaid.count === 0 ? 'All paid' : `${unpaid.count} still to pay`}
+            detail={unpaid.count === 0 ? 'Nothing left this month' : undefined}
+            value={unpaid.count === 0 ? undefined : formatMoney(unpaid.amountMinor, { compact: true })}
+            last
+          />
+        </View>
+      </LinearGradient>
+    </View>
+  );
+}
+
+/** One insight line inside the top card: icon + label/detail + trailing value. */
+function InsightRow({
+  icon,
+  label,
+  detail,
+  value,
+  valueColor,
+  first,
+  last,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  detail?: string;
+  value?: string;
+  valueColor?: string;
+  first?: boolean;
+  last?: boolean;
+}) {
+  const { space } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.sm,
+        paddingVertical: 11,
+        borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+        borderTopColor: 'rgba(255,255,255,0.18)',
+      }}
+    >
+      <View
+        style={{
+          width: 30,
+          height: 30,
+          borderRadius: 15,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'rgba(255,255,255,0.2)',
+        }}
+      >
+        <Ionicons name={icon} size={16} color="#FFFFFF" />
+      </View>
+      <View style={{ flex: 1 }}>
+        <T variant="small" color="#FFFFFF" style={{ fontWeight: '700' }} numberOfLines={1}>
+          {label}
+        </T>
+        {detail ? (
+          <T variant="caption" color="rgba(255,255,255,0.75)" numberOfLines={1}>
+            {detail}
+          </T>
+        ) : null}
+      </View>
+      {value ? (
+        <T variant="figure" color={valueColor ?? '#FFFFFF'}>
+          {value}
+        </T>
+      ) : null}
+    </View>
+  );
 }
 
 function ProgressBar({ pct, color, height = 8 }: { pct: number; color: string; height?: number }) {
@@ -528,6 +728,10 @@ function CategoryCard({
             const raw = view.rawSubcategories.find((s) => s.id === line.id);
             const paid = line.status === 'paid';
             const amount = effectiveAmount(line);
+            // Show planned vs. actual side by side when a real amount was logged
+            // that differs from the plan, so the row tells you at a glance whether
+            // it came in over/under. `amount` (actual-or-planned) stays the figure.
+            const hasActual = line.actualMinor != null && line.actualMinor !== line.plannedMinor;
             // Unplanned lines are never "paid" as a whole — their spend is a
             // running total of entries — so they get an indicator, not a
             // tap-to-pay checkbox.
@@ -633,9 +837,32 @@ function CategoryCard({
                             }`}
                       </T>
                     </View>
-                    <T variant="figure" tone={paid && !unplanned ? 'muted' : 'ink'}>
-                      {formatMoney(amount, { compact: true })}
-                    </T>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <T
+                        variant="figure"
+                        // When a real amount was logged, colour it by over/under
+                        // the plan; otherwise dim it only once the bill is paid.
+                        color={
+                          hasActual && !unplanned
+                            ? line.actualMinor! > line.plannedMinor
+                              ? colors.danger
+                              : colors.completed
+                            : undefined
+                        }
+                        tone={paid && !unplanned && !hasActual ? 'muted' : 'ink'}
+                      >
+                        {formatMoney(amount, { compact: true })}
+                      </T>
+                      {hasActual && !unplanned ? (
+                        <T
+                          variant="caption"
+                          tone="muted"
+                          style={{ textDecorationLine: 'line-through' }}
+                        >
+                          {formatMoney(line.plannedMinor, { compact: true })}
+                        </T>
+                      ) : null}
+                    </View>
                     <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
                   </Pressable>
                 </View>
@@ -645,8 +872,15 @@ function CategoryCard({
 
           {subcategories.length > 0 ? <Divider style={{ marginLeft: space.lg }} /> : null}
 
-          {/* Add bill + settings, sharing one footer row. */}
-          <Row>
+          {/* Action bar: a prominent "Add bill" button next to a distinct
+              "edit category" icon, on a subtle footer so it reads as actions. */}
+          <Row
+            gap={space.sm}
+            style={{
+              padding: space.md,
+              backgroundColor: colors.surfaceSunken,
+            }}
+          >
             <Pressable
               onPress={onAddBill}
               accessibilityRole="button"
@@ -657,29 +891,33 @@ function CategoryCard({
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 6,
-                paddingVertical: space.md,
-                opacity: pressed ? 0.6 : 1,
+                paddingVertical: 11,
+                borderRadius: radius.md,
+                backgroundColor: pressed ? `${category.color}22` : `${category.color}14`,
               })}
             >
-              <Ionicons name="add-circle" size={17} color={colors.accent} />
-              <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+              <Ionicons name="add" size={18} color={category.color} />
+              <T variant="small" color={category.color} style={{ fontWeight: '800' }}>
                 Add bill
               </T>
             </Pressable>
 
-            <View style={{ width: 1, backgroundColor: colors.hairline }} />
-
             <Pressable
               onPress={onOpenSettings}
               accessibilityRole="button"
-              accessibilityLabel={`${category.name} settings`}
+              accessibilityLabel={`Edit ${category.name}`}
               style={({ pressed }) => ({
-                paddingVertical: space.md,
-                paddingHorizontal: space.lg,
-                opacity: pressed ? 0.6 : 1,
+                width: 44,
+                paddingVertical: 11,
+                borderRadius: radius.md,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
+                borderWidth: 1,
+                borderColor: colors.hairline,
               })}
             >
-              <Ionicons name="settings-outline" size={17} color={colors.inkSecondary} />
+              <Ionicons name="create-outline" size={18} color={colors.inkSecondary} />
             </Pressable>
           </Row>
         </View>
@@ -712,8 +950,13 @@ function AddSubcategorySheet({
   const [amount, setAmount] = useState('');
   const [dueDay, setDueDay] = useState(1);
   const [frequency, setFrequency] = useState<SubcategoryFrequency>('monthly');
-  // null means "use the category's account"; a value overrides it for this bill.
-  const [cardId, setCardId] = useState<string | null>(null);
+  /**
+   * Which account this bill is paid from. Seeded with the category's own
+   * account so the field shows the right answer on open — a bill in "Food" is
+   * paid from Food's account unless the user says otherwise — rather than an
+   * empty "choose" the user has to fill in every single time.
+   */
+  const [cardId, setCardId] = useState<string | null>(category?.cardId ?? null);
   const [plan, setPlan] = useState<SavingPlanDraft>(emptySavingPlanDraft);
 
   const openFor = category?.id ?? null;
@@ -723,17 +966,19 @@ function AddSubcategorySheet({
       setAmount('');
       setDueDay(category?.dueDay ?? 1);
       setFrequency('monthly');
-      setCardId(null);
+      // Default to the category's linked account for each newly-opened sheet.
+      setCardId(category?.cardId ?? null);
       setPlan(emptySavingPlanDraft);
     }
-  }, [openFor, category?.dueDay]);
+  }, [openFor, category?.dueDay, category?.cardId]);
 
   const unplanned = frequency === 'unplanned';
   // Saving plans belong only to yearly bills (same rule as everywhere else).
   const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
-  // With a saving plan the monthly set-aside *is* the planned amount; an
-  // unplanned bill has no single planned amount (it's the sum of its entries).
-  const plannedMinor = unplanned ? 0 : planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
+  // With a saving plan the monthly set-aside *is* the planned amount. Otherwise
+  // (including unplanned bills) the entered amount seeds the planned figure —
+  // for unplanned it's an optional starting amount; entries add on top of it.
+  const plannedMinor = planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
   const canAdd =
     Boolean(name.trim()) && (frequency !== 'yearly' || !plan.enabled || planPatch !== null);
 
@@ -746,7 +991,10 @@ function AddSubcategorySheet({
       plannedMinor,
       dueDay,
       frequency,
-      cardId,
+      // The picker shows the category's account as a pre-filled default, but
+      // accepting it is not an override: store null so the bill keeps
+      // *inheriting*, and later changing the category's account still moves it.
+      cardId: cardId === category.cardId ? null : cardId,
       planTargetMinor: planPatch?.planTargetMinor ?? null,
       planDueDate: planPatch?.planDueDate ?? null,
       planStartDate: planPatch?.planStartDate ?? null,
@@ -766,7 +1014,6 @@ function AddSubcategorySheet({
       eyebrow="New bill in"
       icon={(category?.icon ?? 'albums-outline') as keyof typeof Ionicons.glyphMap}
       iconColor={category?.color ?? colors.accent}
-      heightPct={0.9}
       scroll
       footer={
         <GradientButton
@@ -777,27 +1024,32 @@ function AddSubcategorySheet({
         />
       }
     >
-              {/* Amount hero — hidden for unplanned bills, which have no single
-                  planned amount (their total is the sum of their entries).
-                  With a saving plan the monthly figure is derived from the plan. */}
-              {!unplanned ? (
-                plan.enabled && frequency === 'yearly' ? (
-                  // Saving plan: the monthly figure is derived, shown read-only.
-                  <View style={{ alignItems: 'center', gap: 4 }}>
-                    <Label>MONTHLY SET-ASIDE</Label>
-                    <Row gap={space.xs} align="center">
-                      <T variant="title" tone="muted">
-                        {state.currency}
-                      </T>
-                      <T style={{ fontSize: 42, fontWeight: '800', letterSpacing: -1.2, color: planPatch ? colors.ink : colors.inkMuted }}>
-                        {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
-                      </T>
-                    </Row>
-                  </View>
-                ) : (
-                  <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} autoFocus />
-                )
-              ) : null}
+              {/* Amount hero. With a saving plan (yearly) the monthly figure is
+                  derived and shown read-only. Otherwise the amount is entered —
+                  for an unplanned bill it's an optional starting amount (entries
+                  add on top), so it's labelled as such. */}
+              {plan.enabled && frequency === 'yearly' ? (
+                // Saving plan: the monthly figure is derived, shown read-only.
+                <View style={{ alignItems: 'center', gap: 4 }}>
+                  <Label>MONTHLY SET-ASIDE</Label>
+                  <Row gap={space.xs} align="center">
+                    <T variant="title" tone="muted">
+                      {state.currency}
+                    </T>
+                    <T style={{ fontSize: 42, fontWeight: '800', letterSpacing: -1.2, color: planPatch ? colors.ink : colors.inkMuted }}>
+                      {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
+                    </T>
+                  </Row>
+                </View>
+              ) : (
+                <AmountField
+                  label={unplanned ? 'Starting amount (optional)' : 'Amount'}
+                  value={amount}
+                  onChangeText={setAmount}
+                  currency={state.currency}
+                  autoFocus
+                />
+              )}
 
               <Field
                 label="What is it?"
@@ -818,7 +1070,9 @@ function AddSubcategorySheet({
                     allowNone
                   />
                   <T variant="caption" tone="muted">
-                    Leave as the category’s account unless this bill is paid from another.
+                    {cardId && cardId === category?.cardId
+                      ? `${category?.name}’s account, filled in for you — change it if this bill is paid from another.`
+                      : 'Change it if this bill is paid from a different account.'}
                   </T>
                 </View>
               ) : null}

@@ -20,11 +20,11 @@ export default function SmsAutomationGuide() {
   return (
     <BottomSheet
       visible
+      asRoute
       onClose={closeModal}
       title="Auto-detect transactions"
       icon="flash-outline"
       iconColor={colors.accent}
-      heightPct={0.9}
       scroll
     >
         {/* Short why. */}
@@ -37,35 +37,33 @@ export default function SmsAutomationGuide() {
           Set it up once in the <B>Shortcuts</B> app.
         </T>
 
-        {/* The 6 essential steps, in order. */}
+        {/* Four steps. The old guide had a separate "URL Encode" action, which
+            was by far the most common thing to get wrong — the app now accepts
+            the message either way, so that step is gone. */}
         <PartHeader tag="Shortcuts app" title="Create the automation" />
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <Step n={1}>
-            <Tap>Automation</Tap> tab → <Tap>＋</Tap> → <Tap>Create Personal Automation</Tap> →{' '}
-            <Tap>Message</Tap>.
+            <Tap>Automation</Tap> tab → <Tap>＋</Tap> → <Tap>Message</Tap>.
           </Step>
           <Step
             n={2}
             code="LKR"
-            codeNote="Every bank alert contains “LKR”, so this one word catches them all — the app ignores OTPs and promos."
+            codeNote="Every bank alert contains “LKR”, so this one word catches them all — the app ignores OTPs, promos and balance messages by itself."
           >
-            Set <Tap>Message Contains</Tap> to this word, choose <Tap>Run Immediately</Tap>, then{' '}
-            <Tap>Next</Tap>.
-          </Step>
-          <Step n={3} result={<Result label="URL Encode" chip="Shortcut Input" />}>
-            Add the <Tap>URL Encode</Tap> action, and set its input to <Chip>Shortcut Input</Chip>.
+            Set <Tap>Message Contains</Tap> to this word, choose <Tap>Run Immediately</Tap>, turn{' '}
+            <Tap>Notify When Run</Tap> off, then tap <Tap>Next</Tap>.
           </Step>
           <Step
-            n={4}
+            n={3}
             code="moneymanager://sms?text="
-            result={<Result prefix="moneymanager://sms?text=" chip="URL Encoded Text" />}
-            warn="The chip is inserted, not typed — after the =, tap the “URL Encoded Text” suggestion above the keyboard."
+            result={<Result prefix="moneymanager://sms?text=" chip="Shortcut Input" />}
+            warn="The chip is inserted, not typed — after the “=”, tap the “Shortcut Input” suggestion on the bar above the keyboard. Typing the words by hand will not work."
           >
-            Add a <Tap>Text</Tap> action. Type the link below, then insert the encoded result right
-            after it:
+            Add a <Tap>Text</Tap> action. Type the link below, then insert <Chip>Shortcut Input</Chip>{' '}
+            right after the <B>=</B> so the message follows the link:
           </Step>
-          <Step n={5} last result={<Result label="Open" chip="Text" />}>
-            Add <Tap>Open URLs</Tap> and set it to the <Chip>Text</Chip> from step 4. Tap{' '}
+          <Step n={4} last result={<Result label="Open" chip="Text" />}>
+            Add <Tap>Open URLs</Tap> and set it to the <Chip>Text</Chip> from step 3. Tap{' '}
             <Tap>Done</Tap>.
           </Step>
         </Surface>
@@ -77,8 +75,40 @@ export default function SmsAutomationGuide() {
             <T variant="bodyStrong">Test it</T>
           </Row>
           <T variant="small" tone="secondary">
-            Text yourself a message with <B>LKR</B> in it. Money Manager should open with a draft
-            under &ldquo;From your messages&rdquo;.
+            Text yourself a message containing <B>LKR</B> and an amount — for example{' '}
+            <B>&ldquo;debited LKR 1,250.00 at KEELLS&rdquo;</B>. Money Manager should open with a
+            draft waiting on the dashboard.
+          </T>
+        </Surface>
+
+        {/* Troubleshooting — the failures people actually hit. */}
+        <PartHeader tag="If nothing happens" title="Common fixes" />
+        <Surface padded={false} style={{ overflow: 'hidden' }}>
+          <Fix
+            title="The automation didn’t run at all"
+            body="Open the automation and check Run Immediately is on. If “Notify When Run” is enabled, iOS may be waiting on a notification tap instead of opening the app."
+          />
+          <Fix
+            title="It opens the app but no draft appears"
+            body="The message probably has no amount the app could read, or it’s an OTP/promo, which are ignored on purpose. Paste it into Add → Paste a message to see exactly what’s detected."
+          />
+          <Fix
+            title="You typed “Shortcut Input” as text"
+            body="It must be the blue variable chip, inserted from the bar above the keyboard — plain text sends the literal words instead of the message."
+            last
+          />
+        </Surface>
+
+        {/* Android note — the deep link is cross-platform. */}
+        <Surface style={{ gap: space.sm }}>
+          <Row gap={space.sm}>
+            <Ionicons name="logo-android" size={18} color={colors.inkSecondary} />
+            <T variant="bodyStrong">On Android</T>
+          </Row>
+          <T variant="small" tone="secondary">
+            Any automation app that can open a URL on an incoming SMS (Tasker, MacroDroid) works the
+            same way — point it at the same <B>moneymanager://sms?text=</B> link with the message
+            body appended.
           </T>
         </Surface>
     </BottomSheet>
@@ -323,6 +353,27 @@ function Warn({ children }: { children: React.ReactNode }) {
       <T variant="caption" tone="secondary" style={{ flex: 1, lineHeight: 18 }}>
         {children}
       </T>
+    </View>
+  );
+}
+
+/** One troubleshooting entry: the symptom, then what to change. */
+function Fix({ title, body, last }: { title: string; body: string; last?: boolean }) {
+  const { colors, space } = useTheme();
+  return (
+    <View>
+      <View style={{ gap: 4, padding: space.lg }}>
+        <Row gap={space.sm}>
+          <Ionicons name="alert-circle-outline" size={15} color={colors.pending} />
+          <T variant="small" style={{ fontWeight: '700', flex: 1 }}>
+            {title}
+          </T>
+        </Row>
+        <T variant="caption" tone="secondary" style={{ lineHeight: 18 }}>
+          {body}
+        </T>
+      </View>
+      {!last ? <View style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
     </View>
   );
 }
