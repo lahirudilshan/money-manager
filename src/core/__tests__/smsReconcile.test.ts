@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { parseSms } from '../smsParser';
-import { CONFIDENT_MATCH_SCORE, reconcileSms, type BoardSlice } from '../smsReconcile';
+import {
+  CONFIDENT_MATCH_SCORE,
+  accountLabelFor,
+  reconcileSms,
+  type BoardSlice,
+} from '../smsReconcile';
 
 const board: BoardSlice = {
   cards: [
@@ -167,5 +172,49 @@ describe('reconcileSms with learned merchant rules', () => {
       rule('fli trading', 'sub-salary'),
     ]);
     expect(draft.subcategoryId).toBe('');
+  });
+});
+
+/**
+ * Naming the account an SMS hit is what tells the user the draft is really
+ * theirs, so the label must never invent a match — and never read awkwardly for
+ * the common case where the user named the card after its bank.
+ */
+describe('accountLabelFor', () => {
+  // `extractAccount` reduces the message's masked fragment to its trailing
+  // digits, so these are the shapes the label actually receives.
+  it('names a matched account with its digits', () => {
+    // The fixture card is named "HNB" with bankName "HNB", so the bank must not
+    // be prefixed twice.
+    expect(accountLabelFor('1234', board.cards)).toBe('HNB ••1234');
+  });
+
+  it('prefixes the bank when the name does not already start with it', () => {
+    const cards = [{ id: 'c', name: 'Salary', last4: '4150', bankName: 'HNB' }];
+    expect(accountLabelFor('4150', cards)).toBe('HNB Salary ••4150');
+  });
+
+  it('does not duplicate the bank regardless of case', () => {
+    const cards = [{ id: 'c', name: 'hnb current', last4: '4150', bankName: 'HNB' }];
+    expect(accountLabelFor('4150', cards)).toBe('hnb current ••4150');
+  });
+
+  it('omits the bank when none is recorded', () => {
+    const cards = [{ id: 'c', name: 'Wallet', last4: '4150', bankName: null }];
+    expect(accountLabelFor('4150', cards)).toBe('Wallet ••4150');
+  });
+
+  it('falls back to the bare digits when nothing matches', () => {
+    expect(accountLabelFor('9999', board.cards)).toBe('••9999');
+  });
+
+  it('matches on the trailing digits a longer fragment ends with', () => {
+    // extractAccount can return more than four digits for some banks; the card
+    // still matches on its last-4 and is named rather than shown as raw digits.
+    expect(accountLabelFor('13801234', board.cards)).toBe('HNB ••1234');
+  });
+
+  it('is empty when the message carried no account digits', () => {
+    expect(accountLabelFor('', board.cards)).toBe('');
   });
 });

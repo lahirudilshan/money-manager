@@ -84,6 +84,30 @@ export function cardForAccount(
   return cards.find((card) => card.last4 && account.endsWith(card.last4));
 }
 
+/**
+ * How to label the account an SMS came from, for the review UI.
+ *
+ * A recognised account is named in full — "HNB Salary ••4150" — because knowing
+ * the message hit a real account of the user's is the strongest cheap signal that
+ * the draft is genuinely theirs. The bank is prefixed only when recorded and not
+ * already the start of the name, so a card the user called "HNB Current" does not
+ * come out as "HNB HNB Current".
+ *
+ * With no match, the bare "••4150" is returned: it is all the message told us and
+ * guessing further would be dishonest. Returns '' when there were no digits.
+ */
+export function accountLabelFor(account: string, cards: BoardSlice['cards']): string {
+  const card = cardForAccount(account, cards);
+  if (!card) return account ? `••${account}` : '';
+
+  const bank =
+    card.bankName && !card.name.toLowerCase().startsWith(card.bankName.toLowerCase())
+      ? card.bankName
+      : '';
+
+  return [bank, card.name, card.last4 ? `••${card.last4}` : ''].filter(Boolean).join(' ');
+}
+
 /** Lowercase, strip punctuation, collapse spaces — for fuzzy text comparison. */
 function normalise(value: string): string {
   return value

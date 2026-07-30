@@ -247,6 +247,68 @@ export function statusStyle(status: StatusKey, colors: ThemeColors): StatusVisua
   }
 }
 
+/**
+ * The gradient a headline card wears for each plan-health step, plus the word
+ * and icon that ride along with it.
+ *
+ * Health is never encoded by colour alone — a caption and an icon always state
+ * it, which keeps the meaning for CVD users and in greyscale. The progression is
+ * deliberately not the app's status family (which means paid/pending on a single
+ * bill): this is a judgement about the whole month, so it reads
+ * blue-green → teal → amber → magenta as the gap between income and commitments
+ * closes and then inverts.
+ *
+ * Magenta rather than red for `overspent`: red is already the app's `danger`
+ * role for destructive actions and overdue bills, and a plan that does not
+ * balance is a finding to act on, not an error the user just made.
+ */
+export interface HealthVisual {
+  /** The two gradient stops, in order. */
+  gradient: readonly [string, string];
+  label: string;
+  icon: string;
+  /** Ink for text placed on a light tint of this state, not on the gradient. */
+  ink: string;
+}
+
+export const HEALTH_VISUALS: Record<
+  'healthy' | 'tight' | 'critical' | 'overspent' | 'unknown',
+  HealthVisual
+> = {
+  healthy: {
+    gradient: ['#1D4ED8', '#0E9F8E'],
+    label: 'On track',
+    icon: 'shield-checkmark',
+    ink: '#0A5BC4',
+  },
+  tight: {
+    gradient: ['#0E7490', '#0E9F8E'],
+    label: 'Tight',
+    icon: 'remove-circle',
+    ink: '#0E7490',
+  },
+  critical: {
+    gradient: ['#B45309', '#D97706'],
+    label: 'Very tight',
+    icon: 'alert-circle',
+    ink: '#B45309',
+  },
+  overspent: {
+    gradient: ['#9D174D', '#BE185D'],
+    label: 'Overspent',
+    icon: 'trending-down',
+    ink: '#9D174D',
+  },
+  // Onboarding, before any income exists: keep the brand gradient rather than
+  // grading a plan that has nothing to grade.
+  unknown: {
+    gradient: ['#1D4ED8', '#0E9F8E'],
+    label: 'No income yet',
+    icon: 'information-circle',
+    ink: '#0A5BC4',
+  },
+};
+
 export const STATUS_ICON: Record<StatusKey, string> = {
   pending: 'ellipse-outline',
   paid: 'checkmark-circle',

@@ -373,9 +373,15 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   function handleSave() {
     const trimmed = name.trim() || brand?.shortName || '';
     if (!trimmed) return;
+    // Last-4 is what matches an incoming SMS to this entry, so it is preserved
+    // rather than re-derived from whichever number field the current type shows:
+    // switching Account <-> Card clears the other type's number, which would
+    // otherwise silently blank the digits and break SMS matching. An explicit
+    // value wins, then the visible number, then whatever was already stored.
     const derivedLast4 =
-      last4.trim() ||
+      last4.replace(/\D/g, '').slice(-4) ||
       (isCard ? cardNumber.replace(/\D/g, '').slice(-4) : accountNumber.replace(/\D/g, '').slice(-4)) ||
+      existing?.last4 ||
       null;
 
     const patch = {
@@ -477,6 +483,26 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
               </Row>
             </>
           )}
+
+          {/* The digits bank SMS quote ("account:1380***4150"). Filled in from the
+              number above when one is entered, but editable on its own — the
+              alerts only ever show the last four, so this is all that is needed
+              to recognise them, and it saves typing a full number just to get
+              SMS matching working. */}
+          <View style={{ gap: 4 }}>
+            <Field
+              label="Last 4 digits"
+              value={last4}
+              onChangeText={(text) => setLast4(text.replace(/\D/g, '').slice(-4))}
+              placeholder={
+                (isCard ? cardNumber : accountNumber).replace(/\D/g, '').slice(-4) || 'e.g. 4150'
+              }
+              keyboardType="numeric"
+            />
+            <T variant="caption" tone="muted">
+              Used to match bank SMS to this {isCard ? 'card' : 'account'}.
+            </T>
+          </View>
     </BottomSheet>
   );
 }

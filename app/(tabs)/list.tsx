@@ -35,22 +35,29 @@ import {
   Surface,
   T,
 } from '../../src/components/ui';
+import { formatDateLabel, startOfDay } from '../../src/core/dates';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import {
+  dueDateFor,
   effectiveAmount,
   formatPeriod,
   isFlexibleDueDay,
   monthlyAmount,
+  planHealth,
   resolveCardId,
+  type BoardTotals,
+  type PlanHealth,
 } from '../../src/core/planning';
 import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
   selectCategoryViews,
+  selectRatios,
+  selectTotalIncome,
   useAppStore,
   type CategoryView,
 } from '../../src/store/useAppStore';
-import { statusStyle } from '../../src/theme';
+import { HEALTH_VISUALS, statusStyle, washFor } from '../../src/theme';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -89,7 +96,20 @@ export default function ListScreen() {
 
   // Plan insights for the top card — the "what stands out" the dashboard
   // doesn't already show. Derived here from the same views the list renders.
-  const insights = useMemo(() => computePlanInsights(views), [views]);
+  const insights = useMemo(
+    () => computePlanInsights(views, state.period),
+    [views, state.period],
+  );
+
+  // Graded from the same numbers the dashboard uses, so both headline cards
+  // reach the same verdict about the month.
+  const ratios = useMemo(() => selectRatios(state), [state]);
+  const income = useMemo(() => selectTotalIncome(state), [state]);
+  const health = planHealth({
+    incomeMinor: income,
+    freePct: ratios.freePct,
+    disposableMinor: ratios.disposableMinor,
+  });
 
   // Everything starts expanded — the plan is meant to be worked through, not
   // hunted for. Collapsing is opt-in per card, or all at once.
@@ -97,6 +117,7 @@ export default function ListScreen() {
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
   const [addingToCategoryId, setAddingToCategoryId] = useState<string | null>(null);
+  const [showingPlanDetail, setShowingPlanDetail] = useState(false);
 
   const addingToCategory = views.find((v) => v.category.id === addingToCategoryId)?.category;
   const allCollapsed = views.length > 0 && collapsed.size === views.length;
@@ -199,7 +220,12 @@ export default function ListScreen() {
         showsVerticalScrollIndicator={false}
       >
         {views.length > 0 ? (
-          <PlanInsightsCard insights={insights} paidPct={paidPct} />
+          <PlanInsightsCard
+            insights={insights}
+            paidPct={paidPct}
+            health={health}
+            onPress={() => setShowingPlanDetail(true)}
+          />
         ) : null}
 
       {/* Search — find a bill without scrolling the whole plan. */}
@@ -347,9 +373,30 @@ export default function ListScreen() {
           category={addingToCategory}
           onClose={() => setAddingToCategoryId(null)}
         />
+
+        <PlanDetailSheet
+          visible={showingPlanDetail}
+          onClose={() => setShowingPlanDetail(false)}
+          insights={insights}
+          paidPct={paidPct}
+          totals={totals}
+          health={health}
+        />
       </ScrollView>
     </View>
   );
+}
+
+/** One unpaid bill, with the due date the insights card sorts and groups by. */
+interface DueLine {
+  id: string;
+  name: string;
+  categoryName: string;
+  categoryColor: string;
+  amountMinor: number;
+  /** Null for lines with no fixed day — they can never be "overdue". */
+  dueDate: Date | null;
+  overdue: boolean;
 }
 
 interface PlanInsights {
@@ -359,10 +406,16 @@ interface PlanInsights {
   overBudget: { count: number; overspendMinor: number; topName: string | null };
   /** Bills still to pay this month. */
   unpaid: { count: number; amountMinor: number };
+  /** Unpaid bills already past their due date — the one urgent thing here. */
+  overdue: { count: number; amountMinor: number };
+  /** The next bill falling due, for the "what's next" line. */
+  nextDue: DueLine | null;
+  /** Every unpaid line, soonest first, for the detail sheet. */
+  dueLines: DueLine[];
 }
 
 /** Derive the "what stands out" insights the dashboard doesn't already show. */
-function computePlanInsights(views: CategoryView[]): PlanInsights {
+function computePlanInsights(views: CategoryView[], period: string): PlanInsights {
   let biggest: PlanInsights['biggest'] = null;
   let overCount = 0;
   let overspend = 0;
@@ -370,6 +423,11 @@ function computePlanInsights(views: CategoryView[]): PlanInsights {
   let overTopAmount = 0;
   let unpaidCount = 0;
   let unpaidAmount = 0;
+  const dueLines: DueLine[] = [];
+
+  // Compared against due dates, which are whole days — so "due today" is not
+  // overdue partway through the day.
+  const today = startOfDay(new Date());
 
   for (const view of views) {
     const total = view.summary.totalMinor;
@@ -392,7 +450,25 @@ function computePlanInsights(views: CategoryView[]): PlanInsights {
         unpaidCount += 1;
         // Monthly basis, matching the PLANNED total this sits beside — a yearly
         // bill contributes its monthly share, not its full face value.
-        unpaidAmount += monthlyAmount(line);
+        const amount = monthlyAmount(line);
+        unpaidAmount += amount;
+
+        // The due day lives on the raw row, not the planned view. Fall back to
+        // the category's day, matching what the bill detail screen shows.
+        const raw = view.rawSubcategories.find((s) => s.id === line.id);
+        const dueDay = raw?.dueDay ?? view.category.dueDay ?? null;
+        const hasFixedDay = dueDay != null && !isFlexibleDueDay(dueDay);
+        const dueDate = hasFixedDay ? dueDateFor(period, dueDay) : null;
+
+        dueLines.push({
+          id: line.id,
+          name: line.name,
+          categoryName: view.category.name,
+          categoryColor: view.category.color,
+          amountMinor: amount,
+          dueDate,
+          overdue: dueDate != null && dueDate < today,
+        });
       }
     }
     if (catOver > 0) {
@@ -405,10 +481,29 @@ function computePlanInsights(views: CategoryView[]): PlanInsights {
     }
   }
 
+  // Soonest first; undated lines sort last, since they carry no urgency and
+  // would otherwise jump the queue ahead of real deadlines.
+  dueLines.sort((a, b) => {
+    if (!a.dueDate && !b.dueDate) return b.amountMinor - a.amountMinor;
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return a.dueDate.getTime() - b.dueDate.getTime();
+  });
+
+  const overdueLines = dueLines.filter((line) => line.overdue);
+
   return {
     biggest,
     overBudget: { count: overCount, overspendMinor: overspend, topName: overTopName },
     unpaid: { count: unpaidCount, amountMinor: unpaidAmount },
+    overdue: {
+      count: overdueLines.length,
+      amountMinor: overdueLines.reduce((sum, line) => sum + line.amountMinor, 0),
+    },
+    // The next thing actually coming up — skip anything already overdue, which
+    // has its own louder row above it.
+    nextDue: dueLines.find((line) => line.dueDate != null && !line.overdue) ?? null,
+    dueLines,
   };
 }
 
@@ -418,25 +513,58 @@ function computePlanInsights(views: CategoryView[]): PlanInsights {
  * surfaces what stands out: the biggest category, anything over budget, and
  * what's still to pay. Each is a scannable row so you know where to look.
  */
-function PlanInsightsCard({ insights, paidPct }: { insights: PlanInsights; paidPct: number }) {
+function PlanInsightsCard({
+  insights,
+  paidPct,
+  health,
+  onPress,
+}: {
+  insights: PlanInsights;
+  paidPct: number;
+  health: PlanHealth;
+  onPress: () => void;
+}) {
   const { colors, radius, space } = useTheme();
-  const { biggest, overBudget, unpaid } = insights;
+  const { biggest, overBudget, unpaid, overdue, nextDue } = insights;
+  const visual = HEALTH_VISUALS[health];
 
   return (
-    <View style={{ borderRadius: radius.xl, overflow: 'hidden' }}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Plan ${paidPct}% paid off, ${visual.label}. ${unpaid.count} bills still to pay. Tap for details.`}
+      style={({ pressed }) => ({
+        borderRadius: radius.xl,
+        overflow: 'hidden',
+        opacity: pressed ? 0.92 : 1,
+      })}
+    >
+      {/* Same health gradient as the dashboard hero, so the two headline cards
+          agree about the month rather than one always reading celebratory. */}
       <LinearGradient
-        colors={['#1D4ED8', '#0E9F8E']}
+        colors={visual.gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ padding: space.lg, gap: space.md }}
       >
         {/* Paid-off progress headline. */}
         <View style={{ gap: 6 }}>
-          <Row justify="space-between" align="flex-end">
-            <Label color="rgba(255,255,255,0.75)">PLAN PAID OFF</Label>
-            <T variant="figureLarge" color="#FFFFFF">
-              {paidPct}%
-            </T>
+          <Row justify="space-between" align="center">
+            <Row gap={4}>
+              <Ionicons name={visual.icon as never} size={13} color="rgba(255,255,255,0.9)" />
+              <T variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
+                {visual.label}
+              </T>
+            </Row>
+            <Row gap={4}>
+              <Label color="rgba(255,255,255,0.75)">PAID OFF</Label>
+              <T variant="figureLarge" color="#FFFFFF">
+                {paidPct}%
+              </T>
+              {/* Marks the whole card as openable — the rows below are a summary
+                  of a longer list, and nothing else here suggests that. */}
+              <Ionicons name="chevron-forward" size={13} color="rgba(255,255,255,0.75)" />
+            </Row>
           </Row>
           <View
             style={{
@@ -457,21 +585,39 @@ function PlanInsightsCard({ insights, paidPct }: { insights: PlanInsights; paidP
           </View>
         </View>
 
-        {/* Insight rows on a translucent panel. */}
-        <View
+        {/* Insight rows on a translucent gradient panel — washed lighter at the
+            top-left and fading out, matching the dashboard's stat tiles. Built
+            from white alpha rather than fixed hues so it sits correctly over
+            every health gradient without a variant per state. */}
+        <LinearGradient
+          colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.08)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
           style={{
-            backgroundColor: 'rgba(255,255,255,0.14)',
             borderRadius: radius.lg,
             paddingHorizontal: space.md,
           }}
         >
+          {/* Overdue leads when it exists — it is the only thing here that is
+              already costing the user something. */}
+          {overdue.count > 0 ? (
+            <InsightRow
+              icon="alert-circle"
+              label={overdue.count === 1 ? '1 overdue' : `${overdue.count} overdue`}
+              detail="Past its due date"
+              value={formatMoney(overdue.amountMinor, { compact: true })}
+              valueColor="#FFD9DE"
+              first
+            />
+          ) : null}
+
           {biggest && biggest.totalMinor > 0 ? (
             <InsightRow
               icon={(biggest.icon as keyof typeof Ionicons.glyphMap) ?? 'albums-outline'}
               label="Biggest category"
               detail={biggest.name}
               value={formatMoney(biggest.totalMinor, { compact: true })}
-              first
+              first={overdue.count === 0}
             />
           ) : null}
 
@@ -485,6 +631,17 @@ function PlanInsightsCard({ insights, paidPct }: { insights: PlanInsights; paidP
             />
           ) : null}
 
+          {/* What is coming next — the plan's most actionable line, and the one
+              thing the card could not answer before. */}
+          {nextDue?.dueDate ? (
+            <InsightRow
+              icon="calendar-outline"
+              label={`Next: ${nextDue.name}`}
+              detail={`${nextDue.categoryName} · ${formatDateLabel(nextDue.dueDate)}`}
+              value={formatMoney(nextDue.amountMinor, { compact: true })}
+            />
+          ) : null}
+
           <InsightRow
             icon={unpaid.count === 0 ? 'checkmark-circle' : 'time-outline'}
             label={unpaid.count === 0 ? 'All paid' : `${unpaid.count} still to pay`}
@@ -492,8 +649,281 @@ function PlanInsightsCard({ insights, paidPct }: { insights: PlanInsights; paidP
             value={unpaid.count === 0 ? undefined : formatMoney(unpaid.amountMinor, { compact: true })}
             last
           />
-        </View>
+        </LinearGradient>
       </LinearGradient>
+    </Pressable>
+  );
+}
+
+/**
+ * The full picture behind the insights card — every unpaid bill, soonest first.
+ *
+ * The card can only show three or four lines, so it summarises: "14 still to
+ * pay" answers *how much* but never *which*. This sheet answers that, grouped
+ * into overdue / dated / undated so the ordering is legible rather than an
+ * unexplained sequence. Tapping a bill opens it, making this a route into the
+ * plan rather than a dead-end readout.
+ */
+function PlanDetailSheet({
+  visible,
+  onClose,
+  insights,
+  paidPct,
+  totals,
+  health,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  insights: PlanInsights;
+  paidPct: number;
+  totals: BoardTotals;
+  health: PlanHealth;
+}) {
+  const { colors, radius, space } = useTheme();
+  const router = useRouter();
+  const { dueLines, overdue, unpaid } = insights;
+  const visual = HEALTH_VISUALS[health];
+
+  const overdueLines = dueLines.filter((line) => line.overdue);
+  const upcoming = dueLines.filter((line) => !line.overdue && line.dueDate != null);
+  const undated = dueLines.filter((line) => line.dueDate == null);
+
+  const openLine = (id: string) => {
+    onClose();
+    router.push(`/subcategory/${id}`);
+  };
+
+  return (
+    <BottomSheet
+      visible={visible}
+      onClose={onClose}
+      title="Plan details"
+      eyebrow="This month"
+      icon="stats-chart-outline"
+      iconColor={colors.accent}
+      scroll
+    >
+      {/* Hero — the same gradient the card wears, so opening it feels like the
+          card expanded rather than a different screen. Leads with what is
+          actually left to pay, since that is the question the sheet answers. */}
+      <View style={{ borderRadius: radius.lg, overflow: 'hidden' }}>
+        <LinearGradient
+          colors={visual.gradient}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ padding: space.lg, gap: space.md }}
+        >
+          <Row justify="space-between" align="center">
+            <Label color="rgba(255,255,255,0.75)">STILL TO PAY</Label>
+            <Row gap={4}>
+              <Ionicons name={visual.icon as never} size={13} color="rgba(255,255,255,0.9)" />
+              <T variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
+                {visual.label}
+              </T>
+            </Row>
+          </Row>
+
+          <View style={{ gap: 2 }}>
+            <T variant="display" color="#FFFFFF">
+              {formatMoney(unpaid.amountMinor)}
+            </T>
+            <T variant="caption" color="rgba(255,255,255,0.8)">
+              {unpaid.count === 0
+                ? 'Every bill is settled'
+                : `across ${unpaid.count} ${unpaid.count === 1 ? 'bill' : 'bills'}`}
+              {overdue.count > 0 ? ` · ${overdue.count} overdue` : ''}
+            </T>
+          </View>
+
+          {/* Progress, on the hero rather than a section of its own — it is a
+              property of these figures, not a separate topic. */}
+          <View style={{ gap: 6 }}>
+            <View
+              style={{
+                height: 8,
+                borderRadius: radius.pill,
+                backgroundColor: 'rgba(255,255,255,0.25)',
+                overflow: 'hidden',
+              }}
+            >
+              <View
+                style={{
+                  width: `${Math.max(0, Math.min(100, paidPct))}%`,
+                  height: '100%',
+                  borderRadius: radius.pill,
+                  backgroundColor: '#FFFFFF',
+                }}
+              />
+            </View>
+            <Row justify="space-between">
+              <T variant="caption" color="rgba(255,255,255,0.8)">
+                {formatMoney(totals.paidMinor, { compact: true })} paid
+              </T>
+              <T variant="caption" color="rgba(255,255,255,0.8)">
+                {paidPct}% of {formatMoney(totals.plannedMinor, { compact: true })}
+              </T>
+            </Row>
+          </View>
+        </LinearGradient>
+      </View>
+
+      {overdueLines.length > 0 ? (
+        <DueGroup
+          label="Overdue"
+          caption="Past their due date"
+          icon="alert-circle"
+          tint={colors.danger}
+          lines={overdueLines}
+          onPress={openLine}
+        />
+      ) : null}
+
+      {upcoming.length > 0 ? (
+        <DueGroup
+          label="Coming up"
+          caption="Soonest first"
+          icon="calendar-outline"
+          tint={colors.accent}
+          lines={upcoming}
+          onPress={openLine}
+        />
+      ) : null}
+
+      {undated.length > 0 ? (
+        <DueGroup
+          label="No fixed date"
+          caption="Pay any time this month"
+          icon="infinite-outline"
+          tint={colors.inkSecondary}
+          lines={undated}
+          onPress={openLine}
+        />
+      ) : null}
+
+      {dueLines.length === 0 ? (
+        <Empty
+          icon="checkmark-circle-outline"
+          title="All paid"
+          message="Every bill in this month's plan is settled."
+        />
+      ) : null}
+    </BottomSheet>
+  );
+}
+
+/**
+ * A titled block of unpaid bills in the detail sheet.
+ *
+ * The group's total sits in its header, so each section answers "how much is
+ * this bucket" without the user adding rows up. Rows are one connected card
+ * with hairline dividers rather than separately-bordered tiles — three stacked
+ * groups of bordered rows read as noise.
+ */
+function DueGroup({
+  label,
+  caption,
+  icon,
+  lines,
+  tint,
+  onPress,
+}: {
+  label: string;
+  caption: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  lines: DueLine[];
+  tint: string;
+  onPress: (id: string) => void;
+}) {
+  const { colors, mode, radius, space } = useTheme();
+  const total = lines.reduce((sum, line) => sum + line.amountMinor, 0);
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Row justify="space-between" align="center">
+        <Row gap={6}>
+          <Ionicons name={icon} size={14} color={tint} />
+          <T variant="small" color={tint} style={{ fontWeight: '800' }}>
+            {label}
+          </T>
+          {/* The count as a pill, so the header states size and value at once. */}
+          <View
+            style={{
+              paddingHorizontal: 6,
+              paddingVertical: 1,
+              borderRadius: radius.pill,
+              backgroundColor: colors.surfaceSunken,
+            }}
+          >
+            <T variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+              {lines.length}
+            </T>
+          </View>
+        </Row>
+        <T variant="figure" color={tint}>
+          {formatMoney(total, { compact: true })}
+        </T>
+      </Row>
+
+      <T variant="caption" tone="muted">
+        {caption}
+      </T>
+
+      <View
+        style={{
+          borderRadius: radius.lg,
+          borderWidth: 1,
+          borderColor: colors.hairline,
+          backgroundColor: colors.surface,
+          overflow: 'hidden',
+        }}
+      >
+        {lines.map((line, index) => (
+          <Pressable
+            key={line.id}
+            onPress={() => onPress(line.id)}
+            accessibilityRole="button"
+            accessibilityLabel={`${line.name}, ${line.categoryName}, ${formatMoney(line.amountMinor)}`}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.sm,
+              paddingVertical: 11,
+              paddingHorizontal: space.md,
+              borderTopWidth: index === 0 ? 0 : StyleSheet.hairlineWidth,
+              borderTopColor: colors.hairline,
+              backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+            })}
+          >
+            {/* A tinted chip in the category's own colour — enough to place the
+                bill at a glance without a legend. */}
+            <View
+              style={{
+                width: 30,
+                height: 30,
+                borderRadius: radius.sm,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: washFor(line.categoryColor, mode),
+              }}
+            >
+              <Ionicons name="pricetag" size={13} color={line.categoryColor} />
+            </View>
+
+            <View style={{ flex: 1, gap: 1 }}>
+              <T variant="small" numberOfLines={1} style={{ fontWeight: '600' }}>
+                {line.name}
+              </T>
+              <T variant="caption" tone="muted" numberOfLines={1}>
+                {line.categoryName}
+                {line.dueDate ? ` · ${formatDateLabel(line.dueDate)}` : ''}
+              </T>
+            </View>
+
+            <T variant="figure">{formatMoney(line.amountMinor)}</T>
+            <Ionicons name="chevron-forward" size={14} color={colors.inkFaint} />
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
@@ -528,18 +958,20 @@ function InsightRow({
         borderTopColor: 'rgba(255,255,255,0.18)',
       }}
     >
-      <View
+      <LinearGradient
+        colors={['rgba(255,255,255,0.34)', 'rgba(255,255,255,0.12)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
         style={{
           width: 30,
           height: 30,
           borderRadius: 15,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: 'rgba(255,255,255,0.2)',
         }}
       >
         <Ionicons name={icon} size={16} color="#FFFFFF" />
-      </View>
+      </LinearGradient>
       <View style={{ flex: 1 }}>
         <T variant="small" color="#FFFFFF" style={{ fontWeight: '700' }} numberOfLines={1}>
           {label}

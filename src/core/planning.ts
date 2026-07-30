@@ -307,6 +307,50 @@ export function calculateRatios(params: {
   };
 }
 
+/**
+ * How healthy a month's plan is, as one of four steps.
+ *
+ * The whole point of this app is the gap between income and commitments, so the
+ * headline cards colour themselves by that gap rather than always reading
+ * celebratory. The thresholds follow the common "pay yourself first" guidance
+ * the plan is built around:
+ *
+ *   healthy   — 20%+ of income still free. Enough left to actually save.
+ *   tight     — 5–20% free. It balances, but there is no room for a surprise.
+ *   critical  — 0–5% free. Committed to nearly every rupee that comes in.
+ *   overspent — commitments exceed income. The plan does not balance at all.
+ *
+ * `unknown` covers a plan with no income recorded yet: every percentage is zero
+ * and colouring that "overspent" would be a false alarm during onboarding.
+ */
+export type PlanHealth = 'healthy' | 'tight' | 'critical' | 'overspent' | 'unknown';
+
+/** Free-income thresholds, as percentages. Named so the tests read as intent. */
+export const HEALTH_THRESHOLDS = { healthy: 20, tight: 5 } as const;
+
+/**
+ * Grade a month from its free share of income.
+ *
+ * Takes `disposableMinor` alongside `freePct` because the sign of the actual
+ * money is the honest test for overspending: a rounded percentage can read 0
+ * while the underlying figure is a few cents negative.
+ */
+export function planHealth(params: {
+  incomeMinor: Minor;
+  freePct: number;
+  disposableMinor: Minor;
+}): PlanHealth {
+  const { incomeMinor, freePct, disposableMinor } = params;
+
+  // No income on record yet — nothing to be a share *of*.
+  if (incomeMinor <= 0) return 'unknown';
+
+  if (disposableMinor < 0) return 'overspent';
+  if (freePct >= HEALTH_THRESHOLDS.healthy) return 'healthy';
+  if (freePct >= HEALTH_THRESHOLDS.tight) return 'tight';
+  return 'critical';
+}
+
 /** "YYYY-MM" key for a date — the period all state is bucketed by. */
 export function periodKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;

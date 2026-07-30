@@ -1,17 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import {
-  Pressable,
-  TextInput,
-  View,
-} from 'react-native';
+import { View } from 'react-native';
+import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
 import { Field } from '../../src/components/forms';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
+import { to12Hour } from '../../src/core/dates';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
 import { HINT_META } from '../../src/core/smsCategoryHints';
-import { cardForAccount } from '../../src/core/smsReconcile';
+import { accountLabelFor } from '../../src/core/smsReconcile';
 import {
   categoryNameOf,
   selectDraftTargets,
@@ -49,11 +47,45 @@ export default function SmsDraftModal() {
     [state, draft],
   );
 
+  // Grid inputs. These must be computed before the "draft already handled" early
+  // return below — a draft resolved on another screen while this modal is open
+  // re-renders it down that branch, and hooks placed after it would vanish
+  // mid-life ("rendered fewer hooks than expected"). Both tolerate an empty
+  // `subcategories`, so running them for a missing draft costs nothing.
+  //
+  // The reconciler's ranking is deliberately not applied: the grid groups by
+  // category rather than listing by score, and the ranked suggestion is already
+  // surfaced as the confirm card, which is the one-tap path.
+  const destinations = useMemo(
+    () =>
+      subcategories.map((sub) => ({
+        id: sub.id,
+        name: sub.name,
+        categoryId: sub.categoryId,
+        plannedMinor: sub.plannedMinor,
+        icon: sub.icon,
+      })),
+    [subcategories],
+  );
+
+  // Only categories that actually hold an eligible bill; the grid hides empties
+  // itself, but this keeps the array it diffs against small.
+  const gridCategories = useMemo(() => {
+    const ids = new Set(destinations.map((d) => d.categoryId));
+    return state.categories
+      .filter((category) => ids.has(category.id))
+      .map((category) => ({
+        id: category.id,
+        name: category.name,
+        color: category.color,
+        icon: category.icon,
+      }));
+  }, [destinations, state.categories]);
+
   const [subcategoryId, setSubcategoryId] = useState(draft?.subcategoryId ?? '');
   const [amountText, setAmountText] = useState(
     draft ? toMajor(draft.amountMinor).toFixed(2) : '0',
   );
-  const [query, setQuery] = useState('');
   // The picker starts collapsed only when there is a real suggestion to
   // confirm; with nothing detected there is nothing to hide behind.
   const [picking, setPicking] = useState(
@@ -84,8 +116,9 @@ export default function SmsDraftModal() {
   const amountMinor = parseAmount(amountText) ?? draft.amountMinor;
   const canLog = subcategoryId !== '' && amountMinor > 0;
 
-  const matchedCard = cardForAccount(parsed.account, state.cards);
-  const accountLabel = matchedCard ? matchedCard.name : parsed.account ? `••${parsed.account}` : '';
+  // Shared with the draft card, so a matched account is named identically on the
+  // row the user tapped and the screen it opened.
+  const accountLabel = accountLabelFor(parsed.account, state.cards);
 
   const kindLabel = {
     purchase: 'Purchase',
@@ -96,25 +129,6 @@ export default function SmsDraftModal() {
     utility: 'Bill due',
     other: isCredit ? 'Money in' : 'Paid out',
   }[parsed.kind];
-
-  // Plain, unfiltered bill list — reconcile's ranking first (best guesses at
-  // top), then the rest, narrowed only by the free-text search.
-  const bills = useMemo(() => {
-    const rankedIds = draft.matches.map((m) => m.subcategoryId);
-    const ordered = [
-      ...rankedIds
-        .map((sid) => subcategories.find((s) => s.id === sid))
-        .filter((s): s is (typeof subcategories)[number] => Boolean(s)),
-      ...subcategories.filter((s) => !rankedIds.includes(s.id)),
-    ];
-    const q = query.trim().toLowerCase();
-    if (!q) return ordered;
-    return ordered.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        categoryNameOf(state, s.id).toLowerCase().includes(q),
-    );
-  }, [draft.matches, subcategories, query, state]);
 
   // The suggested line, when the reconciler produced one worth confirming.
   const suggested = subcategories.find((s) => s.id === draft.subcategoryId) ?? null;
@@ -195,7 +209,17 @@ export default function SmsDraftModal() {
                 {parsed.merchant || kindLabel}
               </T>
               <T variant="caption" tone="muted" numberOfLines={1}>
-                {[hintMeta ? hintMeta.label : kindLabel, accountLabel, parsed.date]
+                {[
+                  hintMeta ? hintMeta.label : kindLabel,
+                  accountLabel,
+                  // The full ISO date here, not shortWhen's abbreviation: this is
+                  // the screen for checking a draft against a statement, so the
+                  // year always stays. Only the clock switches to 12-hour, to
+                  // match the card.
+                  [parsed.date, parsed.time ? to12Hour(parsed.time) : '']
+                    .filter(Boolean)
+                    .join(' '),
+                ]
                   .filter(Boolean)
                   .join('  ·  ')}
               </T>
@@ -235,7 +259,7 @@ export default function SmsDraftModal() {
           />
         ) : null}
 
-        {/* Remap: a plain searchable list of every bill. Hidden behind the
+        {/* Remap: the category grid over every eligible bill. Hidden behind the
             confirm card until the user says the guess was wrong. */}
         {picking ? (
         <View style={{ gap: space.sm }}>
@@ -252,79 +276,22 @@ export default function SmsDraftModal() {
             </T>
           ) : null}
 
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: space.sm,
-              backgroundColor: colors.surfaceSunken,
-              borderRadius: radius.md,
-              paddingHorizontal: space.md,
-            }}
-          >
-            <Ionicons name="search" size={15} color={colors.inkMuted} />
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Search bills…"
-              placeholderTextColor={colors.inkMuted}
-              accessibilityLabel="Search bills"
-              style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
-            />
-          </View>
-
-          {bills.length === 0 ? (
+          {destinations.length === 0 ? (
             <T variant="small" tone="muted">
-              {subcategories.length === 0
-                ? 'No matching bills on your board yet — add one first.'
-                : 'No bills match your search.'}
+              No matching bills on your board yet — add one first.
             </T>
           ) : (
-            <View style={{ gap: 6 }}>
-              {bills.map((sub) => {
-                const selected = sub.id === subcategoryId;
-                return (
-                  <Pressable
-                    key={sub.id}
-                    onPress={() => setSubcategoryId(sub.id)}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected }}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: space.sm,
-                      paddingVertical: 12,
-                      paddingHorizontal: space.md,
-                      borderRadius: radius.md,
-                      backgroundColor: selected ? colors.accent : colors.surface,
-                      borderWidth: 1,
-                      borderColor: selected ? colors.accent : colors.hairline,
-                    }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <T
-                        variant="small"
-                        color={selected ? colors.inkInverse : colors.ink}
-                        style={{ fontWeight: '600' }}
-                        numberOfLines={1}
-                      >
-                        {sub.name}
-                      </T>
-                      <T
-                        variant="caption"
-                        color={selected ? colors.inkInverse : colors.inkMuted}
-                        numberOfLines={1}
-                      >
-                        {categoryNameOf(state, sub.id)} · {formatMoney(sub.plannedMinor)}
-                      </T>
-                    </View>
-                    {selected ? (
-                      <Ionicons name="checkmark-circle" size={19} color={colors.inkInverse} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </View>
+            // The same grid the manual "new transaction" screen uses: categories
+            // as tiles that open into their bills. Recognising a tile beats
+            // recalling a name into a search box, and it keeps the keyboard off
+            // screen — which matters here, where the amount field above is the
+            // only thing that should summon it.
+            <CategoryGridPicker
+              categories={gridCategories}
+              destinations={destinations}
+              selectedId={subcategoryId || null}
+              onSelect={setSubcategoryId}
+            />
           )}
         </View>
         ) : null}

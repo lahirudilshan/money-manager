@@ -21,7 +21,31 @@
       "Bash(yarn test)",
       "Bash(xcrun simctl io *)",
       "Bash(xcrun simctl openurl *)",
-      "Bash(xcrun simctl list *)"
+      "Bash(xcrun simctl list *)",
+      "Bash(sed -n *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(find *)",
+      "Bash(awk *)",
+      "Bash(diff *)",
+      "Bash(file *)",
+      "Bash(which *)",
+      "Bash(pwd)",
+      "Bash(tree *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(npx tsc --noEmit *)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx vitest run *)",
+      "Bash(npx vitest run)"
     ]
   }
 }

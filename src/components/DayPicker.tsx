@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
+import { DayCell } from './DayCell';
 import { Label, Row, T } from './ui';
 
 const WEEKS = [
@@ -121,43 +122,19 @@ export function DayPicker({
               // the month's last day, so hint that rather than hide them.
               const clamps = day > 28;
               return (
-                <Pressable
-                  key={day}
-                  onPress={() => onChange(day)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={`Day ${day}${isToday ? ', today' : ''}`}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    aspectRatio: 1,
-                    borderRadius: radius.md,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    // Selected wins; otherwise today gets its yellow wash.
-                    backgroundColor: selected
-                      ? colors.accent
-                      : isToday
-                        ? todayTint
-                        : colors.surfaceSunken,
-                    opacity: pressed ? 0.7 : 1,
-                  })}
-                >
-                  <T
-                    variant="small"
-                    color={
-                      selected
-                        ? colors.inkInverse
-                        : isToday
-                          ? todayInk
-                          : clamps
-                            ? colors.inkMuted
-                            : colors.inkSecondary
-                    }
-                    style={{ fontWeight: selected || isToday ? '800' : '500' }}
-                  >
-                    {day}
-                  </T>
-                </Pressable>
+                <View key={day} style={{ flex: 1, aspectRatio: 1 }}>
+                  <DayCell
+                    day={day}
+                    selected={selected}
+                    onPress={() => onChange(day)}
+                    accessibilityLabel={`Day ${day}${isToday ? ', today' : ''}`}
+                    // This grid marks today with a yellow wash rather than a
+                    // ring: every cell already carries a filled background here,
+                    // so a ring would be lost against them.
+                    restBackground={isToday ? todayTint : colors.surfaceSunken}
+                    restColor={isToday ? todayInk : clamps ? colors.inkMuted : colors.inkSecondary}
+                  />
+                </View>
               );
             })}
             {/* Pad the short final row so its cells keep the grid's column width. */}

@@ -102,3 +102,41 @@ describe('parseSms robustness', () => {
     expect(parseSms('452123 is your OTP for a payment of LKR 3,000.00')).toBeNull();
   });
 });
+
+describe('parseSms time extraction', () => {
+  it('reads a labelled "Time:" and ignores the trailing hot line digits', () => {
+    const result = parseSms(
+      'HNB SMS ALERT: PURCHASE, Debit account:1380***4150,Location:KEELLS SUPER - SINHARAMUL, LK,Amount(Approx.):3747.40 LKR,Av.Bal:636012.27 LKR,Date:22.07.26,Time:20:54, Hot Line:0112462462',
+    );
+    expect(result?.time).toBe('20:54');
+    expect(result?.date).toBe('2026-07-22');
+  });
+
+  it('reads an unlabelled clock time', () => {
+    const result = parseSms(
+      'LKR 500.00 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 09:05 at SHOP. Avl Bal 1.00',
+    );
+    expect(result?.time).toBe('09:05');
+  });
+
+  it('drops seconds rather than showing them', () => {
+    const result = parseSms(
+      'LKR 500.00 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 at 18:30:47 SHOP. Avl Bal 1.00',
+    );
+    expect(result?.time).toBe('18:30');
+  });
+
+  it('is null when the message carries no time', () => {
+    const result = parseSms(
+      'LKR 2,867.40 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 at Water. Avl Bal 1.00',
+    );
+    expect(result?.time).toBeNull();
+  });
+
+  it('rejects digit runs that are not a valid clock reading', () => {
+    const result = parseSms(
+      'LKR 500.00 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 at SHOP ref 99:88. Avl Bal 1.00',
+    );
+    expect(result?.time).toBeNull();
+  });
+});

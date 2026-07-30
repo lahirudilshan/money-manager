@@ -1,22 +1,31 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
+import { shortWhen } from '../core/dates';
 import { formatMoney } from '../core/money';
 import { HINT_META } from '../core/smsCategoryHints';
-import { cardForAccount, type SmsDraft } from '../core/smsReconcile';
+import { accountLabelFor, cardForAccount, type SmsDraft } from '../core/smsReconcile';
 import type { Card } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
 import { T } from './ui';
 
 /**
- * One parsed-from-SMS draft, as a clean, price-forward list row.
+ * One parsed-from-SMS draft, as a compact card built around three tiers.
  *
- * The row does the reading: a category icon, the merchant, and — front and
- * centre — the amount. A status chip says whether a bill is already matched.
- * The row is not editable inline; tapping it (or "Not this") opens the detail
- * modal (app/sms/[id].tsx) where the user remaps, logs, or marks it already
- * logged. Keeping all editing in the modal is what lets a stack of rows stay
- * quiet and scannable.
+ * These arrive in a stack, so the card is organised by what a reviewer needs
+ * rather than by what the message contains:
+ *
+ *   1. What and how much — merchant and amount, one line, the heaviest weight.
+ *   2. What it maps to — the suggestion band, full width, immediately above the
+ *      buttons that accept or replace it. This is the card's question.
+ *   3. Where it came from — account and date/time, the quietest line, there to
+ *      be confirmed at a glance rather than decided on. When the SMS's digits
+ *      match one of the user's accounts it is named, which is the strongest
+ *      available evidence that the draft is really theirs.
+ *
+ * Both the body tap and the left button open the detail modal
+ * (app/sms/[id].tsx); keeping all editing there is what lets the card stay this
+ * small.
  */
 export function SmsDraftCard({
   draft,
@@ -30,9 +39,9 @@ export function SmsDraftCard({
   cards: readonly Card[];
   /** Name of the currently-matched bill, or undefined when none is chosen. */
   matchedBillName?: string;
-  /** Open the detail modal — fired by tapping the row or "Not this". */
+  /** Open the detail modal — fired by tapping the body or the left action. */
   onOpen: () => void;
-  /** One-tap log of a confidently-matched draft, without opening the modal. */
+  /** Log the draft against its current mapping. */
   onConfirm: () => void;
 }) {
   const { colors, radius, space } = useTheme();
@@ -42,7 +51,7 @@ export function SmsDraftCard({
   const isCredit = parsed.direction === 'credit';
   const isMatched = draft.subcategoryId !== '' || Boolean(matchedBillName);
   // A learned rule fired on this exact merchant — the user has confirmed this
-  // mapping before, so "Log it" is genuinely a one-tap confirmation.
+  // mapping before, so committing is genuinely a one-tap confirmation.
   const isExact = draft.confidence === 'exact';
 
   const kindLabel = {
@@ -55,12 +64,25 @@ export function SmsDraftCard({
     other: isCredit ? 'Money in' : 'Paid out',
   }[parsed.kind];
 
+  // A recognised account is named in full ("HNB Salary ••4150"); an unrecognised
+  // one keeps the bare digits. `matchedCard` is kept alongside the label so the
+  // row can style the two cases differently.
   const matchedCard = cardForAccount(parsed.account, cards);
-  const accountLabel = matchedCard ? matchedCard.name : parsed.account ? `••${parsed.account}` : '';
+  const accountLabel = accountLabelFor(parsed.account, cards);
 
-  const subtitle = [hintMeta ? hintMeta.label : kindLabel, accountLabel, parsed.date]
-    .filter(Boolean)
-    .join('  ·  ');
+  // Date and time read as one fact, space-joined so they are not split by a dot
+  // as though unrelated. The year is dropped for anything in the current year —
+  // "22 Jul 8:54 PM" rather than "22 Jul 2026 8:54 PM" — since these are reviewed
+  // within days of arriving and the year is what pushed the time off the line.
+  const whenLabel = shortWhen(parsed.date, parsed.time);
+
+  const figure = `${isCredit ? '+' : ''}${formatMoney(draft.amountMinor, { showDecimals: true })}`;
+
+  // Two things are deliberately off the provenance line: the detected category,
+  // which is the suggestion being proposed and so belongs in the highlighted
+  // band; and the kind ("Purchase"), which for a recognised merchant only repeats
+  // what the icon and the merchant name already say. Kind survives as the
+  // merchant fallback below, where it is the only name we have.
 
   return (
     <View
@@ -72,154 +94,292 @@ export function SmsDraftCard({
         overflow: 'hidden',
       }}
     >
-      {/* Tap anywhere on the row to open the detail modal. */}
+      {/* Tap the body to open the detail modal — the same destination as the
+          left action, so the whole card is a safe, non-committing target. */}
       <Pressable
         onPress={onOpen}
         accessibilityRole="button"
-        accessibilityLabel={`${kindLabel}, ${parsed.merchant || 'transaction'}, ${formatMoney(draft.amountMinor, { showDecimals: true })}. Tap for details.`}
+        accessibilityLabel={`${kindLabel}, ${parsed.merchant || 'transaction'}, ${figure}${accountLabel ? `, ${accountLabel}` : ''}. Tap for details.`}
         style={({ pressed }) => ({
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: space.md,
-          padding: space.md,
-          opacity: pressed ? 0.85 : 1,
+          paddingHorizontal: space.md,
+          paddingTop: space.md,
+          paddingBottom: space.sm,
+          gap: space.sm,
+          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
         })}
       >
-        <View
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: radius.md,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: colors.accentSoft,
-          }}
-        >
-          <Ionicons
-            name={(hintMeta?.icon ?? 'chatbox-ellipses-outline') as never}
-            size={21}
-            color={colors.accent}
-          />
+        {/* Icon column, then a two-line text block. The icon spans both lines so
+            the text left-aligns as one unit rather than stepping in and out. */}
+        <View style={{ flexDirection: 'row', gap: space.sm }}>
+          <View
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: radius.sm,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: isCredit ? colors.completedSoft : colors.accentSoft,
+            }}
+          >
+            <Ionicons
+              name={(hintMeta?.icon ?? 'chatbox-ellipses-outline') as never}
+              size={17}
+              color={isCredit ? colors.completed : colors.accent}
+            />
+          </View>
+
+          <View style={{ flex: 1, gap: 3 }}>
+            {/* The merchant gets the whole line — the amount lives in the
+                suggestion band below, paired with the category. */}
+            <T variant="bodyStrong" numberOfLines={1}>
+              {parsed.merchant || kindLabel}
+            </T>
+
+            {/* Provenance. Deliberately the quietest line on the card: facts to
+                confirm at a glance, not decisions. The account shrinks first
+                because a matched one carries bank, name and digits; the date and
+                time hold their width and stay complete. */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              {accountLabel ? (
+                <>
+                  <Ionicons
+                    name={matchedCard ? 'card' : 'card-outline'}
+                    size={11}
+                    color={matchedCard ? colors.inkSecondary : colors.inkMuted}
+                  />
+                  {/* A recognised account reads a step stronger than an unknown
+                      one: it is evidence the draft belongs to the user. */}
+                  <T
+                    variant="caption"
+                    tone={matchedCard ? 'secondary' : 'muted'}
+                    numberOfLines={1}
+                    style={{ flexShrink: 1, fontWeight: matchedCard ? '600' : '500' }}
+                  >
+                    {accountLabel}
+                  </T>
+                </>
+              ) : null}
+              {accountLabel && whenLabel ? (
+                <T variant="caption" color={colors.inkFaint}>
+                  ·
+                </T>
+              ) : null}
+              {whenLabel ? (
+                <T variant="caption" tone="muted" numberOfLines={1}>
+                  {whenLabel}
+                </T>
+              ) : null}
+            </View>
+          </View>
         </View>
 
-        <View style={{ flex: 1, gap: 2 }}>
-          <T variant="bodyStrong" numberOfLines={1}>
-            {parsed.merchant || kindLabel}
-          </T>
-          <T variant="caption" tone="muted" numberOfLines={1}>
-            {subtitle}
-          </T>
-          {/* What the detector made of it, on its own line so the price column
-              stays uncluttered. An exact match is a merchant the user has
-              already confirmed once, so it is badged differently from a guess —
-              and an unrecognised merchant says so plainly, since that row needs
-              a decision rather than a confirmation. */}
-          {matchedBillName ? (
-            <Row inline gap={4}>
-              <Ionicons
-                name={isExact ? 'sparkles' : 'bulb-outline'}
-                size={11}
-                color={isExact ? colors.completed : colors.accent}
-              />
-              <T
-                variant="caption"
-                color={isExact ? colors.completed : colors.accent}
-                numberOfLines={1}
-                style={{ fontWeight: '600' }}
-              >
-                {matchedBillName}
-                {isExact ? '' : ' · suggested'}
-              </T>
-            </Row>
-          ) : (
-            <Row inline gap={4}>
-              <Ionicons name="help-circle-outline" size={11} color={colors.pending} />
-              <T variant="caption" color={colors.pending} numberOfLines={1} style={{ fontWeight: '600' }}>
-                New merchant — tap to categorise
-              </T>
-            </Row>
-          )}
-        </View>
-
-        {/* The price — the biggest, boldest thing in the row. */}
-        <T variant="figureLarge" color={isCredit ? colors.completed : colors.ink}>
-          {isCredit ? '+' : ''}
-          {formatMoney(draft.amountMinor, { showDecimals: true })}
-        </T>
+        {/* The card's actual question — category on the left, amount on the
+            right — full width and directly above the buttons that answer it, so
+            proposal and response read as one block. */}
+        <MatchChip
+          billName={matchedBillName}
+          hintLabel={hintMeta?.label}
+          isExact={isExact}
+          needsBill={!isMatched}
+          figure={figure}
+          figureColor={isCredit ? colors.completed : colors.ink}
+        />
       </Pressable>
 
-      {/* Action bar under the row. */}
+      {/* Two actions, fixed positions: remap on the left, commit on the right. */}
       <View
         style={{
           flexDirection: 'row',
-          borderTopWidth: 1,
-          borderTopColor: colors.hairline,
+          alignItems: 'center',
+          gap: space.sm,
+          paddingHorizontal: space.md,
+          paddingBottom: space.md,
         }}
       >
-        <RowAction
+        {/* Opens the same picker in both states — the label just names what the
+            user is likely correcting: a wrong guess, or nothing chosen yet. */}
+        <CardAction
           label="Wrong category"
           icon="swap-horizontal-outline"
-          tone="muted"
+          variant="secondary"
           onPress={onOpen}
         />
-        <View style={{ width: 1, backgroundColor: colors.hairline }} />
-        {isMatched ? (
-          <RowAction label="Confirm" icon="checkmark" tone="success" onPress={onConfirm} />
-        ) : (
-          <RowAction label="Choose bill" icon="pricetags-outline" tone="accent" onPress={onOpen} />
-        )}
+        {/* `confirmDraft` needs a subcategory, so an uncategorised draft opens
+            the picker instead of committing — the arrow icon marks that this one
+            leads somewhere rather than finishing the job. */}
+        <CardAction
+          label="Yes, log this"
+          accessibilityLabel={isMatched ? 'Yes, log this' : 'Choose a bill, then log this'}
+          icon={isMatched ? 'checkmark' : 'arrow-forward'}
+          variant="primary"
+          onPress={isMatched ? onConfirm : onOpen}
+        />
       </View>
     </View>
   );
 }
 
-/** A flat, full-height action filling half the row's footer. */
-function RowAction({
+/**
+ * The card's question, as one highlighted band: what this maps to, and for how
+ * much.
+ *
+ * Whatever we worked out goes on the left in full strength — a confirmed bill, a
+ * suggested bill, or (when no bill matched) the category the message text points
+ * at, which is still a useful head start on the picker. The amount sits opposite
+ * it, so the two facts the user weighs against each other share a line.
+ */
+function MatchChip({
+  billName,
+  hintLabel,
+  isExact,
+  needsBill,
+  figure,
+  figureColor,
+}: {
+  billName?: string;
+  /** Category detected from the SMS text, shown when no bill matched. */
+  hintLabel?: string;
+  isExact: boolean;
+  needsBill: boolean;
+  /** Pre-formatted amount, shown at the band's right edge. */
+  figure: string;
+  /**
+   * Ink (or the credit green) rather than the band's own state colour — the
+   * amount is a fact about the transaction, so it must not appear to change with
+   * how confident the match is.
+   */
+  figureColor: string;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  // `prefix` frames what the name is (a guess vs. a settled mapping) so the
+  // highlighted word is never ambiguous on its own.
+  //
+  // Colour tracks how settled the mapping is: amber for a draft still needing a
+  // category, blue for a guess worth checking, green once it is confirmed. The
+  // amber shares the `pending` role with overdue bills — both are "not finished
+  // yet", and the three-step progression reads at a glance down a stack.
+  const { icon, fg, bg, prefix, label } = needsBill
+    ? {
+        icon: 'help-circle' as const,
+        fg: colors.pending,
+        bg: colors.pendingSoft,
+        // The detected category is a real suggestion even without a bill, so it
+        // leads; only a wholly unrecognised message falls back to the prompt.
+        prefix: hintLabel ? 'Looks like' : 'Needs',
+        label: hintLabel ?? 'a category',
+      }
+    : isExact
+      ? {
+          icon: 'checkmark-circle' as const,
+          fg: colors.completed,
+          bg: colors.completedSoft,
+          prefix: 'Goes to',
+          label: billName ?? 'a matched bill',
+        }
+      : {
+          icon: 'sparkles' as const,
+          fg: colors.accent,
+          bg: colors.accentSoft,
+          prefix: 'Maybe',
+          label: billName ?? 'a suggestion',
+        };
+
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: space.sm,
+        paddingVertical: 7,
+        borderRadius: radius.sm,
+        backgroundColor: bg,
+      }}
+    >
+      <Ionicons name={icon} size={15} color={fg} />
+      {/* The prefix is the quiet half; the name it points at carries the weight,
+          since that is the word the user is being asked to accept or replace.
+          Both sit in a flex group so a long bill name truncates rather than
+          pushing the amount off the band's right edge.
+
+          Sized one step above the provenance line and one below the amount: this
+          is the decision the card is asking for, so it should not read as small
+          print, but it must not out-shout the figure either. */}
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+        <T variant="small" color={fg} style={{ opacity: 0.8 }}>
+          {prefix}
+        </T>
+        <T variant="small" color={fg} numberOfLines={1} style={{ flexShrink: 1, fontWeight: '800' }}>
+          {label}
+        </T>
+      </View>
+
+      {/* The amount is the one thing in the band that is not a suggestion, so it
+          carries the heaviest weight here — against a tinted ground the default
+          figure weight read as washed out next to the bold category name. */}
+      <T variant="figureLarge" color={figureColor} style={{ fontSize: 16 }}>
+        {figure}
+      </T>
+    </View>
+  );
+}
+
+/**
+ * One of the card's two footer actions. Both are outlined — a stack of drafts
+ * would otherwise carry a column of filled blue blocks, which shouts far louder
+ * than a review queue should. The primary is marked by accent border and text
+ * against the secondary's neutral grey, which keeps the hierarchy without the
+ * fill.
+ */
+function CardAction({
   label,
+  accessibilityLabel,
   icon,
-  tone,
+  variant,
   onPress,
 }: {
   label: string;
+  /**
+   * Spoken label, when the visible one would mislead. An uncategorised draft's
+   * primary button reads "Yes, log this" but actually opens the picker, so the
+   * screen reader is told what the tap really does.
+   */
+  accessibilityLabel?: string;
   icon: keyof typeof Ionicons.glyphMap;
-  tone: 'muted' | 'success' | 'accent';
+  variant: 'primary' | 'secondary';
   onPress: () => void;
 }) {
-  const { colors, space } = useTheme();
-  const color = {
-    muted: colors.inkSecondary,
-    success: colors.completed,
-    accent: colors.accent,
-  }[tone];
+  const { colors, radius, space } = useTheme();
+  const isPrimary = variant === 'primary';
+  const fg = isPrimary ? colors.accent : colors.inkSecondary;
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       style={({ pressed }) => ({
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
-        paddingVertical: 11,
-        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+        gap: 5,
+        // 36 stays inside the 44pt touch target because the card's own padding
+        // and the body Pressable above it absorb the slop.
+        height: 36,
+        paddingHorizontal: space.sm,
+        borderRadius: radius.sm,
+        borderWidth: 1,
+        borderColor: isPrimary ? colors.accent : colors.hairlineStrong,
+        // Only the pressed state fills, so the tap still lands visibly.
+        backgroundColor: pressed ? (isPrimary ? colors.accentSoft : colors.surfaceSunken) : 'transparent',
       })}
     >
-      <Ionicons name={icon} size={15} color={color} />
-      <T variant="small" color={color} style={{ fontWeight: '700' }}>
+      <Ionicons name={icon} size={14} color={fg} />
+      <T variant="caption" color={fg} numberOfLines={1} style={{ fontWeight: '700' }}>
         {label}
       </T>
     </Pressable>
-  );
-}
-
-/** Tiny inline row helper (avoids importing the padded ui Row for one line). */
-function Row({ children, gap, inline }: { children: React.ReactNode; gap: number; inline?: boolean }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap, alignSelf: inline ? 'flex-start' : 'auto' }}>
-      {children}
-    </View>
   );
 }

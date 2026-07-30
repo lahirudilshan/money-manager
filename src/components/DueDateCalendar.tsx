@@ -1,11 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View } from 'react-native';
-import { isSameDay, monthGrid, MONTH_NAMES } from '../core/dates';
+import { MONTH_NAMES } from '../core/dates';
 import { useTheme } from '../theme/ThemeProvider';
+import { DayCell } from './DayCell';
 import { Label, Row, T } from './ui';
 
-const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+/**
+ * Days 1–31 in rows of seven — the exact layout the "new bill in" sheet's
+ * `DayPicker` uses, so the grid a user picks a payment day on and the grid that
+ * reports it back are the same object in two states.
+ */
+const WEEKS = [
+  [1, 2, 3, 4, 5, 6, 7],
+  [8, 9, 10, 11, 12, 13, 14],
+  [15, 16, 17, 18, 19, 20, 21],
+  [22, 23, 24, 25, 26, 27, 28],
+  [29, 30, 31],
+];
 
 /**
  * A read-only month calendar marking the day a bill is due.
@@ -15,6 +27,11 @@ const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
  * money leaves, so they can line it up against payday and the rest of the
  * month's bills. Seeing the date sitting in a real grid answers that at a
  * glance in a way a sentence cannot.
+ *
+ * Presented as a day-of-month grid rather than a true weekday calendar, matching
+ * `DayPicker`: a payment day IS a day of the month ("every 15th"), so aligning
+ * it under S/M/T/W columns implied a precision — a specific weekday — that the
+ * underlying value does not carry.
  *
  * Deliberately not interactive: the payment day is edited on the bill itself
  * (via `DayPicker`), so making these cells tappable would offer a second,
@@ -33,11 +50,20 @@ export function DueDateCalendar({
   tint?: string;
   overdue?: boolean;
 }) {
-  const { colors, radius, space } = useTheme();
+  const { colors, radius, space, mode } = useTheme();
   const accent = overdue ? colors.danger : (tint ?? colors.accent);
 
-  const today = new Date();
-  const cells = monthGrid(dueDate.getFullYear(), dueDate.getMonth());
+  // Same yellow wash DayPicker uses to mark today — against filled cells a ring
+  // would be lost, and the two grids must read identically.
+  const todayTint = mode === 'dark' ? 'rgba(224,168,80,0.28)' : 'rgba(245,200,66,0.35)';
+  const todayInk = mode === 'dark' ? '#E7C06A' : '#8A6D0F';
+
+  const now = new Date();
+  // The due day is only "today" when the calendar is showing the current month.
+  const showsThisMonth =
+    dueDate.getFullYear() === now.getFullYear() && dueDate.getMonth() === now.getMonth();
+  const todayDay = showsThisMonth ? now.getDate() : -1;
+  const dueDay = dueDate.getDate();
 
   return (
     <View style={{ gap: space.sm }}>
@@ -51,71 +77,48 @@ export function DueDateCalendar({
         </Row>
       </Row>
 
+      {/* Panel and cells are the "new bill in" sheet's DayPicker, minus the
+          interaction: same radius, same 6px gutters, same filled cells on the
+          sunken ground, same yellow today-wash. */}
       <View
         style={{
+          backgroundColor: colors.surface,
+          borderRadius: radius.lg,
           borderWidth: 1,
           borderColor: colors.hairline,
-          borderRadius: radius.md,
           padding: space.sm,
-          backgroundColor: colors.surface,
+          gap: 6,
         }}
       >
-        <Row gap={0}>
-          {WEEKDAYS.map((day, index) => (
-            <View key={`${day}-${index}`} style={{ flex: 1, alignItems: 'center', paddingBottom: 4 }}>
-              <T variant="caption" tone="muted" style={{ fontWeight: '700', fontSize: 10 }}>
-                {day}
-              </T>
-            </View>
-          ))}
-        </Row>
+        {WEEKS.map((week, weekIndex) => (
+          <View key={weekIndex} style={{ flexDirection: 'row', gap: 6 }}>
+            {week.map((day) => {
+              const isDue = day === dueDay;
+              const isToday = day === todayDay;
+              // The 29th–31st don't exist every month; the app clamps them to the
+              // month's last day, so hint that rather than hide them.
+              const clamps = day > 28;
 
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-          {cells.map((day, index) => {
-            if (day === null) {
-              return <View key={`blank-${index}`} style={{ width: `${100 / 7}%`, height: 34 }} />;
-            }
-
-            const cellDate = new Date(dueDate.getFullYear(), dueDate.getMonth(), day);
-            const isDue = isSameDay(cellDate, dueDate);
-            const marksToday = isSameDay(cellDate, today);
-
-            return (
-              <View
-                key={day}
-                style={{
-                  width: `${100 / 7}%`,
-                  height: 34,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <View
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: isDue ? accent : 'transparent',
-                    // Today is ringed rather than filled, so it never competes
-                    // with the due day for attention.
-                    borderWidth: marksToday && !isDue ? 1.5 : 0,
-                    borderColor: colors.inkMuted,
-                  }}
-                >
-                  <T
-                    variant="caption"
-                    color={isDue ? colors.inkInverse : colors.ink}
-                    style={{ fontWeight: isDue || marksToday ? '800' : '500' }}
-                  >
-                    {day}
-                  </T>
+              return (
+                <View key={day} style={{ flex: 1, aspectRatio: 1 }}>
+                  <DayCell
+                    day={day}
+                    selected={isDue}
+                    tint={accent}
+                    restBackground={isToday ? todayTint : colors.surfaceSunken}
+                    restColor={isToday ? todayInk : clamps ? colors.inkMuted : colors.inkSecondary}
+                  />
                 </View>
-              </View>
-            );
-          })}
-        </View>
+              );
+            })}
+            {/* Pad the short final row so its cells keep the grid's column width. */}
+            {week.length < 7
+              ? Array.from({ length: 7 - week.length }).map((_, padIndex) => (
+                  <View key={`pad-${padIndex}`} style={{ flex: 1 }} />
+                ))
+              : null}
+          </View>
+        ))}
       </View>
     </View>
   );

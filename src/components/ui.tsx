@@ -142,16 +142,22 @@ export function GradientCard({
   children,
   style,
   padded = true,
+  gradient,
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
   padded?: boolean;
+  /**
+   * Override the brand gradient — used by the headline cards to colour
+   * themselves by plan health (see HEALTH_VISUALS). Omit for the brand pair.
+   */
+  gradient?: readonly [string, string];
 }) {
   const { colors, radius, space, shadow } = useTheme();
   return (
     <View style={[{ borderRadius: radius.xl, overflow: 'hidden' }, shadow.lifted, style]}>
       <LinearGradient
-        colors={[colors.gradientStart, colors.gradientEnd]}
+        colors={gradient ?? [colors.gradientStart, colors.gradientEnd]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ padding: padded ? space.xl : 0 }}

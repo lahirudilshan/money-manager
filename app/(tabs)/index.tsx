@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
@@ -18,7 +19,8 @@ import {
   T,
 } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
-import { formatPeriod, shiftPeriod } from '../../src/core/planning';
+import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
+import { HEALTH_VISUALS } from '../../src/theme';
 import { accountLabel, resolveBrand } from '../../src/data/banks';
 import {
   selectAccountTransfers,
@@ -55,6 +57,14 @@ export default function DashboardScreen() {
   const accounts = useMemo(() => selectAccountTransfers(state), [state]);
   const reminders = useMemo(() => selectReminders(state), [state]);
   const loanViews = useMemo(() => selectLoanViews(state), [state]);
+
+  // How this month grades, and the gradient/word/icon that says so.
+  const health = planHealth({
+    incomeMinor: income,
+    freePct: ratios.freePct,
+    disposableMinor: ratios.disposableMinor,
+  });
+  const healthVisual = HEALTH_VISUALS[health];
   const smsDrafts = state.smsDrafts;
 
   const overdue = reminders.filter((r) => r.urgency === 'overdue');
@@ -147,13 +157,25 @@ export default function DashboardScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
-      {/* Headline: the month's whole shape — income in, money out, what's left. */}
-      <GradientCard>
+      {/* Headline: the month's whole shape — income in, money out, what's left.
+          The gradient itself grades the month, so the card reads as a verdict at
+          a glance rather than always looking celebratory. */}
+      <GradientCard gradient={healthVisual.gradient}>
         <View style={{ gap: space.lg }}>
           <View style={{ gap: 2 }}>
             {/* One label in both directions — this is simply income minus
                 expenses, and the sign on the figure says which way it went. */}
-            <Label color="rgba(255,255,255,0.75)">BALANCE</Label>
+            <Row justify="space-between" align="center">
+              <Label color="rgba(255,255,255,0.75)">BALANCE</Label>
+              {/* Health is never colour alone: the word and icon carry it too,
+                  so it survives greyscale and colour-vision differences. */}
+              <Row gap={4}>
+                <Ionicons name={healthVisual.icon as never} size={13} color="rgba(255,255,255,0.9)" />
+                <T variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
+                  {healthVisual.label}
+                </T>
+              </Row>
+            </Row>
             <T variant="hero" color="#FFFFFF">
               {formatMoney(ratios.disposableMinor)}
             </T>
@@ -162,7 +184,7 @@ export default function DashboardScreen() {
           {/* Four headline figures: money in, planned out, actually spent, debt.
               Currency prefix is dropped here (it's LKR throughout) so all four
               compact values fit without truncating. */}
-          <Row justify="space-between">
+          <Row gap={6} justify="space-between">
             <HeroStat label="INCOME" value={formatMoney(income, { compact: true, showCurrency: false })} />
             <HeroStat label="PLANNED" value={formatMoney(totals.plannedMinor, { compact: true, showCurrency: false })} />
             <HeroStat label="SPENT" value={formatMoney(totals.paidMinor, { compact: true, showCurrency: false })} />
@@ -508,10 +530,28 @@ function PeriodStep({
   );
 }
 
+/**
+ * One of the four headline figures on the hero card, as its own tile.
+ *
+ * Sat bare on the gradient before, which left four numbers floating in a row
+ * with nothing separating them. Each now gets a translucent gradient wash —
+ * lighter at the top-left, fading out — so the tile reads as a distinct
+ * statistic while still letting the card's health colour show through. Drawn
+ * from white alpha rather than fixed hues, so it works over every health
+ * gradient without needing a variant per state.
+ */
 function HeroStat({ label, value }: { label: string; value: string }) {
+  const { radius, space } = useTheme();
   return (
-    <View style={{ flex: 1 }}>
-      <Stat label={label} value={value} onDark />
+    <View style={{ flex: 1, borderRadius: radius.md, overflow: 'hidden' }}>
+      <LinearGradient
+        colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.06)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ paddingVertical: space.sm, paddingHorizontal: space.sm, gap: 2 }}
+      >
+        <Stat label={label} value={value} onDark />
+      </LinearGradient>
     </View>
   );
 }

@@ -53,6 +53,12 @@ export interface ParsedSms {
   account: string;
   /** ISO date (YYYY-MM-DD) the message referenced, or null if none found. */
   date: string | null;
+  /**
+   * 24-hour "HH:MM" the message referenced, or null. Kept separate from `date`
+   * rather than folded into a timestamp: plenty of alerts carry a date and no
+   * time, and the review UI shows whichever it actually has.
+   */
+  time: string | null;
   /** The original text, kept so the confirm UI can show what it came from. */
   raw: string;
 }
@@ -170,6 +176,28 @@ function extractDate(text: string): string | null {
 }
 
 /**
+ * Extract a 24-hour "HH:MM" clock time, or null.
+ *
+ * Deliberately narrow. A bare `\d{2}:\d{2}` also matches things that are not
+ * times — a "Time:" label is the reliable signal, so a labelled match is tried
+ * first and an unlabelled one is only accepted when the digits form a valid
+ * clock reading (so a 10-digit hotline or a masked account can't pose as one).
+ * Seconds, when present, are dropped: the card shows "20:54", never "20:54:03".
+ */
+function extractTime(text: string): string | null {
+  const labelled = text.match(/\bTime\s*[:.]?\s*(\d{1,2}):(\d{2})/i);
+  const bare = labelled ?? text.match(/\b(\d{1,2}):(\d{2})(?::\d{2})?\b/);
+  if (!bare) return null;
+
+  const hour = Number(bare[1]);
+  const minute = Number(bare[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (hour > 23 || minute > 59) return null;
+
+  return `${String(hour).padStart(2, '0')}:${bare[2]}`;
+}
+
+/**
  * The account/card fragment the message referenced, reduced to its trailing
  * significant digits so it can be matched against a card's last-4. Handles
  * "AC XXXXXXXX6796", "account:1380***4150", "A/C: 1380***4150",
@@ -270,6 +298,7 @@ export function parseSms(input: string): ParsedSms | null {
     merchant: extractMerchant(text),
     account: extractAccount(text),
     date: extractDate(text),
+    time: extractTime(text),
     raw: text,
   };
 }

@@ -14,6 +14,7 @@ import {
   periodKey,
   periodToDate,
   planFromMonthly,
+  planHealth,
   savingPlanProgress,
   shiftPeriod,
   summariseBoard,
@@ -634,5 +635,57 @@ describe('one-time costs anchor to the month they were paid', () => {
     expect(summariseCategory([rent, paidInJune], 0, '2026-07').totalMinor).toBe(
       toMinor(35_000),
     );
+  });
+});
+
+/**
+ * The headline cards colour themselves by this grade, so the boundaries matter:
+ * a month one rupee into the red must not keep reading "on track".
+ */
+describe('planHealth', () => {
+  const grade = (income: number, free: number, disposable: number) =>
+    planHealth({
+      incomeMinor: toMinor(income),
+      freePct: free,
+      disposableMinor: toMinor(disposable),
+    });
+
+  it('grades a month with room to save as healthy', () => {
+    expect(grade(200_000, 35, 70_000)).toBe('healthy');
+  });
+
+  it('grades a balanced-but-thin month as tight', () => {
+    expect(grade(200_000, 12, 24_000)).toBe('tight');
+  });
+
+  it('grades a month committed to nearly everything as critical', () => {
+    expect(grade(200_000, 2, 4_000)).toBe('critical');
+  });
+
+  it('grades commitments beyond income as overspent', () => {
+    expect(grade(200_000, -15, -30_000)).toBe('overspent');
+  });
+
+  it('treats the healthy and tight thresholds as inclusive floors', () => {
+    expect(grade(200_000, 20, 40_000)).toBe('healthy');
+    expect(grade(200_000, 19, 38_000)).toBe('tight');
+    expect(grade(200_000, 5, 10_000)).toBe('tight');
+    expect(grade(200_000, 4, 8_000)).toBe('critical');
+  });
+
+  it('trusts the money over a rounded percentage', () => {
+    // percentOf rounds, so a hair below zero can present as 0% free — the sign
+    // of the actual figure is what decides.
+    expect(grade(200_000, 0, -1)).toBe('overspent');
+  });
+
+  it('reports unknown before any income is recorded', () => {
+    // Onboarding: every ratio is zero, and calling that "overspent" would be a
+    // false alarm on an empty plan.
+    expect(grade(0, 0, 0)).toBe('unknown');
+  });
+
+  it('reports unknown rather than healthy for a plan with no income but no spend', () => {
+    expect(planHealth({ incomeMinor: 0, freePct: 0, disposableMinor: 0 })).toBe('unknown');
   });
 });
