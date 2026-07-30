@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { buildSchedule, paymentsElapsed, remainingBalance } from '../core/amortization';
-import { sumMinor, type Minor } from '../core/money';
+import { setDisplayCurrency, sumMinor, type Minor } from '../core/money';
+import type { PlanId } from '../core/plans';
 import {
   calculateRatios,
   daysUntil,
@@ -92,6 +93,17 @@ export interface AppState {
   /** 'system' follows the OS; 'light'/'dark' force a mode. */
   themeMode: 'system' | 'light' | 'dark';
   hapticsEnabled: boolean;
+  /**
+   * Whether Face ID / Touch ID / passcode is required before the app's contents
+   * are shown. Off by default — this is a local-only budgeting app, and locking
+   * it should be the user's choice rather than a hurdle everyone inherits.
+   */
+  appLockEnabled: boolean;
+  /**
+   * Subscription tier. Local-only for now — there is no billing behind it, so
+   * it shapes what the UI offers rather than enforcing anything.
+   */
+  plan: PlanId;
 
   /**
    * Parsed-from-SMS transactions awaiting the user's Yes/Edit/No. Held in
@@ -114,6 +126,8 @@ export interface AppState {
   setUsdRate: (rate: number) => void;
   setThemeMode: (mode: 'system' | 'light' | 'dark') => void;
   setHapticsEnabled: (enabled: boolean) => void;
+  setAppLockEnabled: (enabled: boolean) => void;
+  setPlan: (plan: PlanId) => void;
   resetAllData: () => Promise<void>;
   seedDemoData: () => void;
   completeOnboarding: () => void;
@@ -266,6 +280,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   usdRate: 300,
   themeMode: 'system',
   hapticsEnabled: true,
+  appLockEnabled: false,
+  // Premium for now: the paid tier is enabled by default until billing exists.
+  plan: 'premium',
   smsDrafts: [],
   merchantRules: [],
 
@@ -284,6 +301,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   refresh() {
     const { period } = get();
+    const currency = settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR';
+    // Publish to core/money so the ~100 `formatMoney` call sites that render an
+    // amount without knowing about settings pick up the user's choice. Done on
+    // every refresh (not just setCurrency) so a fresh launch is correct too.
+    setDisplayCurrency(currency);
+
     set({
       cards: cardRepo.all(),
       categories: categoryRepo.all(),
@@ -295,11 +318,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
       merchantRules: merchantRuleRepo.all(),
-      currency: settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR',
+      currency,
       usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
       themeMode:
         (settingsRepo.get(SETTINGS_KEYS.themeMode) as 'system' | 'light' | 'dark') ?? 'system',
       hapticsEnabled: settingsRepo.get(SETTINGS_KEYS.haptics) !== 'false',
+      // Opt-in, so an absent key means off — the opposite default to haptics.
+      appLockEnabled: settingsRepo.get(SETTINGS_KEYS.appLock) === 'true',
+      // Defaults to premium while there is no billing to buy it with.
+      plan: (settingsRepo.get(SETTINGS_KEYS.plan) as PlanId) ?? 'premium',
     });
   },
 
@@ -328,6 +355,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refresh();
   },
 
+  setAppLockEnabled(enabled) {
+    settingsRepo.set(SETTINGS_KEYS.appLock, enabled ? 'true' : 'false');
+    get().refresh();
+  },
+
+  setPlan(plan) {
+    settingsRepo.set(SETTINGS_KEYS.plan, plan);
+    get().refresh();
+  },
+
   /**
    * "Clear all data" in settings. Wipes every table, cancels any local
    * notifications scheduled for categories that no longer exist, and marks
@@ -339,8 +376,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.warn('Reminder cancel skipped:', error),
     );
     resetDatabase();
-    settingsRepo.set(SETTINGS_KEYS.onboarded, 'true');
-    set({ period: periodKey(new Date()), needsOnboarding: false });
+    // Send the user back through onboarding. Marking the wiped app as already
+    // onboarded dropped them onto an empty dashboard with no route back to the
+    // setup flow — the same state a fresh install starts from, minus the help.
+    settingsRepo.set(SETTINGS_KEYS.onboarded, 'false');
+    set({ period: periodKey(new Date()), needsOnboarding: true });
     get().refresh();
   },
 
@@ -824,9 +864,33 @@ export function selectBoardTotals(state: AppState): BoardTotals {
  */
 export function selectTotalIncome(state: AppState): Minor {
   const declared = sumMinor(state.incomes.map((income) => income.amountMinor));
-  const onBoard = sumMinor(
-    selectCategoryViews(state).map((view) => view.summary.incomeMinor),
+
+  /*
+   * Board income lines, minus any that the `incomes` table already declares.
+   *
+   * Onboarding writes a salary BOTH ways — as a board line and as an income row
+   * — so adding the two sources wholesale counted it twice, and the dashboard
+   * reported double the real figure. Matching on name and amount is enough to
+   * spot that pairing: they are created together from one entry, so they agree
+   * exactly, while two genuinely separate sources that happen to share a name
+   * would also share an amount and be a duplicate in substance anyway.
+   */
+  const declaredKeys = new Set(
+    state.incomes.map((income) => `${income.name.trim().toLowerCase()}:${income.amountMinor}`),
   );
+
+  const onBoard = sumMinor(
+    selectCategoryViews(state).flatMap((view) =>
+      view.rawSubcategories
+        .filter(
+          (line) =>
+            line.type === 'income' &&
+            !declaredKeys.has(`${line.name.trim().toLowerCase()}:${line.plannedMinor}`),
+        )
+        .map((line) => line.plannedMinor),
+    ),
+  );
+
   return declared + onBoard;
 }
 

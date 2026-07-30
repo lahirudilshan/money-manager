@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   convertToLocalMinor,
+  getDisplayCurrency,
   formatMoney,
   parseAmount,
   percentOf,
+  setDisplayCurrency,
   sumMinor,
   toMajor,
   toMinor,
@@ -145,5 +147,48 @@ describe('convertToLocalMinor', () => {
   it('converts a USD salary at the stored rate', () => {
     // 2,500 USD at 300 LKR -> 750,000 LKR
     expect(convertToLocalMinor(2500, 300)).toBe(toMinor(750_000));
+  });
+});
+
+/**
+ * The display currency is module state so ~100 unqualified `formatMoney` calls
+ * can honour the user's setting without threading it through every summary
+ * helper. These pin the contract the store relies on.
+ */
+describe('display currency', () => {
+  // Restore the default so ordering never leaks between tests in this file.
+  afterEach(() => setDisplayCurrency('LKR'));
+
+  it('defaults to LKR', () => {
+    expect(getDisplayCurrency()).toBe('LKR');
+    expect(formatMoney(toMinor(1_500))).toBe('LKR 1,500');
+  });
+
+  it('changes what an unqualified formatMoney renders', () => {
+    setDisplayCurrency('GBP');
+    expect(formatMoney(toMinor(1_500))).toBe('GBP 1,500');
+  });
+
+  it('is still overridable per call', () => {
+    setDisplayCurrency('GBP');
+    expect(formatMoney(toMinor(1_500), { currency: 'USD' })).toBe('USD 1,500');
+  });
+
+  it('ignores blank or non-string input rather than blanking the prefix', () => {
+    setDisplayCurrency('GBP');
+    setDisplayCurrency('   ');
+    // @ts-expect-error deliberately wrong type
+    setDisplayCurrency(null);
+    expect(getDisplayCurrency()).toBe('GBP');
+  });
+
+  it('trims surrounding whitespace', () => {
+    setDisplayCurrency('  EUR  ');
+    expect(formatMoney(toMinor(20))).toBe('EUR 20');
+  });
+
+  it('still honours showCurrency: false', () => {
+    setDisplayCurrency('GBP');
+    expect(formatMoney(toMinor(1_500), { showCurrency: false })).toBe('1,500');
   });
 });

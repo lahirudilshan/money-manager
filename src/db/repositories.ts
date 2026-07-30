@@ -592,4 +592,8 @@ export const SETTINGS_KEYS = {
   onboarded: 'onboarded',
   themeMode: 'theme_mode',
   haptics: 'haptics',
+  /** Require Face ID / Touch ID / passcode before the app's contents are shown. */
+  appLock: 'app_lock',
+  /** Subscription tier — see core/plans.ts. */
+  plan: 'plan',
 } as const;

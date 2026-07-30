@@ -250,10 +250,21 @@ export function summariseBoard(summaries: readonly CategorySummary[]): BoardTota
   let settled = 0;
   let fullyFunded = 0;
 
+  /*
+   * Only categories that hold something to settle are counted.
+   *
+   * `categoryCount` is the denominator of "settled 0 of N", and an income-only
+   * category has no bills to pay — `isSettled` is false for it by design, so
+   * including it made a fully-settled board read "0 of 1" with nothing the user
+   * could ever do about it. An empty category is skipped for the same reason.
+   */
+  let countable = 0;
+
   for (const summary of summaries) {
     planned += summary.totalMinor;
     funded += summary.fundedMinor;
     paid += summary.paidMinor;
+    if (summary.subcategoryCount > 0) countable += 1;
     if (summary.isSettled) settled += 1;
     if (summary.isFullyFunded) fullyFunded += 1;
   }
@@ -263,7 +274,7 @@ export function summariseBoard(summaries: readonly CategorySummary[]): BoardTota
     fundedMinor: funded,
     paidMinor: paid,
     outstandingMinor: planned - paid,
-    categoryCount: summaries.length,
+    categoryCount: countable,
     settledCategoryCount: settled,
     fullyFundedCategoryCount: fullyFunded,
   };

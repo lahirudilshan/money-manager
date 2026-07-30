@@ -36,6 +36,28 @@ export async function canAuthenticate(): Promise<boolean> {
 }
 
 /**
+ * What the device would actually ask for — "Face ID", "Touch ID", or "" when
+ * nothing is enrolled. Used to label the App Lock setting with the one method
+ * the user will see, rather than listing every possibility on every device.
+ */
+export async function describeBiometric(): Promise<string> {
+  const mod = loadModule();
+  if (!mod) return '';
+
+  try {
+    if (!(await canAuthenticate())) return '';
+    const types = await mod.supportedAuthenticationTypesAsync();
+
+    if (types.includes(mod.AuthenticationType.FACIAL_RECOGNITION)) return 'Face ID';
+    if (types.includes(mod.AuthenticationType.FINGERPRINT)) return 'Touch ID';
+    if (types.includes(mod.AuthenticationType.IRIS)) return 'Iris';
+    return 'Biometrics';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Prompt for biometric (or passcode) confirmation. Returns true on success. If
  * the module is missing or the device has nothing enrolled, returns true so the
  * app stays usable — callers that must hard-block should check

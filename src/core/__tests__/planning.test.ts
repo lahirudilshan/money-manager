@@ -8,6 +8,7 @@ import {
   effectiveAmount,
   formatPeriod,
   isPaid,
+  isSpend,
   isPlanExpiringSoon,
   monthsBetween,
   nextStatus,
@@ -687,5 +688,81 @@ describe('planHealth', () => {
 
   it('reports unknown rather than healthy for a plan with no income but no spend', () => {
     expect(planHealth({ incomeMinor: 0, freePct: 0, disposableMinor: 0 })).toBe('unknown');
+  });
+});
+
+/**
+ * The income/expense split. Both bugs where a salary was reported as an overdue
+ * bill, and where it inflated "still to pay", came from a caller iterating
+ * lines without applying this.
+ */
+describe('isSpend', () => {
+  const line = (type?: 'income' | 'expense'): PlannedCategory => ({
+    id: 'l1',
+    name: 'Line',
+    plannedMinor: toMinor(600),
+    status: 'pending',
+    type,
+  });
+
+  it('treats an income line as money arriving, not spend', () => {
+    expect(isSpend(line('income'))).toBe(false);
+  });
+
+  it('treats an expense line as spend', () => {
+    expect(isSpend(line('expense'))).toBe(true);
+  });
+
+  it('defaults an untyped line to spend, matching older rows', () => {
+    expect(isSpend(line())).toBe(true);
+  });
+
+  it('keeps an income line out of a category total but in its income figure', () => {
+    // The category card reads LKR 0 for an income-only category — which is what
+    // made the "1 overdue" badge beside it visibly wrong.
+    const summary = summariseCategory([line('income')], 0);
+    expect(summary.totalMinor).toBe(0);
+    expect(summary.incomeMinor).toBe(toMinor(600));
+    expect(summary.counts).toEqual({ pending: 0, paid: 0 });
+  });
+});
+
+/**
+ * "Categories settled 0 of N" on the dashboard. The denominator must only count
+ * categories that actually have bills, or a board whose every bill is paid still
+ * reads as unsettled because of an income-only category beside them.
+ */
+describe('summariseBoard category count', () => {
+  const income: PlannedCategory = {
+    id: 'salary',
+    name: 'Salary',
+    plannedMinor: toMinor(600),
+    status: 'pending',
+    type: 'income',
+  };
+
+  it('excludes an income-only category from the denominator', () => {
+    const board = summariseBoard([
+      summariseCategory([income], 0),
+      summariseCategory([cat(1_000, 'paid')], 0),
+    ]);
+    expect(board.categoryCount).toBe(1);
+    expect(board.settledCategoryCount).toBe(1);
+  });
+
+  it('excludes an empty category too', () => {
+    const board = summariseBoard([summariseCategory([], 0), summariseCategory([cat(500)], 0)]);
+    expect(board.categoryCount).toBe(1);
+  });
+
+  it('reads 0 of 0 for a board holding only income', () => {
+    const board = summariseBoard([summariseCategory([income], 0)]);
+    expect(board.categoryCount).toBe(0);
+    expect(board.settledCategoryCount).toBe(0);
+  });
+
+  it('still counts a category that mixes income with real bills', () => {
+    const board = summariseBoard([summariseCategory([income, cat(1_000)], 0)]);
+    expect(board.categoryCount).toBe(1);
   });
 });

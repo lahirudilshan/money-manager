@@ -1,13 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, T } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { syncCategoryReminders, unavailableReason } from '../../src/services/notifications';
-import { confirmWithBiometrics } from '../../src/services/biometrics';
+import { PinPad } from '../../src/components/PinPad';
+import { SMART_DETECT_NAME } from '../../src/components/SmartDetectBadge';
+import { canUse, inheritedPerks, planById, PLANS, type Perk } from '../../src/core/plans';
+import { clearPin, setPin } from '../../src/services/appPin';
+import { confirmWithBiometrics, describeBiometric } from '../../src/services/biometrics';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -15,7 +20,6 @@ import {
 } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
-const CONFIRM_WORD = 'DELETE';
 
 /** Currencies offered, with a symbol and full name for the richer picker. */
 const CURRENCIES: { code: string; symbol: string; name: string; flag: string }[] = [
@@ -50,8 +54,6 @@ export default function SettingsScreen() {
   const views = useMemo(() => selectCategoryViews(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [confirmText, setConfirmText] = useState('');
   const [clearing, setClearing] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [rateOpen, setRateOpen] = useState(false);
@@ -59,6 +61,17 @@ export default function SettingsScreen() {
   const [syncing, setSyncing] = useState(false);
   const [currencyOpen, setCurrencyOpen] = useState(false);
   const [currencyQuery, setCurrencyQuery] = useState('');
+  /** Which PIN flow is open: setting one to enable the lock, or changing it. */
+  const [pinSetup, setPinSetup] = useState<PinPurpose | null>(null);
+  const [plansOpen, setPlansOpen] = useState(false);
+  /** "Face ID" / "Touch ID" / "" — drives the App Lock row's subtitle. */
+  const [biometricLabel, setBiometricLabel] = useState('');
+
+  // Name the enrolled biometric so the row says what will actually be asked
+  // for, rather than listing every possibility on every device.
+  useEffect(() => {
+    void describeBiometric().then(setBiometricLabel);
+  }, []);
   const [themeOpen, setThemeOpen] = useState(false);
   const [fetchingRate, setFetchingRate] = useState(false);
 
@@ -139,38 +152,72 @@ export default function SettingsScreen() {
     );
   }
 
+  /**
+   * Turn App Lock on only once there is a way back in.
+   *
+   * A PIN is always required, even on a phone with Face ID: biometrics fail —
+   * wet hands, a mask, a failed re-enrolment — and without a fallback the lock
+   * screen would be a dead end, with the switch to undo it sitting behind that
+   * same screen. So enabling always routes through PIN setup, and the lock is
+   * only switched on once the PIN is stored.
+   *
+   * Turning it *off* is deliberately not gated: someone who has already unlocked
+   * the app to reach this screen has cleared the bar the lock sets. The PIN is
+   * cleared with it rather than left in the keystore.
+   */
+  async function enableAppLock(next: boolean) {
+    if (!next) {
+      state.setAppLockEnabled(false);
+      await clearPin();
+      return;
+    }
+
+    setPinSetup('enable');
+  }
+
+  /** Called by the PIN sheet once a PIN is confirmed and stored. */
+  function onPinStored(purpose: PinPurpose) {
+    if (purpose === 'enable') state.setAppLockEnabled(true);
+    setPinSetup(null);
+  }
+
+  /**
+   * Confirm once, verify it is really the device's owner, then wipe.
+   *
+   * The type-DELETE step this replaces was a third hurdle on top of the alert
+   * and Face ID, and it guarded nothing the biometric check does not: anyone who
+   * can pass Face ID can also type six letters. The prompt is the deliberate
+   * pause; the biometric is the actual gate.
+   */
   function beginClear() {
+    // The wipe is async and the row stays tappable while it runs; without this a
+    // second tap would open a second alert over an in-flight reset.
+    if (clearing) return;
+
     Alert.alert(
-      'Clear all data?',
-      'This permanently deletes every card, category, subcategory, income, loan, and history on this device. This cannot be undone.',
+      'Erase everything?',
+      'This permanently deletes every account, category, bill, income, loan, and all history on this device. It cannot be undone, and you will start again from setup.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Continue',
+          text: 'Erase',
           style: 'destructive',
           onPress: async () => {
-            // Gate the destructive path behind Face ID / passcode before even
-            // showing the type-to-confirm step.
-            const ok = await confirmWithBiometrics('Confirm it is you to clear all data');
-            if (ok) setConfirmOpen(true);
+            const ok = await confirmWithBiometrics('Confirm it is you to erase all data');
+            if (!ok) return;
+            await confirmClear();
           },
         },
       ],
     );
   }
 
-  function closeConfirm() {
-    if (clearing) return;
-    setConfirmOpen(false);
-    setConfirmText('');
-  }
-
   async function confirmClear() {
     setClearing(true);
     try {
+      // Flips `needsOnboarding`, which the root layout watches — the app routes
+      // itself back to the setup flow once this resolves.
       await resetAllData();
-      setConfirmOpen(false);
-      setConfirmText('');
     } catch (error) {
       Alert.alert('Could not clear data', error instanceof Error ? error.message : String(error));
     } finally {
@@ -219,13 +266,26 @@ export default function SettingsScreen() {
           />
         </Section>
 
+        {/* Plan — what the current tier is, and what the other one offers. */}
+        <Section title="YOUR PLAN">
+          <SettingRow
+            icon={state.plan === 'premium' ? 'sparkles' : 'person-outline'}
+            color={colors.accent}
+            title={planById(state.plan).name}
+            subtitle={planById(state.plan).tagline}
+            valueLabel={state.plan === 'premium' ? 'Active' : 'Free'}
+            onPress={() => setPlansOpen(true)}
+          />
+        </Section>
+
         {/* Automation — the SMS → draft pipeline setup guide. */}
         <Section title="AUTOMATION">
           <SettingRow
             icon="chatbox-ellipses-outline"
             color={colors.accent}
-            title="Auto-detect transactions"
+            title={SMART_DETECT_NAME}
             subtitle="Turn incoming bank SMS into drafts"
+            valueLabel={canUse(state.plan, 'smartDetect') ? undefined : 'Premium'}
             onPress={() => router.push('/settings/sms-automation')}
           />
         </Section>
@@ -286,6 +346,37 @@ export default function SettingsScreen() {
           />
         </Section>
 
+        <Section title="SECURITY" note="Locks the app when it is opened or resumed.">
+          <ToggleRow
+            icon="lock-closed-outline"
+            color={colors.completed}
+            title="App lock"
+            subtitle={
+              state.appLockEnabled
+                ? biometricLabel
+                  ? `${biometricLabel} or your PIN`
+                  : 'Your PIN'
+                : 'Require unlocking before the app opens'
+            }
+            value={state.appLockEnabled}
+            // The handler prompts, so it is async; the Switch wants a void
+            // callback. The store update it performs re-renders the row.
+            onValueChange={(next) => void enableAppLock(next)}
+          />
+          {state.appLockEnabled ? (
+            <>
+              <Divider />
+              <SettingRow
+                icon="keypad-outline"
+                color={colors.accent}
+                title="Change PIN"
+                subtitle="The 4 digits used when unlocking fails"
+                onPress={() => setPinSetup('change')}
+              />
+            </>
+          ) : null}
+        </Section>
+
         {__DEV__ ? (
           <Section title="DEVELOPER" note="Only visible in dev builds.">
             <SettingRow
@@ -320,6 +411,16 @@ export default function SettingsScreen() {
           </T>
         </View>
       </ScrollView>
+
+      {plansOpen ? <PlansSheet onClose={() => setPlansOpen(false)} /> : null}
+
+      {pinSetup ? (
+        <PinSetupSheet
+          purpose={pinSetup}
+          onClose={() => setPinSetup(null)}
+          onStored={onPinStored}
+        />
+      ) : null}
 
       {/* USD exchange-rate editor — a bottom sheet with a live rate display, a
           one-tap fetch, and a conversion preview. */}
@@ -512,57 +613,6 @@ export default function SettingsScreen() {
       </BottomSheet>
 
       {/* Clear-all confirmation. */}
-      <BottomSheet
-        visible={confirmOpen}
-        onClose={closeConfirm}
-        title="Last check"
-        eyebrow="Erase all data"
-        icon="warning-outline"
-        iconColor={colors.danger}
-        footer={
-          <Row gap={space.sm}>
-            <Button
-              label="Cancel"
-              variant="secondary"
-              onPress={closeConfirm}
-              disabled={clearing}
-              style={{ flex: 1 }}
-            />
-            <Button
-              label="Erase everything"
-              variant="danger"
-              icon="trash-outline"
-              onPress={confirmClear}
-              disabled={confirmText.trim().toUpperCase() !== CONFIRM_WORD}
-              loading={clearing}
-              style={{ flex: 1 }}
-            />
-          </Row>
-        }
-      >
-        <T variant="small" tone="secondary">
-          Type {CONFIRM_WORD} to erase everything on this device. This can&apos;t be undone.
-        </T>
-
-        <TextInput
-          value={confirmText}
-          onChangeText={setConfirmText}
-          placeholder={CONFIRM_WORD}
-          placeholderTextColor={colors.inkMuted}
-          autoCapitalize="characters"
-          autoCorrect={false}
-          editable={!clearing}
-          style={{
-            borderWidth: 1,
-            borderColor: colors.hairlineStrong,
-            borderRadius: 10,
-            paddingHorizontal: space.md,
-            paddingVertical: 12,
-            color: colors.ink,
-            fontSize: 16,
-          }}
-        />
-      </BottomSheet>
     </>
   );
 }
@@ -570,6 +620,320 @@ export default function SettingsScreen() {
 
 
 /** A setting row with a native on/off switch instead of a chevron. */
+/**
+ * The plans on offer, and which one is active.
+ *
+ * Both tiers are shown side by side rather than only the upsell: a user on
+ * Premium should be able to see what they are paying for, and one on Free
+ * should see what they already have before what they don't.
+ */
+function PlansSheet({ onClose }: { onClose: () => void }) {
+  const { colors, radius, space } = useTheme();
+  const state = useAppStore();
+
+  return (
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title="Plans"
+      eyebrow="Money Manager"
+      icon="pricetags-outline"
+      iconColor={colors.accent}
+      scroll
+    >
+      {PLANS.map((plan) => {
+        const active = plan.id === state.plan;
+        const paid = plan.perks.length > 0 && plan.price !== '';
+        const inherited = inheritedPerks(plan.id);
+
+        return (
+          <View
+            key={plan.id}
+            style={{
+              borderRadius: radius.lg,
+              overflow: 'hidden',
+              borderWidth: paid ? 0 : 1,
+              borderColor: colors.hairline,
+              backgroundColor: colors.surface,
+            }}
+          >
+            {/* The paid tier wears the brand gradient as a header so it reads as
+                the upgrade at a glance, rather than as a second identical card
+                the user has to compare line by line. */}
+            {paid ? (
+              <LinearGradient
+                colors={[colors.gradientStart, colors.gradientEnd]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{ padding: space.lg, gap: space.sm }}
+              >
+                <Row justify="space-between" align="center">
+                  <Row gap={6}>
+                    <Ionicons name="sparkles" size={15} color="#FFFFFF" />
+                    <T variant="heading" color="#FFFFFF">
+                      {plan.name}
+                    </T>
+                  </Row>
+                  {active ? <CurrentPill onDark /> : null}
+                </Row>
+                <T variant="small" color="rgba(255,255,255,0.85)">
+                  {plan.tagline}
+                </T>
+                <Row gap={4} align="baseline">
+                  <T variant="display" color="#FFFFFF">
+                    {plan.price}
+                  </T>
+                  <T variant="small" color="rgba(255,255,255,0.8)">
+                    {plan.period}
+                  </T>
+                </Row>
+              </LinearGradient>
+            ) : (
+              <View style={{ padding: space.lg, gap: space.sm }}>
+                <Row justify="space-between" align="center">
+                  <T variant="heading">{plan.name}</T>
+                  {active ? <CurrentPill /> : null}
+                </Row>
+                <T variant="small" tone="muted">
+                  {plan.tagline}
+                </T>
+                <T variant="display">Free</T>
+              </View>
+            )}
+
+            <View style={{ padding: space.lg, gap: space.md }}>
+              {/* A paid tier leads with what it adds, tinted and ticked in the
+                  accent, so the reason to upgrade is the first thing read. */}
+              {paid ? (
+                <T variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+                  WHAT YOU GET
+                </T>
+              ) : null}
+
+              {plan.perks.map((perk) => (
+                <PerkRow key={perk.label} perk={perk} highlighted={paid} />
+              ))}
+
+              {/* Inherited perks, so the upgrade reads as "everything you
+                  already have, plus the above" rather than a rival list. */}
+              {inherited.length > 0 ? (
+                <>
+                  <Divider />
+                  <T variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+                    EVERYTHING IN FREE
+                  </T>
+                  {inherited.map((perk) => (
+                    <PerkRow key={perk.label} perk={perk} muted />
+                  ))}
+                </>
+              ) : null}
+
+              {!active ? (
+                <Button
+                  label={plan.id === 'free' ? 'Switch to Free' : `Get ${plan.name}`}
+                  variant={plan.id === 'free' ? 'secondary' : 'primary'}
+                  icon={plan.id === 'free' ? undefined : 'sparkles'}
+                  onPress={() => {
+                    state.setPlan(plan.id);
+                    onClose();
+                  }}
+                />
+              ) : null}
+            </View>
+          </View>
+        );
+      })}
+
+      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+        Billing is not connected yet — switching here changes the plan on this device only.
+      </T>
+    </BottomSheet>
+  );
+}
+
+/** "CURRENT" marker on whichever plan is active. */
+function CurrentPill({ onDark }: { onDark?: boolean }) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <View
+      style={{
+        paddingHorizontal: space.sm,
+        paddingVertical: 2,
+        borderRadius: radius.pill,
+        backgroundColor: onDark ? 'rgba(255,255,255,0.25)' : colors.accentSoft,
+      }}
+    >
+      <T
+        variant="caption"
+        color={onDark ? '#FFFFFF' : colors.accent}
+        style={{ fontWeight: '800' }}
+      >
+        CURRENT
+      </T>
+    </View>
+  );
+}
+
+/**
+ * One perk line. Three weights: highlighted for a paid tier's own additions,
+ * plain for a free tier's, muted for ones inherited from below.
+ */
+function PerkRow({
+  perk,
+  highlighted,
+  muted,
+}: {
+  perk: Perk;
+  highlighted?: boolean;
+  muted?: boolean;
+}) {
+  const { colors, space } = useTheme();
+  return (
+    <Row gap={space.sm} align="flex-start">
+      <Ionicons
+        name={highlighted ? 'sparkles' : 'checkmark-circle'}
+        size={16}
+        color={highlighted ? colors.accent : muted ? colors.inkMuted : colors.completed}
+      />
+      <View style={{ flex: 1, gap: 1 }}>
+        <T
+          variant="small"
+          tone={muted ? 'muted' : 'ink'}
+          style={{ fontWeight: highlighted ? '700' : '500' }}
+        >
+          {perk.label}
+        </T>
+        {perk.detail && !muted ? (
+          <T variant="caption" tone="muted">
+            {perk.detail}
+          </T>
+        ) : null}
+      </View>
+    </Row>
+  );
+}
+
+/** Why the PIN sheet is open — decides the copy and what happens on success. */
+type PinPurpose = 'enable' | 'change';
+
+/**
+ * Set or change the unlock PIN: enter four digits, then enter them again.
+ *
+ * The confirm step is not ceremony — this PIN may be the only way back into the
+ * app, and a typo during a one-shot entry would lock the user out of their own
+ * data with no recovery path.
+ */
+function PinSetupSheet({
+  purpose,
+  onClose,
+  onStored,
+}: {
+  purpose: PinPurpose;
+  onClose: () => void;
+  onStored: (purpose: PinPurpose) => void;
+}) {
+  const { colors, space } = useTheme();
+  const [first, setFirst] = useState<string | null>(null);
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleComplete(entered: string) {
+    // First pass: remember it and ask again.
+    if (first === null) {
+      setFirst(entered);
+      setValue('');
+      return;
+    }
+
+    if (entered !== first) {
+      setError('PINs did not match');
+      setFirst(null);
+      setValue('');
+      return;
+    }
+
+    const stored = await setPin(entered);
+    if (!stored) {
+      setError('Could not save the PIN');
+      setFirst(null);
+      setValue('');
+      return;
+    }
+    onStored(purpose);
+  }
+
+  return (
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title={purpose === 'enable' ? 'Set a PIN' : 'Change PIN'}
+      eyebrow="App lock"
+      icon="keypad-outline"
+      iconColor={colors.accent}
+    >
+      <View style={{ alignItems: 'center', gap: space.lg, paddingVertical: space.md }}>
+        {/* Two dashes marking which pass this is. The pad's own dots track the
+            digits, so without this the second screen looks identical to the
+            first and a mismatch feels like the app lost the entry. */}
+        <Row gap={6}>
+          {[0, 1].map((step) => {
+            const current = first === null ? 0 : 1;
+            return (
+              <View
+                key={step}
+                style={{
+                  width: step === current ? 22 : 8,
+                  height: 4,
+                  borderRadius: 2,
+                  backgroundColor: step <= current ? colors.accent : colors.hairlineStrong,
+                }}
+              />
+            );
+          })}
+        </Row>
+
+        <View style={{ gap: 4, alignItems: 'center' }}>
+          <T variant="bodyStrong">
+            {first === null ? 'Choose four digits' : 'Enter them again'}
+          </T>
+          <T variant="caption" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
+            {first === null
+              ? 'You will need these if Face ID or Touch ID cannot be used.'
+              : 'Confirming catches a typo before it locks you out.'}
+          </T>
+        </View>
+
+        <PinPad
+          value={value}
+          onChange={(next) => {
+            setValue(next);
+            if (error) setError(null);
+          }}
+          onComplete={(entered) => void handleComplete(entered)}
+          error={error}
+        />
+
+        {/* An escape from the second pass without dismissing the whole sheet. */}
+        {first !== null ? (
+          <Pressable
+            onPress={() => {
+              setFirst(null);
+              setValue('');
+              setError(null);
+            }}
+            accessibilityRole="button"
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+              Start over
+            </T>
+          </Pressable>
+        ) : null}
+      </View>
+    </BottomSheet>
+  );
+}
+
 function ToggleRow({
   icon,
   color,

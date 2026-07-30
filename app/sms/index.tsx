@@ -59,10 +59,10 @@ export default function SmsIntakeScreen() {
 
         if (best) ingestSmsText(best);
 
-        // Drop the cached launch URL so returning to this route later cannot
-        // re-ingest the same message (the store dedupes too, but not across a
-        // confirm-then-revisit, which would resurrect a handled draft).
-        Linking.clearInitialURL();
+        // Deliberately NOT calling `Linking.clearInitialURL()` here: the root
+        // layout reads the same launch URL for the cold-start case, and whoever
+        // ran first would blank it for the other. The store's raw-text dedupe
+        // already stops the two paths from queueing the message twice.
       })
       .catch(() => {
         // A failed URL read must never strand the user on a spinner.

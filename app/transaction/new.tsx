@@ -6,6 +6,7 @@ import { AccountField } from '../../src/components/AccountPicker';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
 import { DatePickerField } from '../../src/components/DatePickerField';
 import { ImageUploader } from '../../src/components/ImageUploader';
+import { ManagePlanSheet } from '../../src/components/ManagePlanSheet';
 import { StatusToggle } from '../../src/components/StatusToggle';
 import { AmountField } from '../../src/components/forms';
 import { BottomSheet, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
@@ -56,6 +57,7 @@ export default function NewTransactionScreen() {
   const [imageUri, setImageUri] = useState<string | null>(null);
 
   const [newSheetOpen, setNewSheetOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
 
   const creatingNew = subcategoryId === '__new__';
 
@@ -230,10 +232,10 @@ export default function NewTransactionScreen() {
         selectedId={subcategoryId}
         onSelect={selectLine}
         extraTile={{
-          label: 'New category',
-          icon: 'add',
-          selected: creatingNew,
-          onPress: () => setNewSheetOpen(true),
+          label: 'Manage',
+          icon: 'options-outline',
+          selected: false,
+          onPress: () => setManageOpen(true),
         }}
       />
 
@@ -267,6 +269,10 @@ export default function NewTransactionScreen() {
           <Ionicons name="pencil" size={15} color={colors.accent} />
         </Pressable>
       ) : null}
+
+      {/* The grid's trailing tile opens the plan editor: add, rename or delete
+          categories and their bills without leaving the half-filled form. */}
+      <ManagePlanSheet visible={manageOpen} onClose={() => setManageOpen(false)} />
 
       {/* Naming the line and choosing its home category, in a sheet rather
           than inline: it is a side quest off the main "log a transaction"

@@ -1,51 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(sed -i '' 's|<Label>STEP 1 OF 3</Label>|<Label>STEP 1 OF 4</Label>|' app/onboarding/index.tsx)",
-      "Bash(sed -i '' 's|<Label>STEP 2 OF 3</Label>|<Label>STEP 2 OF 4</Label>|' app/onboarding/categories.tsx)",
-      "Bash(sed -i '' 's|<Label>STEP 3 OF 3</Label>|<Label>STEP 3 OF 4</Label>|' app/onboarding/plan.tsx)",
-      "Bash(node -e ' *)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8081/status)",
-      "Bash(defaults write *)",
-      "Bash(osascript -e 'tell application \"Simulator\" to activate' -e 'delay 0.5' -e 'tell application \"System Events\" to tell process \"Simulator\" to get position of window 1' -e 'tell application \"System Events\" to tell process \"Simulator\" to get size of window 1')",
-      "Bash(awk '/return \\\\\\(/{p=1} p&&/KeyboardAvoidingView|behavior|<View style|SheetHeader|<ScrollView|style=\\\\{\\\\{ flex: 1|contentContainerStyle|paddingTop:|<\\\\/ScrollView>|<PinnedFooter|GradientButton/{print NR\": \"$0}' app/transaction/new.tsx)",
-      "Bash(awk '/return \\\\\\(/{p=1} p&&/KeyboardAvoidingView|behavior|<View style|SheetHeader|<ScrollView|style=\\\\{\\\\{ flex: 1|contentContainerStyle|paddingTop:|<\\\\/ScrollView>|<PinnedFooter|GradientButton/{print NR\": \"$0}' app/sms/new.tsx)",
-      "Bash(osascript -e 'tell application \"Simulator\" to activate')",
-      "Bash(osascript -e 'tell application \"System Events\" to keystroke \"k\" using command down')",
-      "Bash(curl -s \"http://localhost:8081/reload\")",
-      "Bash(node -e 'console.log\\(encodeURIComponent\\(process.argv[1]\\)\\)' 'LKR 9,500.00 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 12:08 at CEYLON ELECTRICITY BOARD 1987. Avl Bal 176,988.43')",
-      "Bash(which claude *)",
-      "Read(//opt/homebrew/bin/**)",
-      "Bash(yarn typecheck)",
-      "Bash(yarn test *)",
-      "Bash(yarn test)",
-      "Bash(xcrun simctl io *)",
-      "Bash(xcrun simctl openurl *)",
-      "Bash(xcrun simctl list *)",
-      "Bash(sed -n *)",
-      "Bash(grep *)",
-      "Bash(rg *)",
-      "Bash(head *)",
-      "Bash(tail *)",
-      "Bash(cat *)",
-      "Bash(ls *)",
-      "Bash(wc *)",
-      "Bash(find *)",
-      "Bash(awk *)",
-      "Bash(diff *)",
-      "Bash(file *)",
-      "Bash(which *)",
-      "Bash(pwd)",
-      "Bash(tree *)",
-      "Bash(git status *)",
-      "Bash(git diff *)",
-      "Bash(git log *)",
-      "Bash(git show *)",
-      "Bash(git branch *)",
-      "Bash(npx tsc --noEmit *)",
-      "Bash(npx tsc --noEmit)",
-      "Bash(npx vitest run *)",
-      "Bash(npx vitest run)"
-    ]
+      "Bash(*)",
+      "Read(*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(sudo *)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)"
+    ],
+    "defaultMode": "default"
   }
 }

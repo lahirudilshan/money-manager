@@ -15,15 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
-import { DayPicker } from '../../src/components/DayPicker';
-import {
-  emptySavingPlanDraft,
-  SavingPlanFields,
-  toSavingPlanPatch,
-  type SavingPlanDraft,
-} from '../../src/components/SavingPlanFields';
-import { AmountField, Field, FrequencyPicker } from '../../src/components/forms';
-import type { SubcategoryFrequency } from '../../src/db/schema';
+import { BillFields, useBillDraft } from '../../src/components/BillFields';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import {
   BottomSheet,
@@ -42,6 +34,7 @@ import {
   effectiveAmount,
   formatPeriod,
   isFlexibleDueDay,
+  isSpend,
   monthlyAmount,
   planHealth,
   resolveCardId,
@@ -443,6 +436,12 @@ function computePlanInsights(views: CategoryView[], period: string): PlanInsight
     // Category-level over-budget: sum of actuals beyond their planned amounts.
     let catOver = 0;
     for (const line of view.subcategories) {
+      // Income lines are money arriving, not a bill to settle. Counting them
+      // here reported a salary as "1 overdue" and inflated "still to pay" by
+      // its amount — the same exclusion `summariseCategory` already applies,
+      // which is why the category itself correctly read LKR 0.
+      if (!isSpend(line)) continue;
+
       if (line.actualMinor != null && line.actualMinor > line.plannedMinor) {
         catOver += line.actualMinor - line.plannedMinor;
       }
@@ -1378,65 +1377,19 @@ function AddSubcategorySheet({
   const insets = useSafeAreaInsets();
   const state = useAppStore();
 
-  const [name, setName] = useState('');
-  const [amount, setAmount] = useState('');
-  const [dueDay, setDueDay] = useState(1);
-  const [frequency, setFrequency] = useState<SubcategoryFrequency>('monthly');
-  /**
-   * Which account this bill is paid from. Seeded with the category's own
-   * account so the field shows the right answer on open — a bill in "Food" is
-   * paid from Food's account unless the user says otherwise — rather than an
-   * empty "choose" the user has to fill in every single time.
-   */
-  const [cardId, setCardId] = useState<string | null>(category?.cardId ?? null);
-  const [plan, setPlan] = useState<SavingPlanDraft>(emptySavingPlanDraft);
-
-  const openFor = category?.id ?? null;
-  React.useEffect(() => {
-    if (openFor) {
-      setName('');
-      setAmount('');
-      setDueDay(category?.dueDay ?? 1);
-      setFrequency('monthly');
-      // Default to the category's linked account for each newly-opened sheet.
-      setCardId(category?.cardId ?? null);
-      setPlan(emptySavingPlanDraft);
-    }
-  }, [openFor, category?.dueDay, category?.cardId]);
-
-  const unplanned = frequency === 'unplanned';
-  // Saving plans belong only to yearly bills (same rule as everywhere else).
-  const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
-  // With a saving plan the monthly set-aside *is* the planned amount. Otherwise
-  // (including unplanned bills) the entered amount seeds the planned figure —
-  // for unplanned it's an optional starting amount; entries add on top of it.
-  const plannedMinor = planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
-  const canAdd =
-    Boolean(name.trim()) && (frequency !== 'yearly' || !plan.enabled || planPatch !== null);
+  // Re-seeded each time the sheet opens for a different category, so a draft
+  // abandoned in one never appears in the next.
+  const draft = useBillDraft({
+    categoryDueDay: category?.dueDay,
+    categoryCardId: category?.cardId,
+    resetKey: category?.id ?? null,
+  });
 
   function handleAdd() {
-    const trimmed = name.trim();
-    if (!trimmed || !category || !canAdd) return;
-    state.addSubcategory({
-      name: trimmed,
-      categoryId: category.id,
-      plannedMinor,
-      dueDay,
-      frequency,
-      // The picker shows the category's account as a pre-filled default, but
-      // accepting it is not an override: store null so the bill keeps
-      // *inheriting*, and later changing the category's account still moves it.
-      cardId: cardId === category.cardId ? null : cardId,
-      planTargetMinor: planPatch?.planTargetMinor ?? null,
-      planDueDate: planPatch?.planDueDate ?? null,
-      planStartDate: planPatch?.planStartDate ?? null,
-    });
+    if (!category || !draft.canSave) return;
+    state.addSubcategory({ ...draft.toPatch(), categoryId: category.id });
     onClose();
   }
-
-  // The account this bill will actually draw from, for the "uses category
-  // default" hint when nothing is overridden.
-  const effectiveCardId = resolveCardId(cardId, category?.cardId);
 
   return (
     <BottomSheet
@@ -1452,79 +1405,13 @@ function AddSubcategorySheet({
           label="Add bill"
           icon="add"
           onPress={handleAdd}
-          disabled={!canAdd}
+          disabled={!draft.canSave}
         />
       }
     >
-              {/* Amount hero. With a saving plan (yearly) the monthly figure is
-                  derived and shown read-only. Otherwise the amount is entered —
-                  for an unplanned bill it's an optional starting amount (entries
-                  add on top), so it's labelled as such. */}
-              {plan.enabled && frequency === 'yearly' ? (
-                // Saving plan: the monthly figure is derived, shown read-only.
-                <View style={{ alignItems: 'center', gap: 4 }}>
-                  <Label>MONTHLY SET-ASIDE</Label>
-                  <Row gap={space.xs} align="center">
-                    <T variant="title" tone="muted">
-                      {state.currency}
-                    </T>
-                    <T style={{ fontSize: 42, fontWeight: '800', letterSpacing: -1.2, color: planPatch ? colors.ink : colors.inkMuted }}>
-                      {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
-                    </T>
-                  </Row>
-                </View>
-              ) : (
-                <AmountField
-                  label={unplanned ? 'Starting amount (optional)' : 'Amount'}
-                  value={amount}
-                  onChangeText={setAmount}
-                  currency={state.currency}
-                  autoFocus
-                />
-              )}
-
-              <Field
-                label="What is it?"
-                value={name}
-                onChangeText={setName}
-                placeholder="e.g. Rent, Electricity, Netflix"
-              />
-
-              {/* Paid from — override the category's account for this bill,
-                  using the shared account picker. Null = the category default. */}
-              {state.cards.length > 0 ? (
-                <View style={{ gap: 4 }}>
-                  <AccountField
-                    label="Paid from"
-                    cards={state.cards}
-                    selectedId={cardId}
-                    onSelect={setCardId}
-                    allowNone
-                  />
-                  <T variant="caption" tone="muted">
-                    {cardId && cardId === category?.cardId
-                      ? `${category?.name}’s account, filled in for you — change it if this bill is paid from another.`
-                      : 'Change it if this bill is paid from a different account.'}
-                  </T>
-                </View>
-              ) : null}
-
-              {/* Frequency — shared picker (includes unplanned for bills). */}
-              <FrequencyPicker
-                label="How often?"
-                value={frequency}
-                onChange={setFrequency}
-                includeUnplanned
-              />
-
-              {/* Payment day — not applicable to unplanned bills. */}
-              {!unplanned ? <DayPicker value={dueDay} onChange={setDueDay} /> : null}
-
-              {/* Saving plan — yearly bills only (a big amount due later,
-                  collected monthly), matching the rest of the app. */}
-              {frequency === 'yearly' ? (
-                <SavingPlanFields draft={plan} onChange={setPlan} />
-              ) : null}
+      {/* Shared with the grid picker's manage sheet, so a bill describes the
+          same things wherever it is created. */}
+      <BillFields draft={draft} cards={state.cards} category={category} amountAutoFocus />
     </BottomSheet>
   );
 }

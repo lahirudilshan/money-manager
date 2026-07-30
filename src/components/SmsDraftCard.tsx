@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { shortWhen } from '../core/dates';
 import { formatMoney } from '../core/money';
 import { HINT_META } from '../core/smsCategoryHints';
@@ -85,6 +86,8 @@ export function SmsDraftCard({
   // merchant fallback below, where it is the only name we have.
 
   return (
+    /* A plain hairline: the gradient edge belongs to the section that groups
+       these rows, not to each row inside it. */
     <View
       style={{
         borderRadius: radius.lg,
@@ -205,7 +208,7 @@ export function SmsDraftCard({
           onPress={onOpen}
         />
         {/* `confirmDraft` needs a subcategory, so an uncategorised draft opens
-            the picker instead of committing — the arrow icon marks that this one
+            the picker instead of committing — the arrow marks that this one
             leads somewhere rather than finishing the job. */}
         <CardAction
           label="Yes, log this"
@@ -352,7 +355,61 @@ function CardAction({
 }) {
   const { colors, radius, space } = useTheme();
   const isPrimary = variant === 'primary';
-  const fg = isPrimary ? colors.accent : colors.inkSecondary;
+
+  const body = (fg: string) => (
+    <>
+      <Ionicons name={icon} size={14} color={fg} />
+      <T variant="caption" color={fg} numberOfLines={1} style={{ fontWeight: '700' }}>
+        {label}
+      </T>
+    </>
+  );
+
+  const layout = {
+    flex: 1,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 5,
+    // 36 stays inside the 44pt touch target because the card's own padding and
+    // the body Pressable above it absorb the slop.
+    height: 36,
+    paddingHorizontal: space.sm,
+  };
+
+  /*
+   * The confirming action is filled with the Smart Detect gradient — the same
+   * pair as the badge and the card's own edge — so the button that completes a
+   * detection is visibly part of that feature rather than generic chrome.
+   *
+   * Filled rather than outlined: it is the only action here that writes
+   * anything, and beside an outlined "Wrong category" the fill is what says
+   * which one finishes the job.
+   */
+  if (isPrimary) {
+    return (
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel ?? label}
+        style={({ pressed }) => ({
+          flex: 1,
+          borderRadius: radius.sm,
+          overflow: 'hidden',
+          opacity: pressed ? 0.8 : 1,
+        })}
+      >
+        <LinearGradient
+          colors={[colors.gradientStart, colors.gradientEnd]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={layout}
+        >
+          {body('#FFFFFF')}
+        </LinearGradient>
+      </Pressable>
+    );
+  }
 
   return (
     <Pressable
@@ -360,26 +417,15 @@ function CardAction({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       style={({ pressed }) => ({
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 5,
-        // 36 stays inside the 44pt touch target because the card's own padding
-        // and the body Pressable above it absorb the slop.
-        height: 36,
-        paddingHorizontal: space.sm,
+        ...layout,
         borderRadius: radius.sm,
         borderWidth: 1,
-        borderColor: isPrimary ? colors.accent : colors.hairlineStrong,
+        borderColor: colors.hairlineStrong,
         // Only the pressed state fills, so the tap still lands visibly.
-        backgroundColor: pressed ? (isPrimary ? colors.accentSoft : colors.surfaceSunken) : 'transparent',
+        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
       })}
     >
-      <Ionicons name={icon} size={14} color={fg} />
-      <T variant="caption" color={fg} numberOfLines={1} style={{ fontWeight: '700' }}>
-        {label}
-      </T>
+      {body(colors.inkSecondary)}
     </Pressable>
   );
 }

@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, PillSelect } from '../../src/components/forms';
 import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
@@ -24,7 +23,12 @@ import {
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
-import { selectBoardTotals, selectTotalIncome, useAppStore } from '../../src/store/useAppStore';
+import {
+  selectBoardTotals,
+  selectCategoryViews,
+  selectTotalIncome,
+  useAppStore,
+} from '../../src/store/useAppStore';
 import type { Income } from '../../src/db/schema';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -32,13 +36,31 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 export default function IncomeScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
   const state = useAppStore();
 
   const total = useMemo(() => selectTotalIncome(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
   const left = total - totals.plannedMinor;
+
+  // Income typed onto the board as a category line. Onboarding writes a salary
+  // both ways, so anything the `incomes` table already declares is filtered out
+  // here — the same pairing `selectTotalIncome` skips, so this list shows
+  // exactly the lines that add to the figure above.
+  const boardIncome = useMemo(() => {
+    const declared = new Set(
+      state.incomes.map((income) => `${income.name.trim().toLowerCase()}:${income.amountMinor}`),
+    );
+    return selectCategoryViews(state).flatMap((view) =>
+      view.rawSubcategories
+        .filter(
+          (line) =>
+            line.type === 'income' &&
+            !declared.has(`${line.name.trim().toLowerCase()}:${line.plannedMinor}`),
+        )
+        .map((line) => ({ line, category: view.category })),
+    );
+  }, [state]);
 
   // null closed; '' new; an id edits that source.
   const [formId, setFormId] = useState<string | null>(null);
@@ -87,7 +109,7 @@ export default function IncomeScreen() {
           </View>
         </GradientCard>
 
-        {state.incomes.length === 0 ? (
+        {state.incomes.length === 0 && boardIncome.length === 0 ? (
           <Empty
             icon="cash-outline"
             title="No income yet"
@@ -95,7 +117,45 @@ export default function IncomeScreen() {
             actionLabel="Add income"
             onAction={() => setFormId('')}
           />
-        ) : (
+        ) : null}
+
+        {/* Income lines living on the board rather than in this table.
+            `selectTotalIncome` counts both, so listing only the table meant a
+            salary added as a board line drove the total above without appearing
+            anywhere here — and, with no table rows at all, sat under an empty
+            state that claimed there was no income. */}
+        {boardIncome.length > 0 ? (
+          <View style={{ gap: space.sm }}>
+            <Label>ON THE BOARD</Label>
+            <Surface padded={false} style={{ paddingVertical: space.xs }}>
+              {boardIncome.map((entry, index) => (
+                <View key={entry.line.id}>
+                  {index > 0 ? <Divider style={{ marginLeft: 62 }} /> : null}
+                  <ListRow
+                    leading={
+                      <Glyph
+                        icon={(entry.line.icon ?? 'trending-up') as never}
+                        color={entry.category.color}
+                      />
+                    }
+                    title={entry.line.name}
+                    subtitle={entry.category.name}
+                    trailing={
+                      <T variant="figure" color={colors.completed}>
+                        {formatMoney(entry.line.plannedMinor)}
+                      </T>
+                    }
+                    chevron
+                    onPress={() => router.push(`/subcategory/${entry.line.id}`)}
+                    accessibilityLabel={`Edit ${entry.line.name}, ${formatMoney(entry.line.plannedMinor)}`}
+                  />
+                </View>
+              ))}
+            </Surface>
+          </View>
+        ) : null}
+
+        {state.incomes.length > 0 ? (
           <View style={{ gap: space.sm }}>
             <Label>SOURCES</Label>
             <Surface padded={false} style={{ paddingVertical: space.xs }}>
@@ -123,24 +183,8 @@ export default function IncomeScreen() {
               ))}
             </Surface>
           </View>
-        )}
+        ) : null}
       </ScrollView>
-
-      {/* Fixed add button above the tab bar (and, in the modal, the keyboard). */}
-      {state.incomes.length > 0 ? (
-        <View
-          style={{
-            paddingHorizontal: space.lg,
-            paddingTop: space.sm,
-            paddingBottom: insets.bottom + space.sm,
-            borderTopWidth: 1,
-            borderTopColor: colors.hairline,
-            backgroundColor: colors.surface,
-          }}
-        >
-          <GradientButton label="Add income source" icon="add" onPress={() => setFormId('')} />
-        </View>
-      ) : null}
 
       {formId !== null ? (
         <IncomeFormModal editId={formId || null} onClose={() => setFormId(null)} />

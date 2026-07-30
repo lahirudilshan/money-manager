@@ -4502,6 +4502,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-crypto@npm:~57.0.1":
+  version: 57.0.1
+  resolution: "expo-crypto@npm:57.0.1"
+  peerDependencies:
+    expo: "*"
+  checksum: 10c0/a149bb2c6493b0beab938f7b62537f41dd6aacdfd8c1ac8ba450b4afc08074ab592edde373953941618b7b73569d6c3e271f05f247d88614e780c0c2344885a2
+  languageName: node
+  linkType: hard
+
 "expo-dev-client@npm:~57.0.7":
   version: 57.0.7
   resolution: "expo-dev-client@npm:57.0.7"
@@ -4802,6 +4811,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-secure-store@npm:~57.0.1":
+  version: 57.0.1
+  resolution: "expo-secure-store@npm:57.0.1"
+  peerDependencies:
+    expo: "*"
+  checksum: 10c0/79439f0e4e38a4668da57a0262867a558f9e37bb657d627ce8e19cb3db9a3de003eacb95f738c6dba9a1ba644bd94aab31b6e906dd87d36a911dbd00a4ea128c
+  languageName: node
+  linkType: hard
+
 "expo-server@npm:^57.0.1":
   version: 57.0.1
   resolution: "expo-server@npm:57.0.1"
@@ -4871,6 +4889,17 @@ __metadata:
   peerDependencies:
     expo: "*"
   checksum: 10c0/763ade714dfce8f989fc7dbf73ac447d26d3b0d9d5f5c04d1273f60d9a3741641f13e457a33f1dd7873f95eb97e5e01deee60b630fc8c07a07caa1e6a7d1a914
+  languageName: node
+  linkType: hard
+
+"expo-video@npm:~57.0.2":
+  version: 57.0.2
+  resolution: "expo-video@npm:57.0.2"
+  peerDependencies:
+    expo: "*"
+    react: "*"
+    react-native: "*"
+  checksum: 10c0/1a8e085791d8aa50073511dbab97a57ef5470165196944d247d62dc96e97c1b3298922a4cf4f7c0d7491fdf7e42784499d8dc51635db7b8967d31f1c85a7de93
   languageName: node
   linkType: hard
 
@@ -6086,6 +6115,7 @@ __metadata:
     drizzle-orm: "npm:^0.45.2"
     expo: "npm:~57.0.7"
     expo-constants: "npm:~57.0.6"
+    expo-crypto: "npm:~57.0.1"
     expo-dev-client: "npm:~57.0.7"
     expo-file-system: "npm:~57.0.1"
     expo-font: "npm:~57.0.1"
@@ -6096,9 +6126,11 @@ __metadata:
     expo-local-authentication: "npm:~57.0.2"
     expo-notifications: "npm:~57.0.6"
     expo-router: "npm:~57.0.7"
+    expo-secure-store: "npm:~57.0.1"
     expo-sqlite: "npm:~57.0.1"
     expo-status-bar: "npm:~57.0.1"
     expo-system-ui: "npm:~57.0.1"
+    expo-video: "npm:~57.0.2"
     react: "npm:19.2.3"
     react-dom: "npm:19.2.3"
     react-native: "npm:0.86.0"

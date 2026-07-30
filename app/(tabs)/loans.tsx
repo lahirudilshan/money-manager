@@ -13,7 +13,6 @@ import {
 import {
   BottomSheet,
   Divider,
-  Empty,
   FundingBar,
   GradientButton,
   Label,
@@ -107,13 +106,7 @@ export default function LoansScreen() {
         </Row>
 
         {views.length === 0 ? (
-          <Empty
-            icon="trending-down-outline"
-            title="No loans"
-            message="Add a loan to see its installment, interest and payoff progress."
-            actionLabel="Add a loan"
-            onAction={() => setOpen(true)}
-          />
+          <LoansEmptyState onAdd={() => setOpen(true)} />
         ) : (
           <>
             {/*
@@ -196,6 +189,110 @@ const LOAN_KIND_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
   mortgage: 'home-outline',
   other: 'ellipsis-horizontal',
 };
+
+/**
+ * First run on the Loans tab.
+ *
+ * The generic `Empty` — a grey glyph and a ghost button — says a loan can be
+ * added but nothing about why it is worth doing, and this screen is the one
+ * place in the app a user has to enter data they already know by heart from a
+ * bank statement. So it names what they get back for the typing: the three
+ * figures the loan card will show once there is one.
+ */
+function LoansEmptyState({ onAdd }: { onAdd: () => void }) {
+  const { colors, radius, space } = useTheme();
+
+  return (
+    <View style={{ gap: space.lg, paddingTop: space.xl }}>
+      <View style={{ alignItems: 'center', gap: space.md }}>
+        <View
+          style={{
+            width: 76,
+            height: 76,
+            borderRadius: 38,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.dangerSoft,
+          }}
+        >
+          <Ionicons name="trending-down" size={34} color={colors.danger} />
+        </View>
+
+        <View style={{ gap: 4, alignItems: 'center' }}>
+          <T variant="title">No loans yet</T>
+          <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
+            Add one and its monthly installment joins the plan automatically, so what you owe is
+            budgeted rather than remembered.
+          </T>
+        </View>
+      </View>
+
+      {/* What the card will show — concrete enough to be worth the typing. */}
+      <Surface style={{ gap: space.md }}>
+        <Benefit
+          icon="calendar-outline"
+          title="Every installment, scheduled"
+          body="The monthly amount appears as a bill in your plan, on its due day."
+        />
+        <Divider />
+        <Benefit
+          icon="pie-chart-outline"
+          title="Interest split out"
+          body="See how much of each payment clears the balance and how much is interest."
+        />
+        <Divider />
+        <Benefit
+          icon="flag-outline"
+          title="Payoff date"
+          body="Track how many installments are left and when the debt actually ends."
+        />
+      </Surface>
+
+      <GradientButton label="Add your first loan" icon="add" onPress={onAdd} />
+
+      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+        You will need the amount borrowed, the rate, and the term — all on your loan statement.
+      </T>
+    </View>
+  );
+}
+
+/** One "here is what you get" row in the empty state. */
+function Benefit({
+  icon,
+  title,
+  body,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  body: string;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <Row gap={space.md} align="flex-start">
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: radius.sm,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.surfaceSunken,
+        }}
+      >
+        <Ionicons name={icon} size={17} color={colors.inkSecondary} />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <T variant="small" style={{ fontWeight: '700' }}>
+          {title}
+        </T>
+        <T variant="caption" tone="muted">
+          {body}
+        </T>
+      </View>
+    </Row>
+  );
+}
 
 function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) {
   const { colors, radius, space } = useTheme();

@@ -35,8 +35,34 @@ export function parseAmount(input: string): Minor | null {
   return toMinor(value);
 }
 
+/**
+ * The currency code every unqualified `formatMoney` call renders.
+ *
+ * Formatting happens in ~100 call sites, almost none of which have any reason
+ * to know about app settings — threading the user's choice through all of them
+ * (and through the pure summary helpers they sit inside) would be far more
+ * invasive than the preference deserves. Instead the store publishes the
+ * setting here whenever it loads or changes, and `formatMoney` reads it.
+ *
+ * Module-level state is a deliberate trade: this is a single display preference
+ * with one writer (`setDisplayCurrency`, called only from the store), and it is
+ * read synchronously during render, so there is no ordering hazard. Anything
+ * needing an explicit currency still passes `options.currency`.
+ */
+let displayCurrency = 'LKR';
+
+/** Point every unqualified `formatMoney` at this currency code. */
+export function setDisplayCurrency(code: string): void {
+  if (typeof code === 'string' && code.trim()) displayCurrency = code.trim();
+}
+
+/** The code `formatMoney` currently defaults to. Exposed for tests. */
+export function getDisplayCurrency(): string {
+  return displayCurrency;
+}
+
 export interface FormatOptions {
-  /** Currency code shown as a prefix. Defaults to LKR. */
+  /** Currency code shown as a prefix. Defaults to the user's chosen currency. */
   currency?: string;
   /** Hide the currency prefix entirely. */
   showCurrency?: boolean;
@@ -54,7 +80,7 @@ export interface FormatOptions {
  */
 export function formatMoney(minor: Minor, options: FormatOptions = {}): string {
   const {
-    currency = 'LKR',
+    currency = displayCurrency,
     showCurrency = true,
     showDecimals = false,
     compact = false,

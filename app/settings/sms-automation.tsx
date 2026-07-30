@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View } from 'react-native';
+import { SMART_DETECT_NAME, SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { BottomSheet, Label, Row, Surface, T } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -27,116 +28,181 @@ export default function SmsAutomationGuide() {
       iconColor={colors.accent}
       scroll
     >
-        {/* Short why. */}
-        <T variant="small" tone="secondary">
-          iOS won&apos;t let apps read your messages, so a quick{' '}
-          <T variant="small" color={colors.ink} style={{ fontWeight: '700' }}>
-            Shortcut
-          </T>{' '}
-          does it: when a bank SMS arrives, it opens the app and a draft appears for you to confirm.
-          Set it up once in the <B>Shortcuts</B> app.
-        </T>
+        {/* Branded so the feature is recognisable wherever it appears. */}
+        <View style={{ gap: space.sm }}>
+          <SmartDetectBadge />
+          <T variant="small" tone="secondary">
+            iOS won&apos;t let apps read messages, so a <B>Shortcut</B> does it: a bank SMS arrives,
+            the app opens, and {SMART_DETECT_NAME} turns it into a draft waiting on your dashboard.
+          </T>
+        </View>
 
-        {/* Four steps. The old guide had a separate "URL Encode" action, which
-            was by far the most common thing to get wrong — the app now accepts
-            the message either way, so that step is gone. */}
-        <PartHeader tag="Shortcuts app" title="Create the automation" />
+        {/* A screen recording of the real thing, above the written steps, and
+            playing as soon as the guide opens. Watching the Shortcuts UI once
+            answers "which button, which screen" far faster than the prose can,
+            and step 3 — inserting the variable chip rather than typing it — is
+            much clearer seen than described. */}
+        <Walkthrough />
+
+        {/* Four steps, each one action. Everything that used to be explained in
+            prose beside them is either in the step itself or dropped — the guide
+            was long enough that people stopped reading before step 3, which is
+            the only one that is actually easy to get wrong. */}
+        <PartHeader tag="Shortcuts app" title="Set it up once" />
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <Step n={1}>
-            <Tap>Automation</Tap> tab → <Tap>＋</Tap> → <Tap>Message</Tap>.
+            <Tap>Automation</Tap> → <Tap>＋</Tap> → <Tap>Message</Tap>.
           </Step>
-          <Step
-            n={2}
-            code="LKR"
-            codeNote="Every bank alert contains “LKR”, so this one word catches them all — the app ignores OTPs, promos and balance messages by itself."
-          >
-            Set <Tap>Message Contains</Tap> to this word, choose <Tap>Run Immediately</Tap>, turn{' '}
-            <Tap>Notify When Run</Tap> off, then tap <Tap>Next</Tap>.
+          <Step n={2} code="LKR">
+            <Tap>Message Contains</Tap> this, then <Tap>Run Immediately</Tap> and <Tap>Next</Tap>.
           </Step>
           <Step
             n={3}
             code="moneymanager://sms?text="
             result={<Result prefix="moneymanager://sms?text=" chip="Shortcut Input" />}
-            warn="The chip is inserted, not typed — after the “=”, tap the “Shortcut Input” suggestion on the bar above the keyboard. Typing the words by hand will not work."
+            warn="Insert the chip, don’t type it — tap the “Shortcut Input” suggestion above the keyboard."
           >
-            Add a <Tap>Text</Tap> action. Type the link below, then insert <Chip>Shortcut Input</Chip>{' '}
-            right after the <B>=</B> so the message follows the link:
+            Add <Tap>Text</Tap>, type the link, then insert <Chip>Shortcut Input</Chip> after the{' '}
+            <B>=</B>.
           </Step>
           <Step n={4} last result={<Result label="Open" chip="Text" />}>
-            Add <Tap>Open URLs</Tap> and set it to the <Chip>Text</Chip> from step 3. Tap{' '}
-            <Tap>Done</Tap>.
+            Add <Tap>Open URLs</Tap>, set it to that <Chip>Text</Chip>, then <Tap>Done</Tap>.
           </Step>
         </Surface>
 
-        {/* Test. */}
+        {/* Test — the one instruction worth its own block, since it is how the
+            user finds out whether any of the above worked. */}
         <Surface style={{ gap: space.sm, borderColor: colors.accentSoft }}>
           <Row gap={space.sm}>
             <Ionicons name="checkmark-circle" size={20} color={colors.completed} />
             <T variant="bodyStrong">Test it</T>
           </Row>
           <T variant="small" tone="secondary">
-            Text yourself a message containing <B>LKR</B> and an amount — for example{' '}
-            <B>&ldquo;debited LKR 1,250.00 at KEELLS&rdquo;</B>. Money Manager should open with a
-            draft waiting on the dashboard.
+            Text yourself <B>&ldquo;debited LKR 1,250.00 at KEELLS&rdquo;</B>. The app should open
+            with a draft waiting.
           </T>
         </Surface>
 
-        {/* Troubleshooting — the failures people actually hit. */}
+        {/* Two fixes, not three: the third was a restatement of step 3's warning. */}
         <PartHeader tag="If nothing happens" title="Common fixes" />
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <Fix
-            title="The automation didn’t run at all"
-            body="Open the automation and check Run Immediately is on. If “Notify When Run” is enabled, iOS may be waiting on a notification tap instead of opening the app."
+            title="Nothing opened"
+            body="Check Run Immediately is on. With “Notify When Run” enabled, iOS waits for you to tap a notification instead."
           />
           <Fix
-            title="It opens the app but no draft appears"
-            body="The message probably has no amount the app could read, or it’s an OTP/promo, which are ignored on purpose. Paste it into Add → Paste a message to see exactly what’s detected."
-          />
-          <Fix
-            title="You typed “Shortcut Input” as text"
-            body="It must be the blue variable chip, inserted from the bar above the keyboard — plain text sends the literal words instead of the message."
+            title="It opened but no draft appeared"
+            body="The message may carry no readable amount, or be an OTP or promo — those are ignored on purpose. Paste it into Add → Paste a message to see what’s detected."
             last
           />
         </Surface>
 
-        {/* Android note — the deep link is cross-platform. */}
-        <Surface style={{ gap: space.sm }}>
-          <Row gap={space.sm}>
-            <Ionicons name="logo-android" size={18} color={colors.inkSecondary} />
-            <T variant="bodyStrong">On Android</T>
-          </Row>
-          <T variant="small" tone="secondary">
-            Any automation app that can open a URL on an incoming SMS (Tasker, MacroDroid) works the
-            same way — point it at the same <B>moneymanager://sms?text=</B> link with the message
-            body appended.
-          </T>
-        </Surface>
+        <T variant="caption" tone="muted">
+          On Android, any automation app that can open a URL on an incoming SMS (Tasker, MacroDroid)
+          works the same way — point it at <B>moneymanager://sms?text=</B> with the message appended.
+        </T>
     </BottomSheet>
   );
 }
 
-/** One row of the flow diagram. */
-function FlowStep({ k, v, last }: { k: string; v: string; last?: boolean }) {
-  const { colors, space } = useTheme();
+/**
+ * The screen recording of the setup, as it happens in the Shortcuts app.
+ *
+ * A video rather than a GIF so it can be paused, scrubbed and replayed — at
+ * nearly a minute long, a looping GIF gives no way to stop on the one step the
+ * user is mid-way through copying, which is the whole reason to watch it.
+ *
+ * Native controls are used rather than a custom overlay: they bring scrubbing
+ * and fullscreen for free, and fullscreen matters here because the recording is
+ * of a phone screen, so detail is small at inline size.
+ */
+function Walkthrough() {
+  const { radius, space } = useTheme();
+
+  // Nothing to show on a binary without the native module — the guide's written
+  // steps are the fallback, and they are complete on their own.
+  if (!VideoPlayback) {
+    return null;
+  }
+
   return (
-    <View>
-      <Row gap={space.md}>
-        <Label>{k}</Label>
-        <T variant="small" style={{ fontWeight: '600', flex: 1, textAlign: 'right' }}>
-          {v}
-        </T>
-      </Row>
-      {!last ? (
-        <Ionicons
-          name="arrow-down"
-          size={13}
-          color={colors.inkMuted}
-          style={{ marginTop: 6, marginBottom: -2 }}
-        />
-      ) : null}
+    <View style={{ gap: space.sm }}>
+      {/* No frame around the clip: it is already a recording of a phone screen,
+          so a bordered panel put a rectangle inside a rectangle. The player is
+          centred and sized to its own aspect ratio instead, letting the sheet's
+          own surface show through. */}
+      <View style={{ alignItems: 'center', borderRadius: radius.lg, overflow: 'hidden' }}>
+        <VideoPlayback />
+      </View>
+      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+        Playing from the start — pause on any step, or tap fullscreen for a closer look.
+      </T>
     </View>
   );
 }
+
+/**
+ * The player itself, resolved at module load so a binary without `expo-video`
+ * linked degrades to no video rather than a crash.
+ *
+ * `expo-video` ships native code, so a JS-only reload after installing it hits
+ * "Cannot find native module 'ExpoVideo'" — and because the import sat at the
+ * top of this file, that error took down the whole route rather than just the
+ * clip. Requiring inside a try mirrors services/biometrics.ts, which loads its
+ * native dependency the same way and for the same reason.
+ */
+const VideoPlayback: (() => React.ReactElement) | null = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { useVideoPlayer, VideoView } = require('expo-video') as typeof import('expo-video');
+
+    return function VideoPlaybackInner() {
+      const player = useVideoPlayer(
+        require('../../assets/video/automation-tutorial.mp4'),
+        (instance) => {
+          instance.loop = true;
+          instance.muted = true;
+        },
+      );
+
+      /*
+       * Start from the beginning every time the guide is opened.
+       *
+       * The `useVideoPlayer` setup callback above runs once per player, so
+       * autoplaying there alone would be enough for a fresh mount — but this
+       * screen is a route modal that expo-router can keep mounted between
+       * visits, and a player left paused mid-clip would sit frozen on whatever
+       * frame the user stopped at. Seeking to 0 first makes "open the guide"
+       * always mean "watch it from the top".
+       */
+      React.useEffect(() => {
+        player.currentTime = 0;
+        player.play();
+      }, [player]);
+
+      return (
+        <VideoView
+          player={player}
+          // Sized from the height rather than the width: at 888×1920 a
+          // full-width portrait clip would be far taller than the sheet, and
+          // `width: '100%'` with a maxHeight leaves the view its full width
+          // while the picture shrinks inside it — so the clip looked off-centre
+          // against a much wider transparent box. Fixing the height and letting
+          // the aspect ratio set the width keeps the two the same size.
+          style={{ height: 560, aspectRatio: 888 / 1920 }}
+          contentFit="contain"
+          // Both default to on; named here because the caption promises pause
+          // and fullscreen, so turning either off would make it lie.
+          nativeControls
+          fullscreenOptions={{ enable: true }}
+          accessibilityLabel="Screen recording of the Shortcuts automation being set up"
+        />
+      );
+    };
+  } catch {
+    return null;
+  }
+})();
 
 /** A "Part A / Part B" section heading with a pill tag. */
 function PartHeader({ tag, title }: { tag: string; title: string }) {
@@ -166,18 +232,14 @@ function PartHeader({ tag, title }: { tag: string; title: string }) {
 function Step({
   n,
   children,
-  note,
   code,
-  codeNote,
   result,
   warn,
   last,
 }: {
   n: number;
   children: React.ReactNode;
-  note?: string;
   code?: string;
-  codeNote?: string;
   result?: React.ReactNode;
   warn?: string;
   last?: boolean;
@@ -204,16 +266,6 @@ function Step({
           <T variant="body" style={{ lineHeight: 22 }}>
             {children}
           </T>
-          {note ? (
-            <T variant="caption" tone="muted">
-              {note}
-            </T>
-          ) : null}
-          {codeNote ? (
-            <T variant="caption" tone="muted">
-              {codeNote}
-            </T>
-          ) : null}
           {code ? <CodeBlock>{code}</CodeBlock> : null}
           {result ? result : null}
           {warn ? <Warn>{warn}</Warn> : null}

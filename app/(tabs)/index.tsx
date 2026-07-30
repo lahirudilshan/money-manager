@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
+import { SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { SmsDraftCard } from '../../src/components/SmsDraftCard';
+import { UpgradeSheet } from '../../src/components/UpgradeSheet';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import {
   Divider,
@@ -20,7 +22,8 @@ import {
 } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
-import { HEALTH_VISUALS } from '../../src/theme';
+import { canUse } from '../../src/core/plans';
+import { HEALTH_VISUALS, shadeHex } from '../../src/theme';
 import { accountLabel, resolveBrand } from '../../src/data/banks';
 import {
   selectAccountTransfers,
@@ -35,6 +38,18 @@ import {
 } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
+/** Thickness of the gradient edge grouping the Smart Detect section. */
+const DETECT_BORDER = 1.5;
+
+/**
+ * How far the section's background wash is shaded toward white (or black in
+ * dark mode). High enough that the fill barely separates from the canvas —
+ * anything stronger turns the group into a coloured panel and the white cards
+ * inside it stop reading as raised.
+ */
+const DETECT_WASH_LIGHT = 0.94;
+const DETECT_WASH_DARK = -0.86;
+
 /**
  * The dashboard: what needs doing, and where the money has to go.
  *
@@ -44,7 +59,7 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  * month's overall shape. The full category tree lives on the List tab.
  */
 export default function DashboardScreen() {
-  const { colors, space } = useTheme();
+  const { colors, mode, space } = useTheme();
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -57,6 +72,11 @@ export default function DashboardScreen() {
   const accounts = useMemo(() => selectAccountTransfers(state), [state]);
   const reminders = useMemo(() => selectReminders(state), [state]);
   const loanViews = useMemo(() => selectLoanViews(state), [state]);
+
+  /** Whether the current plan includes Smart Detect. */
+  const smartDetect = canUse(state.plan, 'smartDetect');
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const detectWash = mode === 'dark' ? DETECT_WASH_DARK : DETECT_WASH_LIGHT;
 
   // How this month grades, and the gradient/word/icon that says so.
   const health = planHealth({
@@ -267,10 +287,45 @@ export default function DashboardScreen() {
           because they are the one thing the user must act on before the board
           reflects reality. */}
       {smsDrafts.length > 0 ? (
-        <View style={{ gap: space.sm }}>
+        /*
+         * A gradient edge around the whole section — label and rows together —
+         * so everything Smart Detect produced reads as one group rather than
+         * loose cards that happen to sit under a badge.
+         *
+         * React Native has no gradient border, so the gradient is the outer
+         * layer and the inner view covers all but that edge. The inner radius
+         * drops by the border width to keep the two rounded rectangles
+         * concentric at the corners.
+         */
+        <LinearGradient
+          colors={[colors.gradientStart, colors.gradientEnd]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ borderRadius: 20, padding: DETECT_BORDER }}
+        >
+        {/* A wash of the same two brand stops, shaded almost to the background
+            so the group reads as tinted rather than as a coloured panel — the
+            white cards inside still have to be the thing that stands out.
+
+            Shaded here rather than with the shared `washFor`, which is tuned
+            for tinted tiles that carry an icon and needs more colour than a
+            backdrop sitting behind white cards. */}
+        <LinearGradient
+          colors={[
+            shadeHex(colors.gradientStart, detectWash),
+            shadeHex(colors.gradientEnd, detectWash),
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            gap: space.sm,
+            padding: space.md,
+            borderRadius: 20 - DETECT_BORDER,
+          }}
+        >
           <Row justify="space-between" align="center">
-            <View style={{ gap: 1 }}>
-              <Label>FROM YOUR MESSAGES</Label>
+            <View style={{ gap: 4 }}>
+              <SmartDetectBadge size="sm" showLock={!smartDetect} />
               <T variant="caption" tone="muted">
                 Read from your SMS — confirm to add
               </T>
@@ -287,7 +342,7 @@ export default function DashboardScreen() {
               }}
             >
               <Ionicons name="chatbox-ellipses" size={12} color={colors.accent} />
-              <T variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+              <T variant="caption" color={colors.accent}>
                 {smsDrafts.length} to review
               </T>
             </View>
@@ -303,11 +358,19 @@ export default function DashboardScreen() {
                   ? state.subcategories.find((s) => s.id === draft.subcategoryId)?.name
                   : undefined
               }
-              onOpen={() => router.push(`/sms/${draft.id}`)}
-              onConfirm={() => state.confirmDraft(draft.id)}
+              // Both actions are gated: "Log it" and "Wrong category" are the
+              // two ways a draft becomes a real entry, so a free plan can see
+              // what was detected but not act on it.
+              onOpen={() =>
+                smartDetect ? router.push(`/sms/${draft.id}`) : setUpgradeOpen(true)
+              }
+              onConfirm={() =>
+                smartDetect ? state.confirmDraft(draft.id) : setUpgradeOpen(true)
+              }
             />
           ))}
-        </View>
+        </LinearGradient>
+        </LinearGradient>
       ) : null}
 
       {views.length === 0 ? (
@@ -496,6 +559,12 @@ export default function DashboardScreen() {
         </Surface>
       ) : null}
       </ScrollView>
+
+      <UpgradeSheet
+        visible={upgradeOpen}
+        feature="smartDetect"
+        onClose={() => setUpgradeOpen(false)}
+      />
     </View>
   );
 }

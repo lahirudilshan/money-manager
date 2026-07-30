@@ -5,6 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AppLockGate } from '../src/components/AppLockGate';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
 import { extractSmsFromUrl } from '../src/core/smsIntakeUrl';
 import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
@@ -86,6 +87,24 @@ function RootNavigator() {
   useEffect(() => {
     if (!ready) return;
 
+    // The URL that launched the app, for the cold-start case.
+    //
+    // `sms/index` also reads this, but only if expo-router actually mounts that
+    // route — and a launch that lands anywhere else (or is redirected away
+    // before the effect runs) drops the message silently. That is the "Shortcut
+    // opened the app but nothing appeared in the dashboard" case: the same text
+    // pasted into the manual box works, because that path never depends on
+    // routing. Ingesting here as well makes the message land regardless, and
+    // the store's raw-text dedupe stops the two paths from double-queueing.
+    void Linking.getInitialURL()
+      .then((url) => {
+        const text = url ? extractSmsFromUrl(url) : null;
+        if (text) useAppStore.getState().ingestSmsText(text);
+      })
+      .catch(() => {
+        // A failed read must not break startup; the route may still catch it.
+      });
+
     const subscription = Linking.addEventListener('url', ({ url }) => {
       const text = extractSmsFromUrl(url);
       if (text) useAppStore.getState().ingestSmsText(text);
@@ -142,29 +161,31 @@ function RootNavigator() {
   }
 
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        contentStyle: { backgroundColor: theme.colors.canvas },
-      }}
-    >
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="onboarding" />
-      <Stack.Screen name="category/[id]" />
-      {/* Modal routes render their content inside the shared BottomSheet, so
-          they present as the one app-wide sheet. `transparentModal` +
-          `animation: none` lets the BottomSheet own the backdrop and slide. */}
-      <Stack.Screen name="category/new" options={SHEET_ROUTE} />
-      <Stack.Screen name="category/edit/[id]" options={SHEET_ROUTE} />
-      <Stack.Screen name="subcategory/[id]" options={SHEET_ROUTE} />
-      <Stack.Screen name="transaction/new" options={SHEET_ROUTE} />
-      <Stack.Screen name="transaction/unplanned" options={SHEET_ROUTE} />
-      <Stack.Screen name="account/[id]" options={SHEET_ROUTE} />
-      <Stack.Screen name="sms/index" />
-      <Stack.Screen name="sms/new" options={SHEET_ROUTE} />
-      <Stack.Screen name="sms/[id]" options={SHEET_ROUTE} />
-      <Stack.Screen name="settings/sms-automation" options={SHEET_ROUTE} />
-    </Stack>
+    <AppLockGate>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: theme.colors.canvas },
+        }}
+      >
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="category/[id]" />
+        {/* Modal routes render their content inside the shared BottomSheet, so
+            they present as the one app-wide sheet. `transparentModal` +
+            `animation: none` lets the BottomSheet own the backdrop and slide. */}
+        <Stack.Screen name="category/new" options={SHEET_ROUTE} />
+        <Stack.Screen name="category/edit/[id]" options={SHEET_ROUTE} />
+        <Stack.Screen name="subcategory/[id]" options={SHEET_ROUTE} />
+        <Stack.Screen name="transaction/new" options={SHEET_ROUTE} />
+        <Stack.Screen name="transaction/unplanned" options={SHEET_ROUTE} />
+        <Stack.Screen name="account/[id]" options={SHEET_ROUTE} />
+        <Stack.Screen name="sms/index" />
+        <Stack.Screen name="sms/new" options={SHEET_ROUTE} />
+        <Stack.Screen name="sms/[id]" options={SHEET_ROUTE} />
+        <Stack.Screen name="settings/sms-automation" options={SHEET_ROUTE} />
+      </Stack>
+    </AppLockGate>
   );
 }
 

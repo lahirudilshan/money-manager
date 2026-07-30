@@ -22,7 +22,7 @@ import {
   T,
 } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import { formatMoney } from '../../src/core/money';
+import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
 import { accountLabel, BANKS } from '../../src/data/banks';
 import { useBrand } from '../../src/hooks/useBrand';
 import { selectCardViews, useAppStore, type CardView } from '../../src/store/useAppStore';
@@ -366,6 +366,14 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   const [accountNumber, setAccountNumber] = useState(existing?.accountNumber ?? '');
   const [branch, setBranch] = useState(existing?.branch ?? '');
   const [bankCode, setBankCode] = useState(existing?.bankCode ?? '');
+  // What was already in the account before the app started tracking it. The
+  // schema has always had this and the balance calculation reads it, but nothing
+  // ever set it, so every account opened at zero.
+  const [openingBalance, setOpeningBalance] = useState(
+    existing && existing.openingBalanceMinor !== 0
+      ? String(toMajor(existing.openingBalanceMinor))
+      : '',
+  );
 
   const brand = bankId ? BANKS.find((b) => b.id === bankId) : undefined;
   const canSave = Boolean(name.trim() || brand);
@@ -401,6 +409,7 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
       accountNumber: !isCard ? accountNumber.trim() || null : null,
       branch: !isCard ? branch.trim() || null : null,
       bankCode: !isCard ? bankCode.trim() || null : null,
+      openingBalanceMinor: parseAmount(openingBalance) ?? 0,
     };
 
     if (editId) state.updateCard(editId, patch);
@@ -501,6 +510,24 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             />
             <T variant="caption" tone="muted">
               Used to match bank SMS to this {isCard ? 'card' : 'account'}.
+            </T>
+          </View>
+
+          {/* What is in the account today. The balance shown on the cards screen
+              is this plus what has been funded in, minus what has been paid out,
+              so without it every account reads as starting from zero. */}
+          <View style={{ gap: 4 }}>
+            <Field
+              label={isCard ? 'Current balance' : 'Balance right now'}
+              value={openingBalance}
+              onChangeText={setOpeningBalance}
+              placeholder="0"
+              keyboardType="numeric"
+            />
+            <T variant="caption" tone="muted">
+              {isCard
+                ? 'What this card holds today — transfers and payments adjust it from here.'
+                : `What is in the account today, in ${state.currency}. Leave blank to start from zero.`}
             </T>
           </View>
     </BottomSheet>

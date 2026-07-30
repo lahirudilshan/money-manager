@@ -318,6 +318,13 @@ export function PinnedFooter({
  * Note: the native sheet owns its own height and grab handle, so there is no
  * `heightPct`/`maxHeightPct` here — the OS sizes it, and the user can drag it.
  */
+/**
+ * Corner radius on a sheet's top edge. Deliberately larger than `radius.xl`
+ * (24) so the curve is visibly the app's rather than the ~10pt iOS draws on a
+ * pageSheet by default.
+ */
+const SHEET_TOP_RADIUS = 28;
+
 type SheetProps = {
   visible: boolean;
   onClose: () => void;
@@ -349,7 +356,24 @@ function SheetChrome({ onClose, title, eyebrow, icon, iconColor, footer, childre
   const keyboardHeight = useKeyboardHeight(Boolean(footer));
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.surface }}>
+    <View
+      style={{
+        flex: 1,
+        backgroundColor: colors.surface,
+        /*
+         * A rounder top than the OS gives a pageSheet.
+         *
+         * The native presentation already curves its own corners, but at a
+         * radius fixed by iOS — softer than the app's own cards, which makes a
+         * sheet read as a system surface rather than part of the product.
+         * Drawing our own on top matches the rest of the UI; `overflow: hidden`
+         * keeps the header's fill inside the curve rather than squaring it off.
+         */
+        borderTopLeftRadius: SHEET_TOP_RADIUS,
+        borderTopRightRadius: SHEET_TOP_RADIUS,
+        overflow: 'hidden',
+      }}
+    >
       {/* Rich header: icon tile + optional eyebrow + title + close. Sits just
           below the native grabber. */}
       {title ? (
