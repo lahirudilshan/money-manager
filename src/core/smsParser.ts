@@ -7,12 +7,15 @@
  * and means it does not care how the SMS arrived: deep link, share sheet, paste,
  * or an iOS Shortcuts automation all feed the same text in here.
  *
- * Scope is Sri Lankan LKR alerts. Real banks vary wildly in wording — amount
- * before or after the verb, currency before or after the number, text or dotted
- * dates, the merchant in an "at ...", "Location:...", or "Reason:..." clause —
- * so the extractors below each try several shapes. The goal is not to
- * understand every message perfectly; it is to extract enough for a *draft* the
- * user then confirms or edits. When unsure, we return null rather than guess a
+ * Scope started as Sri Lankan LKR alerts and now covers any ISO currency code a
+ * bank prints — LKR, USD, EUR, GBP, AED and the rest — because the same account
+ * receives inward SWIFT payments denominated in foreign currency. Real banks
+ * vary wildly in wording — amount before or after the verb, currency before or
+ * after the number, glued to the digits or spaced, text or dotted dates, the
+ * merchant in an "at ...", "Location:...", or "Reason:..." clause — so the
+ * extractors below each try several shapes. The goal is not to understand every
+ * message perfectly; it is to extract enough for a *draft* the user then
+ * confirms or edits. When unsure, we return null rather than guess a
  * transaction into existence.
  */
 
@@ -47,6 +50,13 @@ export interface ParsedSms {
   kind: SmsKind;
   /** Amount in minor units (cents), always positive. */
   amountMinor: Minor;
+  /**
+   * ISO code of the currency the message stated ("LKR", "USD", …), or null when
+   * it used a bare symbol/"Rs." with no code. Carried so a foreign-currency
+   * alert can be shown — and converted — as what the bank actually sent, rather
+   * than silently reading as the user's home currency.
+   */
+  currency: string | null;
   /** Best-effort payee/merchant/description, trimmed. Empty string if none. */
   merchant: string;
   /** Account / card fragment the message referenced (often last 4). */
@@ -101,18 +111,45 @@ const DEBIT_PATTERNS: RegExp[] = [
 ];
 
 /**
- * An LKR amount in either order: "LKR 12,500.00" or "3747.40 LKR". Captures the
- * numeric body (with thousands separators) so it can be normalised to minor.
- * The `g` flag lets us scan every amount and pick the right one.
+ * Currency codes a message may state. Restricted to a known list rather than a
+ * generic `[A-Z]{3}` because bare three-letter runs are everywhere in these
+ * alerts ("POS", "ATM", "LKA", "REF") and treating one as a currency would let
+ * an unrelated number win the amount slot.
  */
-const AMOUNT_RE = /(?:LKR|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)|([\d,]+(?:\.\d{1,2})?)\s*LKR\b/gi;
+const CURRENCY_CODES = [
+  'LKR', 'USD', 'EUR', 'GBP', 'AUD', 'AED', 'SGD', 'INR', 'JPY', 'CAD',
+  'CHF', 'NZD', 'SAR', 'QAR', 'KWD', 'MYR', 'CNY', 'HKD', 'THB', 'ZAR',
+] as const;
+
+const CURRENCY_ALTERNATION = CURRENCY_CODES.join('|');
+
+/**
+ * An amount in either order, with a currency code or a local symbol:
+ * "LKR 12,500.00", "USD2,500.00", "3747.40 LKR", "Rs.1,000.00".
+ *
+ * Three capture groups, matching the three shapes:
+ *   1 = code before the number, 2 = its numeric body
+ *   3 = numeric body, 4 = code after the number
+ *   5 = numeric body following a bare "Rs."/"Rs" symbol (no ISO code)
+ *
+ * The code side is optional-space (`\s*`) so the very common glued form
+ * "USD2,500.00" — which the user's SWIFT credit alert uses — matches. The `g`
+ * flag lets us scan every amount in the message and pick the right one.
+ */
+const AMOUNT_RE = new RegExp(
+  `(?:(${CURRENCY_ALTERNATION})\\s*([\\d,]+(?:\\.\\d{1,2})?))` +
+    `|(?:([\\d,]+(?:\\.\\d{1,2})?)\\s*(${CURRENCY_ALTERNATION})\\b)` +
+    `|(?:Rs\\.?\\s*([\\d,]+(?:\\.\\d{1,2})?))`,
+  'gi',
+);
 
 /**
  * Clauses whose amount is NOT the transaction: the remaining balance and any
  * transaction fee. An amount immediately preceded by one of these is skipped so
  * "Avl Bal 127,496.03" and "Txn Fee: 30.00LKR" never win.
  */
-const NON_AMOUNT_CLAUSE_RE = /(?:avl|available)\s*bal(?:ance)?|av\.?\s*bal|txn\s*fee|bal\s*:/i;
+const NON_AMOUNT_CLAUSE_RE =
+  /(?:avl|available)\s*bal(?:ance)?|av\.?\s*bal|txn\s*fee|bal\s*(?:is)?\s*:?\s*$|your\s+bal(?:ance)?\s+is\s*$/i;
 
 /** Convert a matched "12,500.00" body to minor units. */
 function amountBodyToMinor(body: string): Minor {
@@ -123,16 +160,29 @@ function amountBodyToMinor(body: string): Minor {
  * Pick the amount that represents the actual movement, skipping balance and fee
  * clauses that sit right before an amount. The first surviving amount wins,
  * since banks lead with the transaction value and append the balance.
+ *
+ * Returns the currency alongside it: the same scan already knows which code (if
+ * any) sat against the winning number, and re-deriving it separately could pick
+ * a *different* amount's currency in a message that mixes them — an inward SWIFT
+ * alert states "USD2,500.00" then "Your bal is USD5,002.26", and a remittance
+ * can quote both the sent and received currency.
  */
-function extractAmountMinor(text: string): Minor | null {
+function extractAmount(text: string): { amountMinor: Minor; currency: string | null } | null {
   for (const match of text.matchAll(AMOUNT_RE)) {
     const index = match.index ?? 0;
     // Look back a short window; if it names a balance or fee, this is not it.
     const preceding = text.slice(Math.max(0, index - 24), index);
     if (NON_AMOUNT_CLAUSE_RE.test(preceding)) continue;
-    // Either capture group holds the body, depending on the currency's side.
-    const body = match[1] ?? match[2];
-    if (body) return amountBodyToMinor(body);
+
+    // Which pair matched depends on where the currency sat; see AMOUNT_RE.
+    const body = match[2] ?? match[3] ?? match[5];
+    const code = match[1] ?? match[4];
+    if (body) {
+      return {
+        amountMinor: amountBodyToMinor(body),
+        currency: code ? code.toUpperCase() : null,
+      };
+    }
   }
   return null;
 }
@@ -205,7 +255,7 @@ function extractTime(text: string): string | null {
  */
 function extractAccount(text: string): string {
   const labelled = text.match(
-    /(?:A\/C|Ac(?:count)?(?:\s*No)?)\s*[:.]?\s*([X*\d]{3,})/i,
+    /(?:A\/C|Ac(?:count)?)(?:\s*No)?\s*[:.]?\s*([X*\d]{3,})/i,
   );
   if (labelled) {
     // Everything after the last run of mask characters is the visible tail.
@@ -242,6 +292,12 @@ function extractMerchant(text: string): string {
   const asType = text.match(/\bas\s+(CEFTS[^.]*Transfer|[A-Z][A-Za-z ]*Transfer)/);
   if (asType) return clean(asType[1]);
 
+  // "ref: Inward SWIFT Payment." — the reference names what the money was, and
+  // is the only description a SWIFT/remittance credit carries. Stops at the
+  // next sentence so the trailing balance and hotline are not swept in.
+  const ref = text.match(/\bref\s*[:.]?\s*([^.\n]+)/i);
+  if (ref) return clean(ref[1]);
+
   return '';
 }
 
@@ -264,8 +320,13 @@ function classifyDirection(text: string): SmsDirection | null {
 function classifyKind(text: string, direction: SmsDirection): SmsKind {
   if (/\bloan[-\s]/i.test(text) || /Reason\s*:\s*MB:loan/i.test(text)) return 'loan_payment';
   if (/\bATM\b|withdrawal/i.test(text)) return 'atm';
-  if (direction === 'credit' && /transfer/i.test(text)) return 'transfer_in';
-  if (direction === 'debit' && /transfer/i.test(text)) return 'transfer_out';
+  // Inward money arrives under several names: a plain "transfer", or the
+  // remittance wording a cross-border payment uses ("Inward SWIFT Payment",
+  // "remittance"). All are the same thing to the board — money landing.
+  if (direction === 'credit' && /transfer|swift|remittance|inward/i.test(text)) {
+    return 'transfer_in';
+  }
+  if (direction === 'debit' && /transfer|outward/i.test(text)) return 'transfer_out';
   if (/\bPOS TXN\b|purchase/i.test(text)) return 'purchase';
   if (/\bbill\b[^.]*\bdue\b|due (?:on|by)/i.test(text)) return 'utility';
   return 'other';
@@ -288,13 +349,14 @@ export function parseSms(input: string): ParsedSms | null {
   const direction = classifyDirection(text);
   if (!direction) return null;
 
-  const amountMinor = extractAmountMinor(text);
-  if (amountMinor === null || amountMinor <= 0) return null;
+  const amount = extractAmount(text);
+  if (amount === null || amount.amountMinor <= 0) return null;
 
   return {
     direction,
     kind: classifyKind(text, direction),
-    amountMinor,
+    amountMinor: amount.amountMinor,
+    currency: amount.currency,
     merchant: extractMerchant(text),
     account: extractAccount(text),
     date: extractDate(text),

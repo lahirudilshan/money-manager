@@ -10,7 +10,7 @@ import {
 } from '../core/dates';
 import { useTheme } from '../theme/ThemeProvider';
 import { DayCell } from './DayCell';
-import { BottomSheet, Label, Row, T } from './ui';
+import { BottomSheet, Label, Row, Text } from './ui';
 
 /**
  * Pick a full calendar date — the day a transaction actually happened.
@@ -85,15 +85,15 @@ export function DatePickerField({
         })}
       >
         <Ionicons name="calendar-outline" size={18} color={colors.accent} />
-        <T variant="body" style={{ flex: 1, fontWeight: '600' }}>
+        <Text variant="body" style={{ flex: 1, fontWeight: '600' }}>
           {formatDateLabel(value)}
-        </T>
+        </Text>
         {/* The exact date alongside "Today" so the relative label is never the
             only information — useful when logging several days at once. */}
         {isToday ? (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {value.getDate()} {MONTH_NAMES[value.getMonth()].slice(0, 3)}
-          </T>
+          </Text>
         ) : null}
         <Ionicons name="chevron-down" size={15} color={colors.inkMuted} />
       </Pressable>
@@ -147,12 +147,12 @@ export function DatePickerField({
             }}
           >
             <Ionicons name="checkmark-circle" size={16} color={colors.accent} />
-            <T variant="small" color={colors.accentInk} style={{ fontWeight: '700' }}>
+            <Text variant="small" color={colors.accentInk} style={{ fontWeight: '700' }}>
               {formatDateLabel(value)}
-            </T>
-            <T variant="caption" color={colors.accentInk} style={{ flex: 1, opacity: 0.75 }}>
+            </Text>
+            <Text variant="caption" color={colors.accentInk} style={{ flex: 1, opacity: 0.75 }}>
               {value.getDate()} {MONTH_NAMES[value.getMonth()]} {value.getFullYear()}
-            </T>
+            </Text>
           </View>
 
           {/* Month navigation. Forward is blocked once the visible month reaches
@@ -165,9 +165,9 @@ export function DatePickerField({
                 setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))
               }
             />
-            <T variant="bodyStrong">
+            <Text variant="bodyStrong">
               {MONTH_NAMES[cursor.getMonth()]} {cursor.getFullYear()}
-            </T>
+            </Text>
             <MonthArrow
               icon="chevron-forward"
               label="Next month"
@@ -193,9 +193,9 @@ export function DatePickerField({
             <Row gap={0}>
               {WEEKDAYS.map((day, index) => (
                 <View key={`${day}-${index}`} style={{ flex: 1, alignItems: 'center', paddingBottom: 4 }}>
-                  <T variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+                  <Text variant="caption" tone="muted" style={{ fontWeight: '700' }}>
                     {day}
-                  </T>
+                  </Text>
                 </View>
               ))}
             </Row>
@@ -313,13 +313,13 @@ function QuickDate({
         opacity: disabled ? 0.35 : 1,
       })}
     >
-      <T
+      <Text
         variant="small"
         color={active ? colors.accentInk : colors.inkSecondary}
         style={{ fontWeight: '700' }}
       >
         {label}
-      </T>
+      </Text>
     </Pressable>
   );
 }

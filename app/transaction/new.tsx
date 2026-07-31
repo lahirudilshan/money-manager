@@ -9,7 +9,7 @@ import { ImageUploader } from '../../src/components/ImageUploader';
 import { ManagePlanSheet } from '../../src/components/ManagePlanSheet';
 import { StatusToggle } from '../../src/components/StatusToggle';
 import { AmountField } from '../../src/components/forms';
-import { BottomSheet, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
@@ -62,16 +62,24 @@ export default function NewTransactionScreen() {
   const creatingNew = subcategoryId === '__new__';
 
   /**
-   * Every budget line in the plan, flattened with its category, so one list can
-   * stand in for the old category→line drill-down.
+   * Every budget line a transaction can be logged against, flattened with its
+   * category, so one list can stand in for the old category→line drill-down.
+   *
+   * Loan installments are deliberately excluded. A loan is not an ad-hoc expense
+   * — it is a fixed schedule with its own screen, where paying an installment
+   * also advances the loan's progress. Offering those lines here let the user
+   * log a payment that moved the bill but not the debt, leaving the two
+   * disagreeing. The Loans tab is the one place a loan payment is recorded.
    */
   const destinations = useMemo(
     () =>
       views.flatMap((view) =>
-        view.rawSubcategories.map((line) => ({
-          line,
-          category: view.category,
-        })),
+        view.rawSubcategories
+          .filter((line) => !line.loanId)
+          .map((line) => ({
+            line,
+            category: view.category,
+          })),
       ),
     [views],
   );
@@ -170,10 +178,10 @@ export default function NewTransactionScreen() {
       >
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md, paddingHorizontal: space.lg }}>
           <Ionicons name="albums-outline" size={48} color={colors.inkMuted} />
-          <T variant="heading">No categories yet</T>
-          <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 260 }}>
+          <Text variant="heading">No categories yet</Text>
+          <Text variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 260 }}>
             Create a category first, then log transactions against its lines.
-          </T>
+          </Text>
           <GradientButton
             label="Create a category"
             icon="add"
@@ -214,7 +222,10 @@ export default function NewTransactionScreen() {
 
       {/* 2 · What it was for — a grid of categories that expand into their
           bills. Recognising a tile beats recalling a name, and it keeps the
-          keyboard off screen entirely. */}
+          keyboard off screen entirely.
+
+          The grid hides any category left with no selectable bills, so a Debt
+          category holding only loan installments drops out on its own. */}
       <CategoryGridPicker
         categories={views.map((view) => ({
           id: view.category.id,
@@ -259,12 +270,12 @@ export default function NewTransactionScreen() {
         >
           <Ionicons name="add-circle" size={20} color={colors.accent} />
           <View style={{ flex: 1 }}>
-            <T variant="small" style={{ fontWeight: '700' }} numberOfLines={1}>
+            <Text variant="small" style={{ fontWeight: '700' }} numberOfLines={1}>
               {newName.trim()}
-            </T>
-            <T variant="caption" tone="muted" numberOfLines={1}>
+            </Text>
+            <Text variant="caption" tone="muted" numberOfLines={1}>
               New line in {newLineCategory?.name ?? 'a category'}
-            </T>
+            </Text>
           </View>
           <Ionicons name="pencil" size={15} color={colors.accent} />
         </Pressable>
@@ -296,10 +307,10 @@ export default function NewTransactionScreen() {
       {selected ? (
         <Surface style={{ gap: space.xs }}>
           <Row justify="space-between">
-            <T variant="small" tone="secondary">
+            <Text variant="small" tone="secondary">
               Planned for this line
-            </T>
-            <T variant="figure">{formatMoney(selected.line.plannedMinor)}</T>
+            </Text>
+            <Text variant="figure">{formatMoney(selected.line.plannedMinor)}</Text>
           </Row>
         </Surface>
       ) : null}
@@ -459,9 +470,9 @@ function NewLineSheet({
                   size={17}
                   color={category.color}
                 />
-                <T variant="small" style={{ flex: 1, fontWeight: chosen ? '700' : '600' }}>
+                <Text variant="small" style={{ flex: 1, fontWeight: chosen ? '700' : '600' }}>
                   {category.name}
-                </T>
+                </Text>
                 {chosen ? (
                   <Ionicons name="checkmark-circle" size={18} color={category.color} />
                 ) : null}

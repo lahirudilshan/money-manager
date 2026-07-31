@@ -17,6 +17,8 @@ interface SampleExpect {
   merchant: string;
   account: string;
   date: string | null;
+  /** Optional: only asserted on samples that declare it (foreign-currency ones). */
+  currency?: string | null;
 }
 
 interface Sample {
@@ -45,6 +47,9 @@ describe('parseSms over sms-samples.json', () => {
       expect(result!.merchant).toBe(sample.expect.merchant);
       expect(result!.account).toBe(sample.expect.account);
       expect(result!.date).toBe(sample.expect.date);
+      if (sample.expect.currency !== undefined) {
+        expect(result!.currency).toBe(sample.expect.currency);
+      }
     });
   }
 });
@@ -100,6 +105,58 @@ describe('parseSms robustness', () => {
 
   it('still ignores a genuine OTP delivery message', () => {
     expect(parseSms('452123 is your OTP for a payment of LKR 3,000.00')).toBeNull();
+  });
+});
+
+describe('parseSms currency handling', () => {
+  it('reads a glued foreign code, e.g. "USD2,500.00"', () => {
+    const result = parseSms(
+      'Your A/C No: ********7427 is credited with USD2,500.00 on 31 JUL 2026 ref: Inward SWIFT Payment. Your bal is USD5,002.26.',
+    );
+    expect(result?.amountMinor).toBe(250_000);
+    expect(result?.currency).toBe('USD');
+  });
+
+  it('never reads the trailing "Your bal is" figure as the amount', () => {
+    const result = parseSms(
+      'Your A/C No: ********7427 is credited with USD2,500.00 on 31 JUL 2026 ref: Inward SWIFT Payment. Your bal is USD5,002.26.',
+    );
+    // 5,002.26 would be 500226 minor — proving the balance clause was skipped.
+    expect(result?.amountMinor).not.toBe(500_226);
+  });
+
+  it.each([
+    ['EUR 1,200.50', 'EUR', 120_050],
+    ['GBP899.99', 'GBP', 89_999],
+    ['1,500.00 AED', 'AED', 150_000],
+    ['SGD 340.25', 'SGD', 34_025],
+  ])('handles %s', (amountText, currency, minor) => {
+    const result = parseSms(`Your account 1234 is credited with ${amountText} on 01 Jul 2026`);
+    expect(result?.currency).toBe(currency);
+    expect(result?.amountMinor).toBe(minor);
+  });
+
+  it('reports null currency for a bare "Rs." with no ISO code', () => {
+    const result = parseSms('Your account 12 has been credited with Rs.1,000.00 on 01/07/2026');
+    expect(result?.currency).toBeNull();
+    expect(result?.amountMinor).toBe(100_000);
+  });
+
+  it('does not mistake a bare three-letter word for a currency code', () => {
+    // "LKA" (the country code in an ATM location) must not claim the amount.
+    const result = parseSms(
+      'LKR 500.00 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 at SHOP LKA 999. Avl Bal 1.00',
+    );
+    expect(result?.amountMinor).toBe(50_000);
+    expect(result?.currency).toBe('LKR');
+  });
+
+  it('classifies an inward SWIFT payment as money arriving', () => {
+    const result = parseSms(
+      'Your A/C No: ********7427 is credited with USD2,500.00 on 31 JUL 2026 ref: Inward SWIFT Payment.',
+    );
+    expect(result?.direction).toBe('credit');
+    expect(result?.kind).toBe('transfer_in');
   });
 });
 

@@ -3,7 +3,7 @@ import React from 'react';
 import { Pressable, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { DayCell } from './DayCell';
-import { Label, Row, T } from './ui';
+import { Label, Row, Text } from './ui';
 
 const WEEKS = [
   [1, 2, 3, 4, 5, 6, 7],
@@ -62,9 +62,9 @@ export function DayPicker({
             backgroundColor: colors.accentSoft,
           }}
         >
-          <T variant="caption" color={colors.accentInk} style={{ fontWeight: '700' }}>
+          <Text variant="caption" color={colors.accentInk} style={{ fontWeight: '700' }}>
             {value === FLEXIBLE ? 'No fixed date' : `Every ${ordinal(value)}`}
-          </T>
+          </Text>
         </View>
       </Row>
 
@@ -91,13 +91,13 @@ export function DayPicker({
           size={18}
           color={value === FLEXIBLE ? colors.accent : colors.inkMuted}
         />
-        <T
+        <Text
           variant="small"
           color={value === FLEXIBLE ? colors.accentInk : colors.inkSecondary}
           style={{ fontWeight: value === FLEXIBLE ? '700' : '500' }}
         >
           Flexible — no fixed day
-        </T>
+        </Text>
       </Pressable>
 
       <View
@@ -148,9 +148,9 @@ export function DayPicker({
       </View>
 
       {value > 28 ? (
-        <T variant="caption" tone="muted">
+        <Text variant="caption" tone="muted">
           On shorter months this falls on the last day.
-        </T>
+        </Text>
       ) : null}
     </View>
   );

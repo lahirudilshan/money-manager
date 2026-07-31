@@ -16,7 +16,7 @@ import {
   type SavingPlanDraft,
 } from './SavingPlanFields';
 import { AmountField, Field, FrequencyPicker } from './forms';
-import { Label, Row, T } from './ui';
+import { Label, Row, Text } from './ui';
 
 /**
  * Everything that describes a bill, as one reusable block.
@@ -165,16 +165,17 @@ export function BillFields({
   return (
     <>
       {/* Amount hero. With a saving plan (yearly) the monthly figure is derived
-          and shown read-only. Otherwise it is entered — for an unplanned bill
-          it's an optional starting amount, since entries add on top. */}
+          and shown read-only. Otherwise it is entered — for a spending budget
+          it is the monthly cap its entries are drawn against, not a bill to pay
+          once. */}
       {draft.plan.enabled && draft.frequency === 'yearly' ? (
         <View style={{ alignItems: 'center', gap: 4 }}>
           <Label>MONTHLY SET-ASIDE</Label>
           <Row gap={space.xs} align="center">
-            <T variant="title" tone="muted">
+            <Text variant="title" tone="muted">
               {state.currency}
-            </T>
-            <T
+            </Text>
+            <Text
               style={{
                 fontSize: 42,
                 fontWeight: '800',
@@ -183,12 +184,12 @@ export function BillFields({
               }}
             >
               {planPatch ? String(planPatch.monthlyMinor / 100) : '—'}
-            </T>
+            </Text>
           </Row>
         </View>
       ) : (
         <AmountField
-          label={unplanned ? 'Starting amount (optional)' : 'Amount'}
+          label={unplanned ? 'Monthly budget' : 'Amount'}
           value={draft.amount}
           onChangeText={draft.setAmount}
           currency={state.currency}
@@ -214,11 +215,11 @@ export function BillFields({
             onSelect={draft.setCardId}
             allowNone
           />
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {effectiveCardId && effectiveCardId === category?.cardId
               ? `${category?.name}’s account, filled in for you — change it if this bill is paid from another.`
               : 'Change it if this bill is paid from a different account.'}
-          </T>
+          </Text>
         </View>
       ) : null}
 

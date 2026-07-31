@@ -15,16 +15,7 @@ import {
   loanDraftToInput,
   type LoanDraft,
 } from '../../src/components/LoanForm';
-import {
-  BottomSheet,
-  Divider,
-  GradientButton,
-  Label,
-  PinnedFooter,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { BottomSheet, Divider, GradientButton, Label, PinnedFooter, Row, Surface, Text } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
 import { selectLoanViews, useAppStore } from '../../src/store/useAppStore';
@@ -78,11 +69,11 @@ export default function OnboardingLoansScreen() {
         >
           <View style={{ gap: 2 }}>
             <Label>STEP 4 OF 4</Label>
-            <T variant="title">Any loans or leases?</T>
-            <T variant="small" tone="muted">
+            <Text variant="title">Any loans or leases?</Text>
+            <Text variant="small" tone="muted">
               Add what you're repaying so the plan knows your commitments. Skip
               if you have none — you can add them any time.
-            </T>
+            </Text>
           </View>
 
           {views.length > 0 ? (
@@ -94,7 +85,7 @@ export default function OnboardingLoansScreen() {
               }}
             >
               <Label color={colors.pending}>TOTAL PER MONTH</Label>
-              <T variant="display">{formatMoney(monthly)}</T>
+              <Text variant="display">{formatMoney(monthly)}</Text>
             </Surface>
           ) : null}
 
@@ -106,20 +97,20 @@ export default function OnboardingLoansScreen() {
                 <Row gap={space.md}>
                   <BankLogo brand={brand} size={40} />
                   <View style={{ flex: 1 }}>
-                    <T variant="bodyStrong" numberOfLines={1}>
+                    <Text variant="bodyStrong" numberOfLines={1}>
                       {view.loan.name}
-                    </T>
-                    <T variant="caption" tone="muted" numberOfLines={1}>
+                    </Text>
+                    <Text variant="caption" tone="muted" numberOfLines={1}>
                       {LOAN_KIND_LABEL[view.loan.kind] ?? 'Loan'} ·{' '}
                       {formatMoney(view.loan.principalMinor, { compact: true })} at{' '}
                       {view.loan.annualRatePct}%
-                    </T>
+                    </Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <T variant="figure">{formatMoney(view.installmentMinor)}</T>
-                    <T variant="caption" tone="muted">
+                    <Text variant="figure">{formatMoney(view.installmentMinor)}</Text>
+                    <Text variant="caption" tone="muted">
                       / month
-                    </T>
+                    </Text>
                   </View>
                   <Pressable
                     onPress={() => state.deleteLoan(view.loan.id)}
@@ -155,9 +146,9 @@ export default function OnboardingLoansScreen() {
             })}
           >
             <Ionicons name="add-circle-outline" size={20} color={colors.accent} />
-            <T variant="small" tone="secondary" style={{ fontWeight: '600' }}>
+            <Text variant="small" tone="secondary" style={{ fontWeight: '600' }}>
               {views.length > 0 ? 'Add another loan' : 'Add a loan or lease'}
-            </T>
+            </Text>
           </Pressable>
         </ScrollView>
 

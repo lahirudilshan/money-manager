@@ -17,16 +17,7 @@ import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
 import { BillFields, useBillDraft } from '../../src/components/BillFields';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import {
-  BottomSheet,
-  Divider,
-  Empty,
-  GradientButton,
-  Label,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { BottomSheet, Divider, Empty, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { formatDateLabel, startOfDay } from '../../src/core/dates';
 import { formatMoney, parseAmount } from '../../src/core/money';
 import {
@@ -177,7 +168,7 @@ export default function ListScreen() {
         <Row justify="space-between" align="center">
           <View style={{ gap: 1 }}>
             <Label>{formatPeriod(state.period)}</Label>
-            <T variant="title">Your plan</T>
+            <Text variant="title">Your plan</Text>
           </View>
           <Pressable
             onPress={() => router.push('/category/new')}
@@ -195,9 +186,9 @@ export default function ListScreen() {
             })}
           >
             <Ionicons name="add" size={16} color={colors.inkInverse} />
-            <T variant="caption" color={colors.inkInverse} style={{ fontWeight: '700' }}>
+            <Text variant="caption" color={colors.inkInverse} style={{ fontWeight: '700' }}>
               Category
-            </T>
+            </Text>
           </Pressable>
         </Row>
       </View>
@@ -293,13 +284,13 @@ export default function ListScreen() {
                       : {}),
                   })}
                 >
-                  <T
+                  <Text
                     variant="caption"
                     color={selected ? colors.ink : colors.inkSecondary}
                     style={{ fontWeight: selected ? '700' : '500' }}
                   >
                     {option.label}
-                  </T>
+                  </Text>
                 </Pressable>
               );
             })}
@@ -321,9 +312,9 @@ export default function ListScreen() {
               size={14}
               color={colors.accent}
             />
-            <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+            <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
               {allCollapsed ? 'Expand' : 'Collapse'}
-            </T>
+            </Text>
           </Pressable>
         </Row>
       ) : null}
@@ -551,15 +542,15 @@ function PlanInsightsCard({
           <Row justify="space-between" align="center">
             <Row gap={4}>
               <Ionicons name={visual.icon as never} size={13} color="rgba(255,255,255,0.9)" />
-              <T variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
+              <Text variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
                 {visual.label}
-              </T>
+              </Text>
             </Row>
             <Row gap={4}>
               <Label color="rgba(255,255,255,0.75)">PAID OFF</Label>
-              <T variant="figureLarge" color="#FFFFFF">
+              <Text variant="figureLarge" color="#FFFFFF">
                 {paidPct}%
-              </T>
+              </Text>
               {/* Marks the whole card as openable — the rows below are a summary
                   of a longer list, and nothing else here suggests that. */}
               <Ionicons name="chevron-forward" size={13} color="rgba(255,255,255,0.75)" />
@@ -687,9 +678,18 @@ function PlanDetailSheet({
   const upcoming = dueLines.filter((line) => !line.overdue && line.dueDate != null);
   const undated = dueLines.filter((line) => line.dueDate == null);
 
+  /**
+   * Close this sheet, then open the bill.
+   *
+   * The push is deferred to the next frame rather than fired in the same tick as
+   * `onClose()`. Both this sheet and the subcategory route present a native
+   * modal, and iOS refuses to present a second one while the first is still
+   * animating away — the push was swallowed and the sheet stayed put. Letting
+   * the dismissal commit first makes the transition reliable.
+   */
   const openLine = (id: string) => {
     onClose();
-    router.push(`/subcategory/${id}`);
+    requestAnimationFrame(() => router.push(`/subcategory/${id}`));
   };
 
   return (
@@ -716,22 +716,22 @@ function PlanDetailSheet({
             <Label color="rgba(255,255,255,0.75)">STILL TO PAY</Label>
             <Row gap={4}>
               <Ionicons name={visual.icon as never} size={13} color="rgba(255,255,255,0.9)" />
-              <T variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
+              <Text variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
                 {visual.label}
-              </T>
+              </Text>
             </Row>
           </Row>
 
           <View style={{ gap: 2 }}>
-            <T variant="display" color="#FFFFFF">
+            <Text variant="display" color="#FFFFFF">
               {formatMoney(unpaid.amountMinor)}
-            </T>
-            <T variant="caption" color="rgba(255,255,255,0.8)">
+            </Text>
+            <Text variant="caption" color="rgba(255,255,255,0.8)">
               {unpaid.count === 0
                 ? 'Every bill is settled'
                 : `across ${unpaid.count} ${unpaid.count === 1 ? 'bill' : 'bills'}`}
               {overdue.count > 0 ? ` · ${overdue.count} overdue` : ''}
-            </T>
+            </Text>
           </View>
 
           {/* Progress, on the hero rather than a section of its own — it is a
@@ -755,12 +755,12 @@ function PlanDetailSheet({
               />
             </View>
             <Row justify="space-between">
-              <T variant="caption" color="rgba(255,255,255,0.8)">
+              <Text variant="caption" color="rgba(255,255,255,0.8)">
                 {formatMoney(totals.paidMinor, { compact: true })} paid
-              </T>
-              <T variant="caption" color="rgba(255,255,255,0.8)">
+              </Text>
+              <Text variant="caption" color="rgba(255,255,255,0.8)">
                 {paidPct}% of {formatMoney(totals.plannedMinor, { compact: true })}
-              </T>
+              </Text>
             </Row>
           </View>
         </LinearGradient>
@@ -841,9 +841,9 @@ function DueGroup({
       <Row justify="space-between" align="center">
         <Row gap={6}>
           <Ionicons name={icon} size={14} color={tint} />
-          <T variant="small" color={tint} style={{ fontWeight: '800' }}>
+          <Text variant="small" color={tint} style={{ fontWeight: '800' }}>
             {label}
-          </T>
+          </Text>
           {/* The count as a pill, so the header states size and value at once. */}
           <View
             style={{
@@ -853,19 +853,19 @@ function DueGroup({
               backgroundColor: colors.surfaceSunken,
             }}
           >
-            <T variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+            <Text variant="caption" tone="muted" style={{ fontWeight: '700' }}>
               {lines.length}
-            </T>
+            </Text>
           </View>
         </Row>
-        <T variant="figure" color={tint}>
+        <Text variant="figure" color={tint}>
           {formatMoney(total, { compact: true })}
-        </T>
+        </Text>
       </Row>
 
-      <T variant="caption" tone="muted">
+      <Text variant="caption" tone="muted">
         {caption}
-      </T>
+      </Text>
 
       <View
         style={{
@@ -909,16 +909,16 @@ function DueGroup({
             </View>
 
             <View style={{ flex: 1, gap: 1 }}>
-              <T variant="small" numberOfLines={1} style={{ fontWeight: '600' }}>
+              <Text variant="small" numberOfLines={1} style={{ fontWeight: '600' }}>
                 {line.name}
-              </T>
-              <T variant="caption" tone="muted" numberOfLines={1}>
+              </Text>
+              <Text variant="caption" tone="muted" numberOfLines={1}>
                 {line.categoryName}
                 {line.dueDate ? ` · ${formatDateLabel(line.dueDate)}` : ''}
-              </T>
+              </Text>
             </View>
 
-            <T variant="figure">{formatMoney(line.amountMinor)}</T>
+            <Text variant="figure">{formatMoney(line.amountMinor)}</Text>
             <Ionicons name="chevron-forward" size={14} color={colors.inkFaint} />
           </Pressable>
         ))}
@@ -972,19 +972,19 @@ function InsightRow({
         <Ionicons name={icon} size={16} color="#FFFFFF" />
       </LinearGradient>
       <View style={{ flex: 1 }}>
-        <T variant="small" color="#FFFFFF" style={{ fontWeight: '700' }} numberOfLines={1}>
+        <Text variant="small" color="#FFFFFF" style={{ fontWeight: '700' }} numberOfLines={1}>
           {label}
-        </T>
+        </Text>
         {detail ? (
-          <T variant="caption" color="rgba(255,255,255,0.75)" numberOfLines={1}>
+          <Text variant="caption" color="rgba(255,255,255,0.75)" numberOfLines={1}>
             {detail}
-          </T>
+          </Text>
         ) : null}
       </View>
       {value ? (
-        <T variant="figure" color={valueColor ?? '#FFFFFF'}>
+        <Text variant="figure" color={valueColor ?? '#FFFFFF'}>
           {value}
-        </T>
+        </Text>
       ) : null}
     </View>
   );
@@ -1082,17 +1082,17 @@ function CategoryCard({
             accessibilityState={{ expanded: !collapsed }}
             style={{ flex: 1 }}
           >
-            <T variant="bodyStrong" numberOfLines={1}>
+            <Text variant="bodyStrong" numberOfLines={1}>
               {category.name}
-            </T>
-            <T variant="caption" tone="muted" numberOfLines={1}>
+            </Text>
+            <Text variant="caption" tone="muted" numberOfLines={1}>
               {summary.counts.paid}/{summary.subcategoryCount} paid
               {card ? ` · ${card.name}` : ''}
-            </T>
+            </Text>
           </Pressable>
 
           <View style={{ alignItems: 'flex-end', gap: 2 }}>
-            <T variant="figureLarge">{formatMoney(summary.totalMinor, { compact: true })}</T>
+            <Text variant="figureLarge">{formatMoney(summary.totalMinor, { compact: true })}</Text>
             <Pressable
               onPress={onToggleCollapsed}
               hitSlop={8}
@@ -1134,17 +1134,17 @@ function CategoryCard({
             size={18}
             color={transferred ? transferStyle.fg : colors.inkSecondary}
           />
-          <T
+          <Text
             variant="small"
             color={transferred ? transferStyle.fg : colors.inkSecondary}
             style={{ flex: 1, fontWeight: '600' }}
           >
             {transferred ? 'Money transferred to account' : 'Mark money transferred'}
-          </T>
+          </Text>
           {!transferred && summary.totalMinor > 0 ? (
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               {formatMoney(summary.totalMinor, { compact: true })}
-            </T>
+            </Text>
           ) : null}
         </Pressable>
         )}
@@ -1158,15 +1158,25 @@ function CategoryCard({
           {subcategories.map((line, index) => {
             const raw = view.rawSubcategories.find((s) => s.id === line.id);
             const paid = line.status === 'paid';
-            const amount = effectiveAmount(line);
+            // A spending budget is never "paid" as a whole — its spend is a
+            // running total of entries — so it gets an indicator rather than a
+            // tap-to-pay checkbox, and reads differently in several places below.
+            const unplanned = raw?.frequency === 'unplanned';
+            /*
+             * The headline figure. For a bill that is actual-or-planned; for a
+             * spending budget it is what has actually been SPENT, with the
+             * budget stated in the subtitle beside it.
+             *
+             * `effectiveAmount` deliberately reports the budget for such a line
+             * (so the month's plan does not shrink as money is spent), which is
+             * the right answer for totals and the wrong one for this row — here
+             * the question is "how much have I spent", not "how much is planned".
+             */
+            const amount = unplanned ? (line.actualMinor ?? 0) : effectiveAmount(line);
             // Show planned vs. actual side by side when a real amount was logged
             // that differs from the plan, so the row tells you at a glance whether
             // it came in over/under. `amount` (actual-or-planned) stays the figure.
             const hasActual = line.actualMinor != null && line.actualMinor !== line.plannedMinor;
-            // Unplanned lines are never "paid" as a whole — their spend is a
-            // running total of entries — so they get an indicator, not a
-            // tap-to-pay checkbox.
-            const unplanned = raw?.frequency === 'unplanned';
 
             return (
               <View key={line.id}>
@@ -1244,7 +1254,7 @@ function CategoryCard({
                     })}
                   >
                     <View style={{ flex: 1 }}>
-                      <T
+                      <Text
                         variant="body"
                         numberOfLines={1}
                         // Unplanned lines are never "settled", so they keep full
@@ -1253,10 +1263,16 @@ function CategoryCard({
                         style={paid && !unplanned ? { textDecorationLine: 'line-through' } : undefined}
                       >
                         {line.name}
-                      </T>
-                      <T variant="caption" tone="muted">
+                      </Text>
+                      <Text variant="caption" tone="muted">
                         {unplanned
-                          ? 'Unplanned · tap to see entries'
+                          ? /* A spending budget's subtitle carries its progress:
+                               the figure on the right is what has been spent, so
+                               without the budget beside it there is nothing to
+                               judge that number against. */
+                            line.plannedMinor > 0
+                            ? `${formatMoney(line.actualMinor ?? 0, { compact: true })} of ${formatMoney(line.plannedMinor, { compact: true })} spent`
+                            : 'Spending budget · tap to see entries'
                           : `${
                               isFlexibleDueDay(raw?.dueDay ?? category.dueDay)
                                 ? 'Flexible'
@@ -1266,32 +1282,38 @@ function CategoryCard({
                                 ? ` · ${raw.frequency.replace('_', '-')}`
                                 : ''
                             }`}
-                      </T>
+                      </Text>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
-                      <T
+                      <Text
                         variant="figure"
                         // When a real amount was logged, colour it by over/under
                         // the plan; otherwise dim it only once the bill is paid.
                         color={
-                          hasActual && !unplanned
-                            ? line.actualMinor! > line.plannedMinor
+                          // A budget overrun is the one thing worth flagging on
+                          // a spending line — everything below its cap is fine.
+                          unplanned
+                            ? line.plannedMinor > 0 && (line.actualMinor ?? 0) > line.plannedMinor
                               ? colors.danger
-                              : colors.completed
-                            : undefined
+                              : undefined
+                            : hasActual
+                              ? line.actualMinor! > line.plannedMinor
+                                ? colors.danger
+                                : colors.completed
+                              : undefined
                         }
                         tone={paid && !unplanned && !hasActual ? 'muted' : 'ink'}
                       >
                         {formatMoney(amount, { compact: true })}
-                      </T>
+                      </Text>
                       {hasActual && !unplanned ? (
-                        <T
+                        <Text
                           variant="caption"
                           tone="muted"
                           style={{ textDecorationLine: 'line-through' }}
                         >
                           {formatMoney(line.plannedMinor, { compact: true })}
-                        </T>
+                        </Text>
                       ) : null}
                     </View>
                     <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
@@ -1328,9 +1350,9 @@ function CategoryCard({
               })}
             >
               <Ionicons name="add" size={18} color={category.color} />
-              <T variant="small" color={category.color} style={{ fontWeight: '800' }}>
+              <Text variant="small" color={category.color} style={{ fontWeight: '800' }}>
                 Add bill
-              </T>
+              </Text>
             </Pressable>
 
             <Pressable

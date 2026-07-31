@@ -63,6 +63,33 @@ export function decodeSmsParam(raw: string): string {
 }
 
 /**
+ * True when the delivered link was cut short by iOS.
+ *
+ * VERIFIED on an iPhone 13 Pro: a Shortcut whose URL is not passed through a
+ * **URL Encode** action keeps the message's raw spaces, and iOS stops the URL
+ * at the first one. A 208-character link arrived as 51 characters ending at
+ * "HNB" — the rest is discarded by the OS before the app launches, so nothing
+ * here can recover it. The same message, percent-encoded, arrived complete
+ * (278 chars in, 184 extracted).
+ *
+ * Two signatures, either of which is conclusive:
+ *
+ *  - the body still contains the scheme, i.e. the Shortcut concatenated its own
+ *    prefix onto a value that already held a full URL;
+ *  - the body is very short AND carries none of the punctuation every real
+ *    alert has (a decimal, a colon, a comma) — the first-word case.
+ *
+ * Reporting this as "not read as a payment" blamed the parser for text it never
+ * received, which is the wrong thing to send someone debugging their Shortcut.
+ */
+export function looksTruncated(text: string): boolean {
+  // The doubled-scheme case: unmistakable, whatever the length.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return true;
+  // The first-word case: short, and missing punctuation any real alert has.
+  return text.length <= 25 && !/[.,:]/.test(text);
+}
+
+/**
  * Pull the message out of a full deep-link URL.
  *
  * Deliberately not using `URL`/`URLSearchParams`: an unencoded SMS body can
@@ -75,7 +102,10 @@ export function decodeSmsParam(raw: string): string {
 export function extractSmsFromUrl(url: string): string | null {
   if (!url) return null;
 
-  const marker = url.match(/[?&]text=/);
+  // Case-insensitive: a Shortcut built by hand can easily end up with `Text=`
+  // or `TEXT=`, and rejecting those looks identical to the link not firing at
+  // all — the hardest failure in this pipeline to diagnose from the outside.
+  const marker = url.match(/[?&]text=/i);
   if (marker?.index === undefined) return null;
 
   const body = url.slice(marker.index + marker[0].length);

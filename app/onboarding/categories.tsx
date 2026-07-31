@@ -3,15 +3,7 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { LayoutAnimation, Platform, Pressable, ScrollView, UIManager, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  Divider,
-  GradientButton,
-  Label,
-  PinnedFooter,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { Divider, GradientButton, Label, PinnedFooter, Row, Surface, Text } from '../../src/components/ui';
 import { CATEGORY_CATALOG, type CatalogCategory } from '../../src/data/categoryCatalog';
 import { useOnboardingDraft } from '../../src/store/useOnboardingDraft';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -59,11 +51,11 @@ export default function OnboardingCategoriesScreen() {
     >
       <View style={{ gap: 2 }}>
         <Label>STEP 2 OF 4</Label>
-        <T variant="title">What do you spend on?</T>
-        <T variant="small" tone="muted">
+        <Text variant="title">What do you spend on?</Text>
+        <Text variant="small" tone="muted">
           Tap a category to open it, then pick the lines you actually have.
           You'll set amounts next.
-        </T>
+        </Text>
       </View>
 
       <View style={{ gap: space.sm }}>
@@ -85,11 +77,11 @@ export default function OnboardingCategoriesScreen() {
     <PinnedFooter>
       <View style={{ gap: space.sm }}>
         <Row justify="center">
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {pickedCount === 0
               ? 'Pick at least one line to continue'
               : `${pickedCount} line${pickedCount === 1 ? '' : 's'} selected`}
-          </T>
+          </Text>
         </Row>
         <GradientButton
           label="Continue"
@@ -159,10 +151,10 @@ function CategoryBlock({
           </View>
 
           <View style={{ flex: 1 }}>
-            <T variant="bodyStrong">{category.name}</T>
-            <T variant="caption" tone="muted">
+            <Text variant="bodyStrong">{category.name}</Text>
+            <Text variant="caption" tone="muted">
               {selectedCount > 0 ? `${selectedCount} selected` : category.blurb}
-            </T>
+            </Text>
           </View>
 
           {selectedCount > 0 ? (
@@ -177,9 +169,9 @@ function CategoryBlock({
                 justifyContent: 'center',
               }}
             >
-              <T variant="caption" color="#FFFFFF" style={{ fontWeight: '800' }}>
+              <Text variant="caption" color="#FFFFFF" style={{ fontWeight: '800' }}>
                 {selectedCount}
-              </T>
+              </Text>
             </View>
           ) : null}
 
@@ -202,9 +194,9 @@ function CategoryBlock({
                 hitSlop={8}
                 style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
               >
-                <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
                   {allSelected ? 'Clear all' : 'Select all'}
-                </T>
+                </Text>
               </Pressable>
             </Row>
 
@@ -233,17 +225,17 @@ function CategoryBlock({
                     size={17}
                     color={isPicked ? category.color : colors.inkMuted}
                   />
-                  <T
+                  <Text
                     variant="small"
                     tone={isPicked ? 'ink' : 'secondary'}
                     style={{ flex: 1, fontWeight: isPicked ? '700' : '500' }}
                   >
                     {subcategory.name}
-                  </T>
+                  </Text>
                   {subcategory.type === 'income' ? (
-                    <T variant="caption" color={colors.completed}>
+                    <Text variant="caption" color={colors.completed}>
                       income
-                    </T>
+                    </Text>
                   ) : null}
                   <Ionicons
                     name={isPicked ? 'checkmark-circle' : 'add-circle-outline'}

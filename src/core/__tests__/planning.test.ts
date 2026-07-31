@@ -766,3 +766,61 @@ describe('summariseBoard category count', () => {
     expect(board.categoryCount).toBe(1);
   });
 });
+
+describe('spending budgets (unplanned lines)', () => {
+  const budget = (plannedMinor: number, spentMinor: number | null): PlannedCategory => ({
+    id: 'groceries',
+    name: 'Groceries',
+    plannedMinor,
+    actualMinor: spentMinor,
+    status: (spentMinor ?? 0) > 0 ? 'paid' : 'pending',
+    type: 'expense',
+    frequency: 'unplanned',
+  });
+
+  it('plans the full budget when only part of it has been spent', () => {
+    // The bug this guards: taking `actual` outright made a 20,000 budget with
+    // 8,400 spent report as an 8,400 plan, so "still to fund" shrank mid-month.
+    expect(effectiveAmount(budget(2_000_000, 840_000))).toBe(2_000_000);
+  });
+
+  it('plans the full budget when nothing has been spent yet', () => {
+    expect(effectiveAmount(budget(2_000_000, 0))).toBe(2_000_000);
+  });
+
+  it('counts the overspend once the budget is exceeded', () => {
+    // Real money left the account; the plan must not understate it.
+    expect(effectiveAmount(budget(2_000_000, 2_350_000))).toBe(2_350_000);
+  });
+
+  it('falls back to spend when no budget has been set', () => {
+    expect(effectiveAmount(budget(0, 840_000))).toBe(840_000);
+  });
+
+  it('is zero when there is neither a budget nor any spend', () => {
+    expect(effectiveAmount(budget(0, null))).toBe(0);
+  });
+
+  it('is never divided by twelve — a budget is already monthly', () => {
+    expect(monthlyAmount(budget(2_000_000, 840_000))).toBe(2_000_000);
+  });
+
+  it('keeps an ordinary bill on the actual-overrides-planned rule', () => {
+    const bill: PlannedCategory = {
+      id: 'rent',
+      name: 'Rent',
+      plannedMinor: 2_000_000,
+      actualMinor: 1_800_000,
+      status: 'paid',
+      type: 'expense',
+      frequency: 'monthly',
+    };
+    // Unchanged behaviour: a settled bill reports what was actually paid.
+    expect(effectiveAmount(bill)).toBe(1_800_000);
+  });
+
+  it('includes a budget in the category total', () => {
+    const summary = summariseCategory([budget(2_000_000, 840_000)], 0, '2026-07');
+    expect(summary.totalMinor).toBe(2_000_000);
+  });
+});

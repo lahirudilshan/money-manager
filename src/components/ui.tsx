@@ -9,7 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
+  Text as RNText,
   View,
   type StyleProp,
   type TextStyle,
@@ -34,7 +34,7 @@ type TypeKey =
 
 type Tone = 'ink' | 'secondary' | 'muted' | 'inverse' | 'accent';
 
-export function T({
+export function Text({
   children,
   variant = 'body',
   tone = 'ink',
@@ -68,14 +68,14 @@ export function T({
   }[tone];
 
   return (
-    <Text
+    <RNText
       numberOfLines={numberOfLines}
       adjustsFontSizeToFit={adjustsFontSizeToFit}
       minimumFontScale={minimumFontScale}
       style={[type[variant] as unknown as TextStyle, { color: color ?? toneColor }, style]}
     >
       {children}
-    </Text>
+    </RNText>
   );
 }
 
@@ -90,9 +90,9 @@ export function Label({
   style?: StyleProp<TextStyle>;
 }) {
   return (
-    <T variant="label" tone="muted" color={color} style={style}>
+    <Text variant="label" tone="muted" color={color} style={style}>
       {typeof children === 'string' ? children.toUpperCase() : children}
-    </T>
+    </Text>
   );
 }
 
@@ -222,14 +222,14 @@ export function GradientButton({
         }}
       >
         {icon ? <Ionicons name={icon} size={size === 'sm' ? 15 : 18} color="#FFFFFF" /> : null}
-        <Text
+        <RNText
           style={[
             (size === 'sm' ? type.small : type.bodyStrong) as unknown as TextStyle,
             { color: '#FFFFFF', fontWeight: '700' },
           ]}
         >
           {label}
-        </Text>
+        </RNText>
       </LinearGradient>
     </Pressable>
   );
@@ -358,10 +358,30 @@ type SheetProps = {
    * get their own native `<Modal presentationStyle="pageSheet">`.
    */
   asRoute?: boolean;
+  /**
+   * Present as a full-screen sheet rather than the inset iOS card.
+   *
+   * For content that needs the whole height and cannot usefully scroll — the PIN
+   * pad is the case this exists for: a fixed 3×4 grid of 72pt keys plus a header
+   * does not fit the pageSheet inset, and letting it scroll under the thumb is
+   * exactly what makes a keypad mis-tap. Use sparingly; the card sheet is the
+   * default for a reason.
+   */
+  fullScreen?: boolean;
 };
 
 /** The shared chrome: header + body + footer. Identical in every sheet. */
-function SheetChrome({ onClose, title, eyebrow, icon, iconColor, footer, children, scroll }: SheetProps) {
+function SheetChrome({
+  onClose,
+  title,
+  eyebrow,
+  icon,
+  iconColor,
+  footer,
+  children,
+  scroll,
+  fullScreen,
+}: SheetProps) {
   const { colors, radius, space } = useTheme();
   const insets = useSafeAreaInsets();
   const keyboardHeight = useKeyboardHeight(Boolean(footer));
@@ -372,17 +392,31 @@ function SheetChrome({ onClose, title, eyebrow, icon, iconColor, footer, childre
         flex: 1,
         backgroundColor: colors.surface,
         /*
-         * A rounder top than the OS gives a pageSheet.
-         *
-         * The native presentation already curves its own corners, but at a
-         * radius fixed by iOS — softer than the app's own cards, which makes a
-         * sheet read as a system surface rather than part of the product.
-         * Drawing our own on top matches the rest of the UI; `overflow: hidden`
-         * keeps the header's fill inside the curve rather than squaring it off.
+         * A fullScreen presentation starts at pixel zero, so its own header
+         * would sit under the status bar (clock and battery drawn over the
+         * title). A pageSheet is already inset below it by iOS and needs
+         * nothing. Rounded corners are likewise a pageSheet affordance — a
+         * full-screen surface has no card edge to round, and curving it just
+         * exposes whatever is behind the notch.
          */
-        borderTopLeftRadius: SHEET_TOP_RADIUS,
-        borderTopRightRadius: SHEET_TOP_RADIUS,
-        overflow: 'hidden',
+        paddingTop: fullScreen ? insets.top : 0,
+        ...(fullScreen
+          ? null
+          : {
+              /*
+               * A rounder top than the OS gives a pageSheet.
+               *
+               * The native presentation already curves its own corners, but at
+               * a radius fixed by iOS — softer than the app's own cards, which
+               * makes a sheet read as a system surface rather than part of the
+               * product. Drawing our own on top matches the rest of the UI;
+               * `overflow: hidden` keeps the header's fill inside the curve
+               * rather than squaring it off.
+               */
+              borderTopLeftRadius: SHEET_TOP_RADIUS,
+              borderTopRightRadius: SHEET_TOP_RADIUS,
+              overflow: 'hidden' as const,
+            }),
       }}
     >
       {/* Rich header: icon tile + optional eyebrow + title + close. Sits just
@@ -414,13 +448,13 @@ function SheetChrome({ onClose, title, eyebrow, icon, iconColor, footer, childre
             </View>
             <View style={{ flex: 1 }}>
               {eyebrow ? (
-                <T variant="caption" tone="muted">
+                <Text variant="caption" tone="muted">
                   {eyebrow.toUpperCase()}
-                </T>
+                </Text>
               ) : null}
-              <T variant="heading" numberOfLines={1}>
+              <Text variant="heading" numberOfLines={1}>
                 {title}
-              </T>
+              </Text>
             </View>
             <Pressable
               onPress={onClose}
@@ -491,7 +525,9 @@ export function BottomSheet(props: SheetProps) {
       visible={props.visible}
       // The native iOS card sheet: slides up, shows the screen behind at the
       // top, has the system grabber, and can be swiped down to dismiss.
-      presentationStyle="pageSheet"
+      // `fullScreen` opts out for content that needs the whole height (the PIN
+      // pad), where the inset card would clip a fixed-size keypad.
+      presentationStyle={props.fullScreen ? 'fullScreen' : 'pageSheet'}
       animationType="slide"
       // Fires for both the swipe-down dismiss and the Android hardware back.
       onRequestClose={props.onClose}
@@ -529,9 +565,9 @@ export function StatusPill({
       }}
     >
       <Ionicons name={STATUS_ICON[status] as never} size={compact ? 11 : 13} color={style.fg} />
-      <Text style={[type.label as unknown as TextStyle, { color: style.fg }]}>
+      <RNText style={[type.label as unknown as TextStyle, { color: style.fg }]}>
         {style.label.toUpperCase()}
-      </Text>
+      </RNText>
     </View>
   );
 }
@@ -693,14 +729,14 @@ export function Button({
       ) : (
         <>
           {icon ? <Ionicons name={icon} size={size === 'sm' ? 15 : 18} color={variants.fg} /> : null}
-          <Text
+          <RNText
             style={[
               (size === 'sm' ? type.small : type.bodyStrong) as unknown as TextStyle,
               { color: variants.fg, fontWeight: '600' },
             ]}
           >
             {label}
-          </Text>
+          </RNText>
         </>
       )}
     </Pressable>
@@ -791,10 +827,10 @@ export function Empty({
   return (
     <View style={{ alignItems: 'center', paddingVertical: space.xxxl, gap: space.sm }}>
       <Glyph icon={icon} color={colors.inkMuted} size={52} />
-      <T variant="heading">{title}</T>
-      <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 280 }}>
+      <Text variant="heading">{title}</Text>
+      <Text variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 280 }}>
         {message}
-      </T>
+      </Text>
       {actionLabel && onAction ? (
         <Button label={actionLabel} onPress={onAction} variant="ghost" />
       ) : null}
@@ -816,7 +852,7 @@ export function ScreenHeader({
     <Row justify="space-between" style={{ marginBottom: space.md }}>
       <View style={{ gap: 1 }}>
         <Label>{eyebrow}</Label>
-        <T variant="title">{title}</T>
+        <Text variant="title">{title}</Text>
       </View>
       {action ? (
         <Pressable
@@ -894,15 +930,15 @@ export function GroupTile({
       >
         <Ionicons name={icon} size={19} color="#FFFFFF" />
       </View>
-      <T variant="bodyStrong" numberOfLines={1} color={colors.ink}>
+      <Text variant="bodyStrong" numberOfLines={1} color={colors.ink}>
         {name}
-      </T>
-      <T variant="figureLarge" color={colors.ink}>
+      </Text>
+      <Text variant="figureLarge" color={colors.ink}>
         {amount}
-      </T>
-      <T variant="caption" tone="secondary" numberOfLines={1}>
+      </Text>
+      <Text variant="caption" tone="secondary" numberOfLines={1}>
         {subtitle}
-      </T>
+      </Text>
       <View
         style={{
           alignSelf: 'flex-start',
@@ -912,9 +948,9 @@ export function GroupTile({
           backgroundColor: `${color}26`,
         }}
       >
-        <T variant="caption" color={color} style={{ fontWeight: '700' }}>
+        <Text variant="caption" color={color} style={{ fontWeight: '700' }}>
           {progressLabel}
-        </T>
+        </Text>
       </View>
     </Pressable>
   );
@@ -965,24 +1001,26 @@ export function ListRow({
       }}
     >
       {leading}
-      <View style={{ flex: 1, gap: 1 }}>
+      {/* `gap` rather than a margin on the subtitle: the row can also take a
+          custom ReactNode subtitle, and only the gap spaces that one too. */}
+      <View style={{ flex: 1, gap: 4 }}>
         {typeof title === 'string' ? (
-          <T
+          <Text
             variant="bodyStrong"
             numberOfLines={1}
             color={titleColor}
             style={strikethrough ? { textDecorationLine: 'line-through' } : undefined}
           >
             {title}
-          </T>
+          </Text>
         ) : (
           title
         )}
         {subtitle != null ? (
           typeof subtitle === 'string' ? (
-            <T variant="caption" tone="muted" numberOfLines={1}>
+            <Text variant="caption" tone="muted" numberOfLines={1}>
               {subtitle}
-            </T>
+            </Text>
           ) : (
             subtitle
           )
@@ -1038,12 +1076,12 @@ export function Stat({
   if (inline) {
     return (
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <T variant="small" tone={onDark ? undefined : 'secondary'} color={onDark ? 'rgba(255,255,255,0.75)' : undefined}>
+        <Text variant="small" tone={onDark ? undefined : 'secondary'} color={onDark ? 'rgba(255,255,255,0.75)' : undefined}>
           {label}
-        </T>
-        <T variant="figure" color={valueColor}>
+        </Text>
+        <Text variant="figure" color={valueColor}>
           {value}
-        </T>
+        </Text>
       </View>
     );
   }
@@ -1051,9 +1089,9 @@ export function Stat({
   return (
     <View style={{ gap: 2, alignItems: align }}>
       <Label color={labelColor}>{label}</Label>
-      <T variant={large ? 'figureLarge' : 'figure'} color={valueColor} numberOfLines={1}>
+      <Text variant={large ? 'figureLarge' : 'figure'} color={valueColor} numberOfLines={1}>
         {value}
-      </T>
+      </Text>
     </View>
   );
 }
@@ -1083,13 +1121,13 @@ export function DetailRow({
         paddingVertical: space.md,
       }}
     >
-      <T variant="small" tone="muted">
+      <Text variant="small" tone="muted">
         {label}
-      </T>
+      </Text>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
-        <T variant="small" style={{ fontWeight: '600' }}>
+        <Text variant="small" style={{ fontWeight: '600' }}>
           {value}
-        </T>
+        </Text>
         {action ? (
           <Pressable
             onPress={action.onPress}
@@ -1146,7 +1184,7 @@ export function AppHeader({
       ) : (
         <View style={{ width: 24 }} />
       )}
-      <T variant="title">{title}</T>
+      <Text variant="title">{title}</Text>
       {right ??
         (action ? (
           <Pressable
@@ -1186,9 +1224,9 @@ export function Section({
       <View style={{ padding: space.lg, paddingBottom: note ? space.xs : space.md, gap: space.xs }}>
         <Label>{title}</Label>
         {note ? (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {note}
-          </T>
+          </Text>
         ) : null}
       </View>
       <Divider />

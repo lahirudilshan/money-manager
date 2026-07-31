@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
 import { Field } from '../../src/components/forms';
-import { BottomSheet, Button, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { to12Hour } from '../../src/core/dates';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
@@ -37,6 +37,7 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 export default function SmsDraftModal() {
   const { colors, radius, space } = useTheme();
   const closeModal = useModalClose();
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const state = useAppStore();
@@ -103,9 +104,9 @@ export default function SmsDraftModal() {
         icon="chatbox-ellipses-outline"
         iconColor={colors.accent}
       >
-        <T variant="small" tone="muted">
+        <Text variant="small" tone="muted">
           This draft has already been handled.
-        </T>
+        </Text>
       </BottomSheet>
     );
   }
@@ -205,10 +206,10 @@ export default function SmsDraftModal() {
               />
             </View>
             <View style={{ flex: 1 }}>
-              <T variant="bodyStrong" numberOfLines={2}>
+              <Text variant="bodyStrong" numberOfLines={2}>
                 {parsed.merchant || kindLabel}
-              </T>
-              <T variant="caption" tone="muted" numberOfLines={1}>
+              </Text>
+              <Text variant="caption" tone="muted" numberOfLines={1}>
                 {[
                   hintMeta ? hintMeta.label : kindLabel,
                   accountLabel,
@@ -222,21 +223,21 @@ export default function SmsDraftModal() {
                 ]
                   .filter(Boolean)
                   .join('  ·  ')}
-              </T>
+              </Text>
             </View>
           </Row>
 
           <View style={{ alignItems: 'center', paddingVertical: space.sm }}>
             <Label>{isCredit ? 'Money in' : 'Amount'}</Label>
-            <T variant="hero" color={isCredit ? colors.completed : colors.ink}>
+            <Text variant="hero" color={isCredit ? colors.completed : colors.ink}>
               {isCredit ? '+ ' : ''}
               {formatMoney(amountMinor, { showDecimals: true })}
-            </T>
+            </Text>
           </View>
 
-          <T variant="caption" tone="muted" style={{ fontStyle: 'italic' }}>
+          <Text variant="caption" tone="muted" style={{ fontStyle: 'italic' }}>
             “{parsed.raw}”
-          </T>
+          </Text>
         </Surface>
 
         <Field
@@ -270,16 +271,34 @@ export default function SmsDraftModal() {
           </Label>
 
           {draft.confidence === 'unknown' ? (
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               We don’t recognise “{parsed.merchant || 'this merchant'}” yet. Pick the right bill once
               and we’ll detect it automatically next time.
-            </T>
+            </Text>
           ) : null}
 
           {destinations.length === 0 ? (
-            <T variant="small" tone="muted">
-              No matching bills on your board yet — add one first.
-            </T>
+            /*
+             * A dead end until now: the picker only lists bills that already
+             * exist, so a board with none for this direction (income vs
+             * expense) showed "add one first" and no way to do it. The button
+             * closes this modal and opens the category editor, which is where
+             * bills are created.
+             */
+            <Surface style={{ gap: space.md }}>
+              <Text variant="small" tone="muted">
+                No bills on your board yet, so there is nowhere to log this.
+              </Text>
+              <Button
+                label="Create one"
+                icon="add"
+                variant="secondary"
+                onPress={() => {
+                  closeModal();
+                  router.push('/category/new');
+                }}
+              />
+            </Surface>
           ) : (
             // The same grid the manual "new transaction" screen uses: categories
             // as tiles that open into their bills. Recognising a tile beats
@@ -296,13 +315,16 @@ export default function SmsDraftModal() {
         </View>
         ) : null}
 
-        {/* Secondary escape hatch: I already recorded this by hand. */}
+        {/* The only escape here: deleting is offered by the × on the dashboard
+            card, so repeating it in this modal would be two controls for one
+            action. */}
         <Button
           label="Mark as already logged"
           icon="checkmark-done-outline"
           variant="ghost"
           onPress={markAlreadyLogged}
         />
+
     </BottomSheet>
   );
 }
@@ -347,9 +369,9 @@ function DetectedCategoryCard({
           size={14}
           color={tint}
         />
-        <T variant="caption" color={tint} style={{ fontWeight: '800' }}>
+        <Text variant="caption" color={tint} style={{ fontWeight: '800' }}>
           {isExact ? 'RECOGNISED — YOU CONFIRMED THIS BEFORE' : 'SUGGESTED CATEGORY'}
-        </T>
+        </Text>
       </Row>
 
       <Row gap={space.md}>
@@ -366,13 +388,13 @@ function DetectedCategoryCard({
           <Ionicons name={icon} size={21} color={tint} />
         </View>
         <View style={{ flex: 1 }}>
-          <T variant="bodyStrong" numberOfLines={1}>
+          <Text variant="bodyStrong" numberOfLines={1}>
             {name}
-          </T>
+          </Text>
           {categoryName ? (
-            <T variant="caption" tone="muted" numberOfLines={1}>
+            <Text variant="caption" tone="muted" numberOfLines={1}>
               {categoryName}
-            </T>
+            </Text>
           ) : null}
         </View>
       </Row>

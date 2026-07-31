@@ -5,7 +5,7 @@ import { planFor, type Feature } from '../core/plans';
 import { useAppStore } from '../store/useAppStore';
 import { useTheme } from '../theme/ThemeProvider';
 import { SMART_DETECT_NAME, SMART_DETECT_TAGLINE, SmartDetectBadge } from './SmartDetectBadge';
-import { BottomSheet, Button, GradientButton, Row, T } from './ui';
+import { BottomSheet, Button, GradientButton, Row, Text } from './ui';
 
 /**
  * Shown when a locked feature is used on a plan that does not include it.
@@ -57,12 +57,12 @@ export function UpgradeSheet({
     >
       <View style={{ alignItems: 'center', gap: space.md, paddingVertical: space.md }}>
         <SmartDetectBadge />
-        <T variant="title" style={{ textAlign: 'center' }}>
+        <Text variant="title" style={{ textAlign: 'center' }}>
           {SMART_DETECT_NAME}
-        </T>
-        <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
+        </Text>
+        <Text variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
           {SMART_DETECT_TAGLINE}
-        </T>
+        </Text>
       </View>
 
       <View
@@ -75,14 +75,14 @@ export function UpgradeSheet({
         }}
       >
         <Row justify="space-between" align="center">
-          <T variant="bodyStrong">{required.name}</T>
+          <Text variant="bodyStrong">{required.name}</Text>
           <Row gap={4} align="baseline">
-            <T variant="figureLarge" color={colors.accent}>
+            <Text variant="figureLarge" color={colors.accent}>
               {required.price}
-            </T>
-            <T variant="caption" tone="muted">
+            </Text>
+            <Text variant="caption" tone="muted">
               {required.period}
-            </T>
+            </Text>
           </Row>
         </Row>
 
@@ -90,13 +90,13 @@ export function UpgradeSheet({
           <Row key={perk.label} gap={space.sm} align="flex-start">
             <Ionicons name="sparkles" size={16} color={colors.accent} />
             <View style={{ flex: 1, gap: 1 }}>
-              <T variant="small" style={{ fontWeight: '700' }}>
+              <Text variant="small" style={{ fontWeight: '700' }}>
                 {perk.label}
-              </T>
+              </Text>
               {perk.detail ? (
-                <T variant="caption" tone="muted">
+                <Text variant="caption" tone="muted">
                   {perk.detail}
-                </T>
+                </Text>
               ) : null}
             </View>
           </Row>
@@ -104,14 +104,14 @@ export function UpgradeSheet({
 
         {/* Says the upgrade is additive, without repeating the whole Free list
             in a prompt whose job is to explain one locked feature. */}
-        <T variant="caption" tone="muted">
+        <Text variant="caption" tone="muted">
           Plus everything in Free.
-        </T>
+        </Text>
       </View>
 
-      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+      <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
         Billing is not connected yet — this unlocks the feature on this device.
-      </T>
+      </Text>
     </BottomSheet>
   );
 }

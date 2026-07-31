@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, View } from 'react-native';
-import { BottomSheet, Button, DetailRow, Divider, FundingBar, Label, Row, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, DetailRow, Divider, FundingBar, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { BankLogo } from '../../src/components/BankLogo';
 import { formatMoney } from '../../src/core/money';
@@ -40,9 +40,9 @@ export default function AccountDetailScreen() {
         icon="card-outline"
         iconColor={colors.accent}
       >
-        <T variant="small" tone="muted">
+        <Text variant="small" tone="muted">
           This account no longer exists.
-        </T>
+        </Text>
       </BottomSheet>
     );
   }
@@ -109,28 +109,28 @@ export default function AccountDetailScreen() {
             <Row gap={space.md}>
               <BankLogo brand={brand} size={48} />
               <View style={{ flex: 1 }}>
-                <T variant="heading" numberOfLines={1}>
+                <Text variant="heading" numberOfLines={1}>
                   {label.primary}
-                </T>
-                <T variant="caption" tone="muted">
+                </Text>
+                <Text variant="caption" tone="muted">
                   {label.secondary ?? (card.isCard ? 'Card' : 'Account')}
                   {card.last4 ? ` · ••${card.last4}` : ''}
-                </T>
+                </Text>
               </View>
             </Row>
           </View>
 
           <View style={{ padding: space.lg, gap: space.md }}>
             <Row justify="space-between">
-              <T variant="small" tone="secondary">
+              <Text variant="small" tone="secondary">
                 Balance
-              </T>
-              <T
+              </Text>
+              <Text
                 variant="figureLarge"
                 color={view.balanceMinor < 0 ? colors.danger : brand.color}
               >
                 {formatMoney(view.balanceMinor)}
-              </T>
+              </Text>
             </Row>
 
             {/* How that balance was reached, so the figure is checkable rather
@@ -138,32 +138,32 @@ export default function AccountDetailScreen() {
             {view.fundedInMinor > 0 || view.spentMinor > 0 ? (
               <>
                 <Row justify="space-between">
-                  <T variant="caption" tone="muted">
+                  <Text variant="caption" tone="muted">
                     Funded in this month
-                  </T>
-                  <T variant="caption" tone="secondary">
+                  </Text>
+                  <Text variant="caption" tone="secondary">
                     + {formatMoney(view.fundedInMinor)}
-                  </T>
+                  </Text>
                 </Row>
                 <Row justify="space-between">
-                  <T variant="caption" tone="muted">
+                  <Text variant="caption" tone="muted">
                     Paid out this month
-                  </T>
-                  <T variant="caption" tone="secondary">
+                  </Text>
+                  <Text variant="caption" tone="secondary">
                     − {formatMoney(view.spentMinor)}
-                  </T>
+                  </Text>
                 </Row>
               </>
             ) : null}
 
             {view.committedMinor > 0 ? (
               <Row justify="space-between">
-                <T variant="small" tone="secondary">
+                <Text variant="small" tone="secondary">
                   Still to pay from here
-                </T>
-                <T variant="figure" color={colors.pending}>
+                </Text>
+                <Text variant="figure" color={colors.pending}>
                   {formatMoney(view.committedMinor)}
-                </T>
+                </Text>
               </Row>
             ) : null}
 
@@ -171,9 +171,9 @@ export default function AccountDetailScreen() {
               <View style={{ gap: 4 }}>
                 <FundingBar pct={goalPct} color={brand.color} height={6} />
                 <Row justify="space-between">
-                  <T variant="caption" tone="muted">
+                  <Text variant="caption" tone="muted">
                     {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
-                  </T>
+                  </Text>
                 </Row>
               </View>
             ) : null}
@@ -235,11 +235,11 @@ export default function AccountDetailScreen() {
                   >
                     <Row gap={space.sm}>
                       <Ionicons name={(cat.icon as never) ?? 'albums-outline'} size={16} color={cat.color} />
-                      <T variant="bodyStrong">{cat.name}</T>
+                      <Text variant="bodyStrong">{cat.name}</Text>
                     </Row>
-                    <T variant="figure" color={cat.color}>
+                    <Text variant="figure" color={cat.color}>
                       {formatMoney(cat.totalMinor, { compact: true })}
-                    </T>
+                    </Text>
                   </Row>
                   {cat.lines.map((line, i) => (
                     <View key={line.id}>
@@ -248,13 +248,13 @@ export default function AccountDetailScreen() {
                         justify="space-between"
                         style={{ paddingHorizontal: space.lg, paddingVertical: space.sm }}
                       >
-                        <T variant="small" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
+                        <Text variant="small" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
                           {line.name}
-                        </T>
-                        <T variant="small" color={line.isActual ? colors.accent : colors.ink}>
+                        </Text>
+                        <Text variant="small" color={line.isActual ? colors.accent : colors.ink}>
                           {formatMoney(line.amountMinor, { compact: true })}
                           {line.isActual ? '' : ''}
-                        </T>
+                        </Text>
                       </Row>
                     </View>
                   ))}
@@ -262,9 +262,9 @@ export default function AccountDetailScreen() {
               ))
             ) : (
               <Surface>
-                <T variant="caption" tone="muted">
+                <Text variant="caption" tone="muted">
                   No categories draw from this account yet.
-                </T>
+                </Text>
               </Surface>
             )}
           </View>

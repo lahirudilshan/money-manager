@@ -10,7 +10,7 @@ import { AccountField } from './AccountPicker';
 import { BillFields, useBillDraft } from './BillFields';
 import { DayPicker } from './DayPicker';
 import { IconPicker, NameWithIconField } from './forms';
-import { BottomSheet, Button, GradientButton, Row, T } from './ui';
+import { BottomSheet, Button, GradientButton, Row, Text } from './ui';
 
 /**
  * Manage the plan's structure — categories and the bills inside them — without
@@ -110,7 +110,14 @@ export function ManagePlanSheet({
           text: 'Delete',
           style: 'destructive',
           onPress: () => {
-            state.deleteCategory(id);
+            // The pre-check above should have caught a refusal, but the store is
+            // the authority — report rather than closing on a delete that
+            // did not happen.
+            const result = state.deleteCategory(id);
+            if (!result.ok) {
+              Alert.alert('Remove the loan first', result.reason);
+              return;
+            }
             setMode({ kind: 'list' });
           },
         },
@@ -207,13 +214,13 @@ export function ManagePlanSheet({
       ) : (
         <>
       {categories.length === 0 ? (
-        <T variant="small" tone="muted">
+        <Text variant="small" tone="muted">
           No categories yet. Create one to start building the plan.
-        </T>
+        </Text>
       ) : (
-        <T variant="caption" tone="muted">
+        <Text variant="caption" tone="muted">
           Tap a category to see its bills. Tap any row to edit it.
-        </T>
+        </Text>
       )}
 
       {/* One collapsed row per category, expanding in place. Showing every
@@ -276,14 +283,14 @@ export function ManagePlanSheet({
                   </View>
 
                   <View style={{ flex: 1, gap: 1 }}>
-                    <T variant="bodyStrong" numberOfLines={1}>
+                    <Text variant="bodyStrong" numberOfLines={1}>
                       {category.name}
-                    </T>
-                    <T variant="caption" tone="muted">
+                    </Text>
+                    <Text variant="caption" tone="muted">
                       {lines.length === 0
                         ? 'No bills yet'
                         : `${lines.length} ${lines.length === 1 ? 'bill' : 'bills'} · ${formatMoney(planned, { compact: true })}`}
-                    </T>
+                    </Text>
                   </View>
 
                   <Ionicons
@@ -302,13 +309,13 @@ export function ManagePlanSheet({
               {open ? (
                 <View style={{ borderTopWidth: 1, borderTopColor: colors.hairline }}>
                   {lines.length === 0 ? (
-                    <T
+                    <Text
                       variant="caption"
                       tone="muted"
                       style={{ paddingVertical: 12, paddingHorizontal: space.md }}
                     >
                       No bills in {category.name} yet.
-                    </T>
+                    </Text>
                   ) : null}
 
                   {lines.map((line, index) => (
@@ -345,16 +352,16 @@ export function ManagePlanSheet({
                           />
                         </View>
 
-                        <T variant="small" numberOfLines={1} style={{ flex: 1 }}>
+                        <Text variant="small" numberOfLines={1} style={{ flex: 1 }}>
                           {line.name}
-                        </T>
+                        </Text>
 
                         {line.loanId ? (
                           <Ionicons name="trending-down" size={12} color={colors.inkMuted} />
                         ) : null}
-                        <T variant="small" tone="secondary">
+                        <Text variant="small" tone="secondary">
                           {formatMoney(line.plannedMinor)}
-                        </T>
+                        </Text>
                       </Pressable>
 
                       <RowEdit
@@ -386,9 +393,9 @@ export function ManagePlanSheet({
                     <View style={{ width: ROW_ICON, alignItems: 'center' }}>
                       <Ionicons name="add" size={16} color={colors.accent} />
                     </View>
-                    <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+                    <Text variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
                       Add a bill
-                    </T>
+                    </Text>
                   </Pressable>
                 </View>
               ) : null}
@@ -572,9 +579,9 @@ function useCategoryEditor({
           onSelect={setCardId}
         />
       ) : (
-        <T variant="small" tone="muted">
+        <Text variant="small" tone="muted">
           Add an account first to choose where this category's money goes.
-        </T>
+        </Text>
       )}
 
       <DayPicker value={dueDay} onChange={setDueDay} />
@@ -660,9 +667,9 @@ function useLineEditor({
         <BillFields draft={draft} cards={state.cards} category={category} />
 
         {existing?.loanId ? (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             This bill is linked to a loan. Its schedule is managed from the Loans tab.
-          </T>
+          </Text>
         ) : null}
 
         {onDelete ? (

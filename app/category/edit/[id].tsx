@@ -6,7 +6,7 @@ import { AccountField } from '../../../src/components/AccountPicker';
 import { DayPicker } from '../../../src/components/DayPicker';
 import { IconPicker, NameWithIconField } from '../../../src/components/forms';
 import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '../../../src/data/categoryIcons';
-import { BottomSheet, Button, GradientButton, Label, Row, T } from '../../../src/components/ui';
+import { BottomSheet, Button, GradientButton, Label, Row, Text } from '../../../src/components/ui';
 import { formatMoney } from '../../../src/core/money';
 import { FREQUENCY_LABEL } from '../../../src/db/schema';
 import { useModalClose } from '../../../src/hooks/useModalClose';
@@ -56,7 +56,7 @@ export default function EditCategoryScreen() {
   if (!category) {
     return (
       <View style={{ flex: 1, backgroundColor: colors.canvas, alignItems: 'center', justifyContent: 'center', gap: space.md }}>
-        <T variant="heading">Category not found</T>
+        <Text variant="heading">Category not found</Text>
         <Button label="Go back" onPress={closeModal} variant="ghost" />
       </View>
     );
@@ -155,21 +155,21 @@ export default function EditCategoryScreen() {
                       color={colors.inkMuted}
                     />
                     <View style={{ flex: 1 }}>
-                      <T variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
+                      <Text variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
                         {bill.name}
-                      </T>
-                      <T variant="caption" tone="muted">
+                      </Text>
+                      <Text variant="caption" tone="muted">
                         {FREQUENCY_LABEL[bill.frequency]} · {formatMoney(bill.plannedMinor)}
-                      </T>
+                      </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
                   </Pressable>
                 ))}
               </View>
-              <T variant="caption" tone="muted">
+              <Text variant="caption" tone="muted">
                 Tap a bill to change how often it repeats — use One-time for a cost you paid once,
                 so it stops counting in later months.
-              </T>
+              </Text>
             </View>
           ) : null}
     </BottomSheet>

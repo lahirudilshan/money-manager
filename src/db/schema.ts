@@ -37,6 +37,16 @@ export const cards = sqliteTable('cards', {
   bankId: text('bank_id'),
   /** Real bank/institution name, e.g. "HNB" — shown on the card face. */
   bankName: text('bank_name'),
+  /**
+   * The user's own name for this account — "Salary", "Joint", "Rent money".
+   *
+   * Distinct from `name` (which is often just the bank, picked from the catalog)
+   * and from `bankName`. Someone with three HNB accounts cannot tell them apart
+   * from the bank and last-4 alone, so this is what the lists lead with when it
+   * is set. Null when the user has not given one, in which case the bank/name
+   * pairing is used exactly as before.
+   */
+  nickname: text('nickname'),
   /** Last 4 digits of the account/card number, for a masked "•••• 1234" look. */
   last4: text('last4'),
   color: text('color').notNull().default('#6366F1'),
@@ -426,7 +436,27 @@ export const FREQUENCY_LABEL: Record<SubcategoryFrequency, string> = {
   monthly: 'Monthly',
   one_time: 'One-time',
   yearly: 'Yearly',
-  unplanned: 'Unplanned',
+  /*
+   * "Unplanned" was the wrong word: these lines are very much planned — the
+   * user sets a monthly budget for groceries — it is the individual *spends*
+   * that are not known in advance. "Spending budget" says what the line is
+   * (a pot you draw down) rather than describing it by what it lacks. The
+   * stored enum value stays `unplanned` so no migration is needed.
+   */
+  unplanned: 'Spending budget',
+};
+
+/**
+ * One line of help per cadence, shown under the picker. The spending-budget
+ * option needs it most — it behaves differently from the other three (many
+ * entries summed, never ticked "paid" as a whole) and that is not obvious
+ * from a two-word label.
+ */
+export const FREQUENCY_HINT: Record<SubcategoryFrequency, string> = {
+  monthly: 'The same bill every month.',
+  one_time: 'A single cost, counted in one month only.',
+  yearly: 'Once a year — you can save toward it monthly.',
+  unplanned: 'A monthly budget you spend down entry by entry, like groceries.',
 };
 
 /** Frequencies offered as a category's default cadence (no unplanned). */
@@ -442,8 +472,15 @@ export function supportsSavingPlan(frequency: SubcategoryFrequency): boolean {
   return frequency === 'yearly';
 }
 
-/** True for the unplanned frequency, which holds many child transactions
- * rather than one planned amount and is never marked paid as a whole. */
+/**
+ * True for a "spending budget" line (stored as `unplanned`).
+ *
+ * Such a line holds many child transactions rather than one amount paid once,
+ * and is never marked paid as a whole — its spend is the SUM of its entries.
+ * It DOES carry a `plannedMinor`, though: that is the monthly budget the
+ * entries are drawn against, which is what makes "Rs 8,400 of Rs 20,000" a
+ * meaningful thing to show.
+ */
 export function isUnplanned(frequency: SubcategoryFrequency): boolean {
   return frequency === 'unplanned';
 }

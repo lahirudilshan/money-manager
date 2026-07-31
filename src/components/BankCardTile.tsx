@@ -6,7 +6,7 @@ import { useBrand } from '../hooks/useBrand';
 import type { Card } from '../db/schema';
 import { shadeHex } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
-import { T } from './ui';
+import { Text } from './ui';
 
 const KIND_ICON: Record<Card['kind'], keyof typeof Ionicons.glyphMap> = {
   bank: 'business',
@@ -78,21 +78,21 @@ export function BankCardTile({
         </View>
 
         <View style={{ gap: compact ? 2 : 6 }}>
-          <T
+          <Text
             variant="caption"
             color={muted}
             style={{ textTransform: 'uppercase', letterSpacing: 1 }}
           >
             {card.bankName ?? brand.shortName}
-          </T>
+          </Text>
           {card.last4 ? (
-            <T variant="bodyStrong" color={ink} style={{ letterSpacing: 2 }}>
+            <Text variant="bodyStrong" color={ink} style={{ letterSpacing: 2 }}>
               •••• {card.last4}
-            </T>
+            </Text>
           ) : null}
-          <T variant={compact ? 'bodyStrong' : 'heading'} color={ink} numberOfLines={1}>
+          <Text variant={compact ? 'bodyStrong' : 'heading'} color={ink} numberOfLines={1}>
             {card.name}
-          </T>
+          </Text>
         </View>
       </LinearGradient>
     </View>

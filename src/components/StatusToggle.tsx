@@ -4,7 +4,7 @@ import { Pressable, View } from 'react-native';
 import { STATUS_ORDER, type SubcategoryStatus } from '../core/planning';
 import { statusStyle } from '../theme';
 import { useTheme } from '../theme/ThemeProvider';
-import { Label, T } from './ui';
+import { Label, Text } from './ui';
 
 const STATUS_LABEL: Record<SubcategoryStatus, string> = {
   pending: 'Not paid yet',
@@ -71,13 +71,13 @@ export function StatusToggle({
                 size={18}
                 color={selected ? style.fg : colors.inkMuted}
               />
-              <T
+              <Text
                 variant="small"
                 color={selected ? style.fg : colors.inkSecondary}
                 style={{ fontWeight: selected ? '700' : '500' }}
               >
                 {STATUS_LABEL[key]}
-              </T>
+              </Text>
             </Pressable>
           );
         })}

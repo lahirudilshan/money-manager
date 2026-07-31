@@ -3,7 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankSelectTile } from '../../src/components/BankLogo';
-import { GradientButton, Label, PinnedFooter, Row, T } from '../../src/components/ui';
+import { GradientButton, Label, PinnedFooter, Row, Text } from '../../src/components/ui';
 import { BANKS } from '../../src/data/banks';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -92,11 +92,11 @@ export default function OnboardingBanksScreen() {
     >
       <View style={{ gap: 2 }}>
         <Label>STEP 1 OF 4</Label>
-        <T variant="title">Where do you bank?</T>
-        <T variant="small" tone="muted">
+        <Text variant="title">Where do you bank?</Text>
+        <Text variant="small" tone="muted">
           Pick every account your money moves through. You can rename them or
           add balances later.
-        </T>
+        </Text>
       </View>
 
       <Section title="BANKS" tiles={banks} selected={selected} onToggle={toggle} />
@@ -107,11 +107,11 @@ export default function OnboardingBanksScreen() {
     <PinnedFooter>
       <View style={{ gap: space.sm }}>
         <Row justify="center">
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {selected.size === 0
               ? 'Select at least one account to continue'
               : `${selected.size} account${selected.size === 1 ? '' : 's'} selected`}
-          </T>
+          </Text>
         </Row>
         <GradientButton
           label="Continue"

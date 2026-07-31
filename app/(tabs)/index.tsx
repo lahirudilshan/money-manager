@@ -2,24 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
 import { SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { SmsDraftCard } from '../../src/components/SmsDraftCard';
 import { UpgradeSheet } from '../../src/components/UpgradeSheet';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import {
-  Divider,
-  Empty,
-  FundingBar,
-  GradientCard,
-  Label,
-  Row,
-  Stat,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { Divider, Empty, FundingBar, GradientCard, Label, Row, Stat, Surface, Text } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
 import { canUse } from '../../src/core/plans';
@@ -133,10 +123,10 @@ export default function DashboardScreen() {
       >
         <Row justify="space-between" align="center">
           <View style={{ gap: 1 }}>
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               {greeting}
-            </T>
-            <T variant="title">Dashboard</T>
+            </Text>
+            <Text variant="title">Dashboard</Text>
           </View>
           <Row
             gap={2}
@@ -154,9 +144,9 @@ export default function DashboardScreen() {
               onPress={() => state.setPeriod(shiftPeriod(state.period, -1))}
             />
             <View style={{ minWidth: 108, alignItems: 'center', justifyContent: 'center' }}>
-              <T variant="bodyStrong" numberOfLines={1}>
+              <Text variant="bodyStrong" numberOfLines={1}>
                 {formatPeriod(state.period)}
-              </T>
+              </Text>
             </View>
             <PeriodStep
               icon="chevron-forward"
@@ -191,14 +181,14 @@ export default function DashboardScreen() {
                   so it survives greyscale and colour-vision differences. */}
               <Row gap={4}>
                 <Ionicons name={healthVisual.icon as never} size={13} color="rgba(255,255,255,0.9)" />
-                <T variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
+                <Text variant="caption" color="rgba(255,255,255,0.9)" style={{ fontWeight: '800' }}>
                   {healthVisual.label}
-                </T>
+                </Text>
               </Row>
             </Row>
-            <T variant="hero" color="#FFFFFF">
+            <Text variant="hero" color="#FFFFFF">
               {formatMoney(ratios.disposableMinor)}
-            </T>
+            </Text>
           </View>
 
           {/* Four headline figures: money in, planned out, actually spent, debt.
@@ -326,17 +316,17 @@ export default function DashboardScreen() {
           <Row justify="space-between" align="center">
             <View style={{ gap: 4 }}>
               <SmartDetectBadge size="sm" showLock={!smartDetect} />
-              <T variant="caption" tone="muted">
+              <Text variant="caption" tone="muted">
                 Read from your SMS — confirm to add
-              </T>
+              </Text>
             </View>
             {/* Bare text, no pill: the section's own tinted background already
                 sets this apart, and a second tint inside it read as a control. */}
             <Row gap={4}>
               <Ionicons name="chatbox-ellipses" size={12} color={colors.accent} />
-              <T variant="caption" color={colors.accent}>
+              <Text variant="caption" color={colors.accent}>
                 {smsDrafts.length} to review
-              </T>
+              </Text>
             </Row>
           </Row>
 
@@ -358,6 +348,26 @@ export default function DashboardScreen() {
               }
               onConfirm={() =>
                 smartDetect ? state.confirmDraft(draft.id) : setUpgradeOpen(true)
+              }
+              /*
+               * Dismissing is NOT gated on the plan, unlike the two actions
+               * above. Those write to the board, which is the paid capability;
+               * clearing a detection the user does not want writes nothing, and
+               * making someone upgrade to dismiss a card would be hostile.
+               */
+              onDismiss={() =>
+                Alert.alert(
+                  'Delete this detection?',
+                  'It will be removed without being logged.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Delete',
+                      style: 'destructive',
+                      onPress: () => state.dismissDraft(draft.id),
+                    },
+                  ],
+                )
               }
             />
           ))}
@@ -389,9 +399,9 @@ export default function DashboardScreen() {
                   backgroundColor: colors.dangerSoft,
                 }}
               >
-                <T variant="caption" color={colors.danger} style={{ fontWeight: '800' }}>
+                <Text variant="caption" color={colors.danger} style={{ fontWeight: '800' }}>
                   {overdue.length} overdue
-                </T>
+                </Text>
               </View>
             ) : null}
           </Row>
@@ -413,12 +423,12 @@ export default function DashboardScreen() {
           <Row>
             <Ionicons name="checkmark-done-circle" size={30} color={colors.completed} />
             <View style={{ flex: 1 }}>
-              <T variant="bodyStrong" color={colors.completed}>
+              <Text variant="bodyStrong" color={colors.completed}>
                 Nothing due right now
-              </T>
-              <T variant="caption" tone="muted">
+              </Text>
+              <Text variant="caption" tone="muted">
                 {paidCount}/{totals.categoryCount} categories fully settled this month
-              </T>
+              </Text>
             </View>
           </Row>
         </Surface>
@@ -429,9 +439,9 @@ export default function DashboardScreen() {
         <View style={{ gap: space.sm }}>
           <Row justify="space-between" align="center">
             <Label>MONEY TO MOVE</Label>
-            <T variant="figure" color={totalToTransfer > 0 ? colors.pending : colors.completed}>
+            <Text variant="figure" color={totalToTransfer > 0 ? colors.pending : colors.completed}>
               {formatMoney(totalToTransfer)}
-            </T>
+            </Text>
           </Row>
 
           <View style={{ gap: space.sm }}>
@@ -457,36 +467,36 @@ export default function DashboardScreen() {
                   <Row gap={space.md}>
                     <BankLogo brand={brand} size={42} />
                     <View style={{ flex: 1 }}>
-                      <T variant="bodyStrong" numberOfLines={1}>
+                      <Text variant="bodyStrong" numberOfLines={1}>
                         {label.primary}
-                      </T>
-                      <T variant="caption" tone="muted" numberOfLines={1}>
+                      </Text>
+                      <Text variant="caption" tone="muted" numberOfLines={1}>
                         {label.secondary ??
                           account.categoryNames.slice(0, 3).join(' · ') ??
                           'No categories'}
-                      </T>
+                      </Text>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
-                      <T variant="figureLarge" color={done ? colors.completed : colors.ink}>
+                      <Text variant="figureLarge" color={done ? colors.completed : colors.ink}>
                         {done ? 'Done' : formatMoney(account.toTransferMinor, { compact: true })}
-                      </T>
-                      <T variant="caption" tone="muted">
+                      </Text>
+                      <Text variant="caption" tone="muted">
                         {done
                           ? 'all transferred'
                           : `${account.pendingCount} line${account.pendingCount === 1 ? '' : 's'} to fund`}
-                      </T>
+                      </Text>
                     </View>
                   </Row>
 
                   <FundingBar pct={pct} color={brand.color} surplus={done} />
 
                   <Row justify="space-between">
-                    <T variant="caption" tone="muted">
+                    <Text variant="caption" tone="muted">
                       {formatMoney(account.movedMinor)} moved
-                    </T>
-                    <T variant="caption" tone="muted">
+                    </Text>
+                    <Text variant="caption" tone="muted">
                       of {formatMoney(account.plannedMinor)}
-                    </T>
+                    </Text>
                   </Row>
                 </Surface>
               );
@@ -510,18 +520,18 @@ export default function DashboardScreen() {
           </Row>
           <Row justify="space-between">
             <View style={{ gap: 2 }}>
-              <T variant="caption" tone="muted">
+              <Text variant="caption" tone="muted">
                 Outstanding
-              </T>
-              <T variant="figureLarge">{formatMoney(loanOutstanding, { compact: true })}</T>
+              </Text>
+              <Text variant="figureLarge">{formatMoney(loanOutstanding, { compact: true })}</Text>
             </View>
             <View style={{ alignItems: 'flex-end', gap: 2 }}>
-              <T variant="caption" tone="muted">
+              <Text variant="caption" tone="muted">
                 Per month
-              </T>
-              <T variant="figureLarge" color={colors.pending}>
+              </Text>
+              <Text variant="figureLarge" color={colors.pending}>
                 {formatMoney(loanMonthly, { compact: true })}
-              </T>
+              </Text>
             </View>
           </Row>
         </Surface>
@@ -613,7 +623,7 @@ function HeroStat({ label, value }: { label: string; value: string }) {
         // width, so side padding is the most expensive space here.
         style={{ paddingVertical: space.sm, paddingHorizontal: 6, gap: 2 }}
       >
-        <T
+        <Text
           variant="label"
           color="rgba(255,255,255,0.65)"
           numberOfLines={1}
@@ -621,7 +631,7 @@ function HeroStat({ label, value }: { label: string; value: string }) {
           minimumFontScale={0.8}
         >
           {label}
-        </T>
+        </Text>
         {/*
          * Shrinks to fit rather than truncating.
          *
@@ -632,7 +642,7 @@ function HeroStat({ label, value }: { label: string; value: string }) {
          * so the whole number is always readable; the floor keeps it from
          * shrinking to something illegible on the narrowest device.
          */}
-        <T
+        <Text
           variant="figure"
           color="#FFFFFF"
           numberOfLines={1}
@@ -640,7 +650,7 @@ function HeroStat({ label, value }: { label: string; value: string }) {
           minimumFontScale={0.7}
         >
           {value}
-        </T>
+        </Text>
       </LinearGradient>
     </View>
   );
@@ -686,9 +696,9 @@ function QuickAction({
       >
         <Ionicons name={icon} size={19} color={colors.accent} />
       </View>
-      <T variant="caption" tone="secondary" numberOfLines={1} style={{ fontWeight: '600' }}>
+      <Text variant="caption" tone="secondary" numberOfLines={1} style={{ fontWeight: '600' }}>
         {label}
-      </T>
+      </Text>
     </Pressable>
   );
 }
@@ -747,21 +757,21 @@ function ReminderRow({
       </View>
 
       <View style={{ flex: 1 }}>
-        <T variant="bodyStrong" numberOfLines={1}>
+        <Text variant="bodyStrong" numberOfLines={1}>
           {reminder.subcategory.name}
-        </T>
+        </Text>
         <Row gap={space.xs}>
-          <T variant="caption" color={accent} style={{ fontWeight: '700' }}>
+          <Text variant="caption" color={accent} style={{ fontWeight: '700' }}>
             {when}
-          </T>
-          <T variant="caption" tone="muted" numberOfLines={1}>
+          </Text>
+          <Text variant="caption" tone="muted" numberOfLines={1}>
             · {reminder.categoryName}
             {reminder.categoryTransferred ? ' · money ready' : ''}
-          </T>
+          </Text>
         </Row>
       </View>
 
-      <T variant="figure">{formatMoney(reminder.amountMinor, { compact: true })}</T>
+      <Text variant="figure">{formatMoney(reminder.amountMinor, { compact: true })}</Text>
       <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
     </Pressable>
   );
@@ -778,9 +788,9 @@ function LegendDot({ shade, label }: { shade: number; label: string }) {
           backgroundColor: `rgba(255,255,255,${shade})`,
         }}
       />
-      <T variant="caption" color="rgba(255,255,255,0.85)">
+      <Text variant="caption" color="rgba(255,255,255,0.85)">
         {label}
-      </T>
+      </Text>
     </Row>
   );
 }

@@ -1,8 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { SMART_DETECT_NAME, SmartDetectBadge } from '../../src/components/SmartDetectBadge';
-import { BottomSheet, Label, Row, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Label, Row, Surface, Text } from '../../src/components/ui';
+import {
+  clearSmsIntakeLog,
+  describeOutcome,
+  getSmsIntakeLog,
+  subscribeSmsIntakeLog,
+} from '../../src/core/smsIntakeLog';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -31,10 +37,10 @@ export default function SmsAutomationGuide() {
         {/* Branded so the feature is recognisable wherever it appears. */}
         <View style={{ gap: space.sm }}>
           <SmartDetectBadge />
-          <T variant="small" tone="secondary">
+          <Text variant="small" tone="secondary">
             iOS won&apos;t let apps read messages, so a <B>Shortcut</B> does it: a bank SMS arrives,
             the app opens, and {SMART_DETECT_NAME} turns it into a draft waiting on your dashboard.
-          </T>
+          </Text>
         </View>
 
         {/* A screen recording of the real thing, above the written steps, and
@@ -53,19 +59,39 @@ export default function SmsAutomationGuide() {
           <Step n={1}>
             <Tap>Automation</Tap> → <Tap>＋</Tap> → <Tap>Message</Tap>.
           </Step>
-          <Step n={2} code="LKR">
+          <Step
+            n={2}
+            code="LKR"
+            note="Paid in another currency? Add a second automation with USD (or whichever code your bank prints). The app converts it at your saved rate."
+          >
             <Tap>Message Contains</Tap> this, then <Tap>Run Immediately</Tap> and <Tap>Next</Tap>.
           </Step>
+          {/*
+            URL Encode is its own step, not a footnote.
+
+            Without it iOS truncates the URL at the first space in the message —
+            the app receives "HNB" and nothing else, which shows up as "opened,
+            but not read as a payment". It is the single most common reason the
+            automation appears to do nothing, so it gets a numbered step of its
+            own rather than being buried in step 3's prose.
+          */}
           <Step
             n={3}
-            code="moneymanager://sms?text="
-            result={<Result prefix="moneymanager://sms?text=" chip="Shortcut Input" />}
-            warn="Insert the chip, don’t type it — tap the “Shortcut Input” suggestion above the keyboard."
+            result={<Result label="URL Encode" chip="Shortcut Input" />}
+            warn="Skip this and the link breaks at the first space — the app opens but sees only the first word."
           >
-            Add <Tap>Text</Tap>, type the link, then insert <Chip>Shortcut Input</Chip> after the{' '}
-            <B>=</B>.
+            Add <Tap>URL Encode</Tap>, set to <Chip>Shortcut Input</Chip>.
           </Step>
-          <Step n={4} last result={<Result label="Open" chip="Text" />}>
+          <Step
+            n={4}
+            code="moneymanager://sms?text="
+            result={<Result prefix="moneymanager://sms?text=" chip="URL Encoded Text" />}
+            warn="Insert the chip, don’t type it — tap the suggestion above the keyboard."
+          >
+            Add <Tap>Text</Tap>, type the link, then insert <Chip>URL Encoded Text</Chip> after
+            the <B>=</B>.
+          </Step>
+          <Step n={5} last result={<Result label="Open" chip="Text" />}>
             Add <Tap>Open URLs</Tap>, set it to that <Chip>Text</Chip>, then <Tap>Done</Tap>.
           </Step>
         </Surface>
@@ -75,13 +101,20 @@ export default function SmsAutomationGuide() {
         <Surface style={{ gap: space.sm, borderColor: colors.accentSoft }}>
           <Row gap={space.sm}>
             <Ionicons name="checkmark-circle" size={20} color={colors.completed} />
-            <T variant="bodyStrong">Test it</T>
+            <Text variant="bodyStrong">Test it</Text>
           </Row>
-          <T variant="small" tone="secondary">
+          <Text variant="small" tone="secondary">
             Text yourself <B>&ldquo;debited LKR 1,250.00 at KEELLS&rdquo;</B>. The app should open
             with a draft waiting.
-          </T>
+          </Text>
         </Surface>
+
+        {/* Live diagnostics. The intake pipeline stops silently in several
+            legitimate places, and from outside they all look the same: the app
+            opened and nothing happened. This says which one occurred, and for a
+            rejected message shows the text, so an unparsed bank format can be
+            reported instead of guessed at. */}
+        <IntakeLogPanel />
 
         {/* Two fixes, not three: the third was a restatement of step 3's warning. */}
         <PartHeader tag="If nothing happens" title="Common fixes" />
@@ -91,17 +124,123 @@ export default function SmsAutomationGuide() {
             body="Check Run Immediately is on. With “Notify When Run” enabled, iOS waits for you to tap a notification instead."
           />
           <Fix
-            title="It opened but no draft appeared"
+            title="It says “Link was cut short”"
             body="The message may carry no readable amount, or be an OTP or promo — those are ignored on purpose. Paste it into Add → Paste a message to see what’s detected."
             last
           />
         </Surface>
 
-        <T variant="caption" tone="muted">
+        <Text variant="caption" tone="muted">
           On Android, any automation app that can open a URL on an incoming SMS (Tasker, MacroDroid)
           works the same way — point it at <B>moneymanager://sms?text=</B> with the message appended.
-        </T>
+        </Text>
     </BottomSheet>
+  );
+}
+
+/**
+ * What actually happened to the last few messages the app was handed.
+ *
+ * This exists because every stop in the intake pipeline is silent by design —
+ * a message with no readable amount, an OTP, a link with no `text=` — and all of
+ * them present to the user as "the Shortcut opened the app and nothing
+ * appeared". Naming the outcome turns an unfalsifiable complaint into a fact,
+ * and showing the rejected text means an unsupported bank format can be copied
+ * into `src/data/sms-samples.json` rather than guessed at.
+ *
+ * Hidden entirely until something arrives, so the guide stays short for the
+ * common case where setup simply works.
+ */
+function IntakeLogPanel() {
+  const { colors, radius, space } = useTheme();
+
+  // `useSyncExternalStore` rather than an effect + state: the log is written
+  // from outside React (the root layout's URL listener), and this is the
+  // supported way to read a mutable external source without tearing.
+  const entries = React.useSyncExternalStore(subscribeSmsIntakeLog, getSmsIntakeLog);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <Surface style={{ gap: space.md }}>
+      <Row justify="space-between" align="center">
+        <Row gap={space.sm}>
+          <Ionicons name="pulse-outline" size={18} color={colors.accent} />
+          <Text variant="bodyStrong">Recent messages</Text>
+        </Row>
+        <Pressable
+          onPress={clearSmsIntakeLog}
+          accessibilityRole="button"
+          hitSlop={10}
+          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+        >
+          <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+            Clear
+          </Text>
+        </Pressable>
+      </Row>
+
+      {entries.map((entry) => {
+        const ok = entry.outcome === 'ingested';
+        return (
+          <View
+            key={`${entry.at}-${entry.text.slice(0, 12)}`}
+            style={{
+              gap: 4,
+              padding: space.md,
+              borderRadius: radius.md,
+              backgroundColor: colors.surfaceSunken,
+            }}
+          >
+            <Row gap={6}>
+              <Ionicons
+                name={ok ? 'checkmark-circle' : 'alert-circle'}
+                size={14}
+                color={ok ? colors.completed : colors.pending}
+              />
+              <Text
+                variant="caption"
+                color={ok ? colors.completed : colors.pending}
+                style={{ fontWeight: '700', flex: 1 }}
+              >
+                {describeOutcome(entry.outcome)}
+              </Text>
+              <Text variant="caption" tone="muted">
+                {new Date(entry.at).toLocaleTimeString(undefined, {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </Text>
+            </Row>
+            {/* The message itself, only when it was NOT understood — that is
+                the case where seeing the exact text is the whole point. */}
+            {!ok ? (
+              <>
+                {/*
+                  The character count is the diagnostic that matters most here.
+                  A truncated URL and a genuinely unparseable message look
+                  identical once the text is shown at 4 lines — but the length
+                  says immediately whether the whole SMS arrived. Anything much
+                  under the real message length means the link was cut, not that
+                  the parser failed.
+                */}
+                <Text variant="caption" tone="muted">
+                  {entry.text.length} characters received
+                </Text>
+                <Text variant="caption" tone="muted" numberOfLines={6}>
+                  {entry.text}
+                </Text>
+              </>
+            ) : null}
+          </View>
+        );
+      })}
+
+      <Text variant="caption" tone="muted">
+        If a real payment shows as “not read as a payment”, that bank’s wording
+        isn’t supported yet — the text above is what needs to be added.
+      </Text>
+    </Surface>
   );
 }
 
@@ -134,9 +273,9 @@ function Walkthrough() {
       <View style={{ alignItems: 'center', borderRadius: radius.lg, overflow: 'hidden' }}>
         <VideoPlayback />
       </View>
-      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+      <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
         Playing from the start — pause on any step, or tap fullscreen for a closer look.
-      </T>
+      </Text>
     </View>
   );
 }
@@ -217,13 +356,13 @@ function PartHeader({ tag, title }: { tag: string; title: string }) {
           backgroundColor: colors.accentSoft,
         }}
       >
-        <T variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+        <Text variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
           {tag.toUpperCase()}
-        </T>
+        </Text>
       </View>
-      <T variant="heading" style={{ flex: 1 }}>
+      <Text variant="heading" style={{ flex: 1 }}>
         {title}
-      </T>
+      </Text>
     </Row>
   );
 }
@@ -235,6 +374,7 @@ function Step({
   code,
   result,
   warn,
+  note,
   last,
 }: {
   n: number;
@@ -242,6 +382,8 @@ function Step({
   code?: string;
   result?: React.ReactNode;
   warn?: string;
+  /** A quieter aside under the step — an optional extra, not a correction. */
+  note?: string;
   last?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
@@ -258,17 +400,22 @@ function Step({
             justifyContent: 'center',
           }}
         >
-          <T variant="small" color="#FFFFFF" style={{ fontWeight: '800' }}>
+          <Text variant="small" color="#FFFFFF" style={{ fontWeight: '800' }}>
             {n}
-          </T>
+          </Text>
         </View>
         <View style={{ flex: 1, gap: space.sm }}>
-          <T variant="body" style={{ lineHeight: 22 }}>
+          <Text variant="body" style={{ lineHeight: 22 }}>
             {children}
-          </T>
+          </Text>
           {code ? <CodeBlock>{code}</CodeBlock> : null}
           {result ? result : null}
           {warn ? <Warn>{warn}</Warn> : null}
+          {note ? (
+            <Text variant="caption" tone="muted" style={{ lineHeight: 17 }}>
+              {note}
+            </Text>
+          ) : null}
         </View>
       </View>
       {!last ? <View style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
@@ -290,9 +437,9 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
         paddingVertical: 10,
       }}
     >
-      <T variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
+      <Text variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
         {children}
-      </T>
+      </Text>
     </View>
   );
 }
@@ -301,18 +448,18 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 function Tap({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
   return (
-    <T variant="body" color={colors.ink} style={{ fontWeight: '700' }}>
+    <Text variant="body" color={colors.ink} style={{ fontWeight: '700' }}>
       {children}
-    </T>
+    </Text>
   );
 }
 
 function B({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
   return (
-    <T variant="body" color={colors.ink} style={{ fontWeight: '700' }}>
+    <Text variant="body" color={colors.ink} style={{ fontWeight: '700' }}>
       {children}
-    </T>
+    </Text>
   );
 }
 
@@ -320,9 +467,9 @@ function B({ children }: { children: React.ReactNode }) {
 function Chip({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
   return (
-    <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+    <Text variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
       {`[${children}]`}
-    </T>
+    </Text>
   );
 }
 
@@ -360,14 +507,14 @@ function Result({ label, prefix, chip }: { label?: string; prefix?: string; chip
         }}
       >
         {label ? (
-          <T variant="small" color={colors.ink} style={{ fontWeight: '600' }}>
+          <Text variant="small" color={colors.ink} style={{ fontWeight: '600' }}>
             {label}
-          </T>
+          </Text>
         ) : null}
         {prefix ? (
-          <T variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
+          <Text variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
             {prefix}
-          </T>
+          </Text>
         ) : null}
         <View
           style={{
@@ -377,9 +524,9 @@ function Result({ label, prefix, chip }: { label?: string; prefix?: string; chip
             paddingVertical: 2,
           }}
         >
-          <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+          <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
             {chip}
-          </T>
+          </Text>
         </View>
       </View>
     </View>
@@ -402,9 +549,9 @@ function Warn({ children }: { children: React.ReactNode }) {
       }}
     >
       <Ionicons name="alert-circle" size={16} color={colors.pending} style={{ marginTop: 1 }} />
-      <T variant="caption" tone="secondary" style={{ flex: 1, lineHeight: 18 }}>
+      <Text variant="caption" tone="secondary" style={{ flex: 1, lineHeight: 18 }}>
         {children}
-      </T>
+      </Text>
     </View>
   );
 }
@@ -417,13 +564,13 @@ function Fix({ title, body, last }: { title: string; body: string; last?: boolea
       <View style={{ gap: 4, padding: space.lg }}>
         <Row gap={space.sm}>
           <Ionicons name="alert-circle-outline" size={15} color={colors.pending} />
-          <T variant="small" style={{ fontWeight: '700', flex: 1 }}>
+          <Text variant="small" style={{ fontWeight: '700', flex: 1 }}>
             {title}
-          </T>
+          </Text>
         </Row>
-        <T variant="caption" tone="secondary" style={{ lineHeight: 18 }}>
+        <Text variant="caption" tone="secondary" style={{ lineHeight: 18 }}>
           {body}
-        </T>
+        </Text>
       </View>
       {!last ? <View style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
     </View>
@@ -446,13 +593,13 @@ function Keyword({ word, desc, last }: { word: string; desc: string; last?: bool
             paddingVertical: 5,
           }}
         >
-          <T variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
+          <Text variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
             {word}
-          </T>
+          </Text>
         </View>
-        <T variant="caption" tone="secondary" style={{ flex: 1 }}>
+        <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
           {desc}
-        </T>
+        </Text>
       </Row>
       {!last ? <View style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
     </View>

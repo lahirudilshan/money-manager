@@ -40,6 +40,11 @@ utility alerts and opens a draft for each.
      `debited`, `credited`, `withdrawal`, `Rs.`, `LKR`, `CEB`, `NWSDB`.
      (You can create several automations, one per keyword, or use one with the
      most common word like `Rs.`.)
+   - **Foreign-currency alerts** (an inward SWIFT salary, a card used abroad)
+     do not contain `LKR`, so they need their own automation on the code the
+     bank prints — usually `USD`. The parser reads any ISO code it recognises
+     and the app converts the amount to your currency using the USD rate saved
+     in Settings, keeping the original figure on the draft for reference.
    - Set it to **Run Immediately** (not "Run After Confirmation") so it's
      hands-off. iOS may still show a brief banner.
 3. Tap **Next** → **New Blank Automation** → **Add Action**.

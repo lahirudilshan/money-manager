@@ -5,22 +5,7 @@ import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { BankCardTile } from '../../src/components/BankCardTile';
 import { BankLogo } from '../../src/components/BankLogo';
 import { Field } from '../../src/components/forms';
-import {
-  AppHeader,
-  BottomSheet,
-  Button,
-  DetailRow,
-  Divider,
-  Empty,
-  FundingBar,
-  GradientButton,
-  GradientCard,
-  Label,
-  ListRow,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
 import { accountLabel, BANKS } from '../../src/data/banks';
@@ -76,13 +61,13 @@ export default function CardsScreen() {
         <GradientCard>
           <View style={{ gap: 2 }}>
             <Label color="rgba(255,255,255,0.75)">TOTAL ACROSS ACCOUNTS</Label>
-            <T variant="hero" color="#FFFFFF">
+            <Text variant="hero" color="#FFFFFF">
               {formatMoney(totalHeld)}
-            </T>
-            <T variant="caption" color="rgba(255,255,255,0.65)">
+            </Text>
+            <Text variant="caption" color="rgba(255,255,255,0.65)">
               {accountViews.length} account{accountViews.length === 1 ? '' : 's'} · opening balances
               plus transfers in
-            </T>
+            </Text>
           </View>
         </GradientCard>
 
@@ -169,23 +154,28 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
       <ListRow
         leading={<BankLogo brand={brand} size={44} />}
         title={label.primary}
+        /* With a nickname set, the bank and last-4 move here — the row must
+           still say *which real account* it is, or a list of nicknames is
+           unusable for checking a balance against a banking app. */
         subtitle={
-          label.secondary ??
+          [label.secondary, card.last4 ? `••${card.last4}` : null]
+            .filter(Boolean)
+            .join(' · ') ||
           (view.categoryNames.length > 0
             ? view.categoryNames.join(' · ')
             : 'No categories assigned')
         }
         trailing={
           <View style={{ alignItems: 'flex-end' }}>
-            <T variant="figureLarge">{formatMoney(view.balanceMinor, { compact: true })}</T>
+            <Text variant="figureLarge">{formatMoney(view.balanceMinor, { compact: true })}</Text>
             {view.committedMinor > 0 ? (
-              <T variant="caption" color={colors.pending}>
+              <Text variant="caption" color={colors.pending}>
                 {formatMoney(view.committedMinor, { compact: true })} to pay
-              </T>
+              </Text>
             ) : (
-              <T variant="caption" tone="muted">
+              <Text variant="caption" tone="muted">
                 balance
-              </T>
+              </Text>
             )}
           </View>
         }
@@ -205,13 +195,13 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
         >
           <FundingBar pct={goalPct} color={colors.accent} height={5} />
           <Row justify="space-between">
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
-            </T>
-            <T variant="caption" tone="muted">
+            </Text>
+            <Text variant="caption" tone="muted">
               {formatMoney(Math.max(0, card.targetMinor! - view.balanceMinor), { compact: true })} to
               go
-            </T>
+            </Text>
           </Row>
         </View>
       ) : null}
@@ -266,12 +256,12 @@ function DetailModal({
           <Row gap={space.md}>
             <BankLogo brand={brand} size={48} />
             <View style={{ flex: 1 }}>
-              <T variant="heading" numberOfLines={1}>
+              <Text variant="heading" numberOfLines={1}>
                 {accountLabel(card).primary}
-              </T>
-              <T variant="caption" tone="muted">
+              </Text>
+              <Text variant="caption" tone="muted">
                 {accountLabel(card).secondary ?? (card.isCard ? 'Card' : 'Account')}
-              </T>
+              </Text>
             </View>
           </Row>
 
@@ -322,14 +312,14 @@ function DetailModal({
                       {i > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
                       <Row gap={space.sm} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
                         <Ionicons name="albums-outline" size={16} color={colors.inkMuted} />
-                        <T variant="small">{n}</T>
+                        <Text variant="small">{n}</Text>
                       </Row>
                     </View>
                   ))
                 ) : (
-                  <T variant="caption" tone="muted" style={{ padding: space.lg }}>
+                  <Text variant="caption" tone="muted" style={{ padding: space.lg }}>
                     No categories draw from this account yet.
-                  </T>
+                  </Text>
                 )}
               </Surface>
             </View>
@@ -357,6 +347,8 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   const [isCard, setIsCard] = useState(existing?.isCard ?? false);
   const [bankId, setBankId] = useState<string | null>(existing?.bankId ?? null);
   const [name, setName] = useState(existing?.name ?? '');
+  /** The user's own label for this account, shown ahead of the bank in lists. */
+  const [nickname, setNickname] = useState(existing?.nickname ?? '');
   const [last4, setLast4] = useState(existing?.last4 ?? '');
   // Card fields
   const [cardNumber, setCardNumber] = useState(existing?.cardNumber ?? '');
@@ -400,6 +392,7 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
       isCard,
       bankId,
       bankName: brand?.name ?? existing?.bankName ?? null,
+      nickname: nickname.trim() || null,
       last4: derivedLast4,
       icon: isCard ? 'card-outline' : 'wallet-outline',
       targetMinor: existing?.targetMinor ?? null,
@@ -455,6 +448,19 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             placeholder={isCard ? 'e.g. HNB Visa' : 'e.g. Salary account'}
           />
 
+          {/* Step 3b: the nickname. Optional, and the thing every list leads
+              with once set — which is what makes three accounts at the same
+              bank tellable apart at a glance. */}
+          <Field
+            label="Nickname (optional)"
+            value={nickname}
+            onChangeText={setNickname}
+            placeholder={isCard ? 'e.g. Everyday card' : 'e.g. Salary, Joint, Rent'}
+          />
+          <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
+            Shown instead of the bank name in your accounts list.
+          </Text>
+
           {/* Step 4: the identifying details for each type. */}
           {isCard ? (
             <>
@@ -508,9 +514,9 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
               }
               keyboardType="numeric"
             />
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               Used to match bank SMS to this {isCard ? 'card' : 'account'}.
-            </T>
+            </Text>
           </View>
 
           {/* What is in the account today. The balance shown on the cards screen
@@ -524,11 +530,11 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
               placeholder="0"
               keyboardType="numeric"
             />
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               {isCard
                 ? 'What this card holds today — transfers and payments adjust it from here.'
                 : `What is in the account today, in ${state.currency}. Leave blank to start from zero.`}
-            </T>
+            </Text>
           </View>
     </BottomSheet>
   );
@@ -593,13 +599,13 @@ function Segmented({
               size={17}
               color={selected ? colors.accent : colors.inkSecondary}
             />
-            <T
+            <Text
               variant="small"
               color={selected ? colors.ink : colors.inkSecondary}
               style={{ fontWeight: selected ? '800' : '600' }}
             >
               {option.label}
-            </T>
+            </Text>
           </Pressable>
         );
       })}
@@ -646,14 +652,14 @@ function BankPicker({
               })}
             >
               <BankLogo brand={brand} size={38} />
-              <T
+              <Text
                 variant="caption"
                 color={selected ? colors.ink : colors.inkMuted}
                 numberOfLines={1}
                 style={{ maxWidth: 60, fontWeight: selected ? '700' : '500' }}
               >
                 {brand.shortName}
-              </T>
+              </Text>
             </Pressable>
           );
         })}

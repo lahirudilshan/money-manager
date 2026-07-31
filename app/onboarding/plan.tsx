@@ -7,16 +7,7 @@ import { BankLogo } from '../../src/components/BankLogo';
 import { DayPicker } from '../../src/components/DayPicker';
 import { DragList } from '../../src/components/DragList';
 import { FrequencyPicker } from '../../src/components/forms';
-import {
-  BottomSheet,
-  Divider,
-  GradientButton,
-  Label,
-  PinnedFooter,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { BottomSheet, Divider, GradientButton, Label, PinnedFooter, Row, Surface, Text } from '../../src/components/ui';
 import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
 import { CATEGORY_CATALOG } from '../../src/data/categoryCatalog';
@@ -142,35 +133,57 @@ export default function OnboardingPlanScreen() {
     >
       <View style={{ gap: 2 }}>
         <Label>STEP 3 OF 4</Label>
-        <T variant="title">Set up your plan</T>
-        <T variant="small" tone="muted">
+        <Text variant="title">Set up your plan</Text>
+        <Text variant="small" tone="muted">
           Tap a line to set its amount, day and account. Hold and drag to
           reorder.
-        </T>
+        </Text>
       </View>
 
       {/* Running total, so amounts are entered against live feedback. */}
+      {/*
+        Label/figure pairs. The label shrinks and the figure holds its width —
+        a seven-digit salary would otherwise push "Planned spend" off the row or
+        wrap it. `adjustsFontSizeToFit` on the figures is the second line of
+        defence for the widest cases.
+      */}
       <Surface style={{ gap: space.sm }}>
-        <Row justify="space-between">
-          <T variant="small" tone="secondary">
+        <Row justify="space-between" gap={space.sm}>
+          <Text variant="small" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
             Income
-          </T>
-          <T variant="figure" color={colors.completed}>
+          </Text>
+          <Text
+            variant="figure"
+            color={colors.completed}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
             {formatMoney(totals.income)}
-          </T>
+          </Text>
         </Row>
-        <Row justify="space-between">
-          <T variant="small" tone="secondary">
+        <Row justify="space-between" gap={space.sm}>
+          <Text variant="small" tone="secondary" numberOfLines={1} style={{ flexShrink: 1 }}>
             Planned spend
-          </T>
-          <T variant="figure">−{formatMoney(totals.expense, { showCurrency: false })}</T>
+          </Text>
+          <Text variant="figure" numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            −{formatMoney(totals.expense, { showCurrency: false })}
+          </Text>
         </Row>
         <Divider />
-        <Row justify="space-between">
-          <T variant="bodyStrong">Left over</T>
-          <T variant="figureLarge" color={totals.left >= 0 ? colors.ink : colors.danger}>
+        <Row justify="space-between" gap={space.sm}>
+          <Text variant="bodyStrong" numberOfLines={1} style={{ flexShrink: 1 }}>
+            Left over
+          </Text>
+          <Text
+            variant="figureLarge"
+            color={totals.left >= 0 ? colors.ink : colors.danger}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.8}
+          >
             {formatMoney(totals.left)}
-          </T>
+          </Text>
         </Row>
       </Surface>
 
@@ -201,9 +214,9 @@ export default function OnboardingPlanScreen() {
       <View style={{ gap: space.sm }}>
         {unsetCount > 0 ? (
           <Row justify="center">
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               {unsetCount} line{unsetCount === 1 ? '' : 's'} still need an amount
-            </T>
+            </Text>
           </Row>
         ) : null}
         <GradientButton
@@ -280,22 +293,28 @@ function PlanRow({
       <Ionicons name={line.icon as never} size={18} color={colors.inkSecondary} />
 
       <View style={{ flex: 1 }}>
-        <T variant="bodyStrong" numberOfLines={1}>
+        <Text variant="bodyStrong" numberOfLines={1}>
           {line.name}
-        </T>
-        <T variant="caption" tone="muted" numberOfLines={1}>
+        </Text>
+        <Text variant="caption" tone="muted" numberOfLines={1}>
           Day {line.dueDay}
           {card ? ` · ${card.name}` : ''}
           {line.frequency !== 'monthly' ? ` · ${line.frequency.replace('_', '-')}` : ''}
-        </T>
+        </Text>
       </View>
 
-      <T
+      {/* Compact-formatted, so usually short — but a long currency code plus a
+          large figure can still crowd the name beside it. Held to one line and
+          allowed to shrink rather than pushing the row's layout around. */}
+      <Text
         variant="figure"
         color={line.type === 'income' ? colors.completed : colors.ink}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
       >
         {line.plannedMinor > 0 ? formatMoney(line.plannedMinor, { compact: true }) : 'Set'}
-      </T>
+      </Text>
 
       <Pressable
         onPress={onRemove}
@@ -336,11 +355,19 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
           {line ? (
             <>
               <View style={{ gap: space.sm }}>
-                <Row justify="space-between" align="center">
-                  <Label>AMOUNT</Label>
+                {/*
+                  Label and currency toggle on one line, but the toggle is
+                  allowed to keep its natural width and the label to shrink:
+                  `Chip` used to be `flex: 1` inside an unbounded row, so a long
+                  currency code squeezed the pair unpredictably.
+                */}
+                <Row justify="space-between" align="center" gap={space.sm}>
+                  <View style={{ flexShrink: 1 }}>
+                    <Label>AMOUNT</Label>
+                  </View>
                   {/* Income is often paid in USD; expenses are local. */}
                   {line.type === 'income' ? (
-                    <Row gap={space.xs}>
+                    <Row gap={space.xs} style={{ flexShrink: 0 }}>
                       <Chip
                         label={state.currency}
                         selected={line.currency === 'local'}
@@ -385,6 +412,14 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                   placeholderTextColor={colors.inkMuted}
                   keyboardType="numeric"
                   autoFocus
+                  /*
+                   * A salary in rupees runs to seven or eight digits. The field
+                   * is full-width and the text scrolls horizontally within it,
+                   * so nothing is clipped — but the size is dropped from 22 to
+                   * 20 so a realistic figure fits without scrolling at all on a
+                   * narrow phone. (`adjustsFontSizeToFit` is Text-only; it is
+                   * not available on TextInput.)
+                   */
                   style={{
                     backgroundColor: colors.surface,
                     borderWidth: 1,
@@ -392,16 +427,16 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                     borderRadius: radius.md,
                     paddingHorizontal: space.md,
                     paddingVertical: 14,
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: '800',
                     color: colors.ink,
                   }}
                 />
 
                 {line.currency === 'usd' ? (
-                  <T variant="caption" tone="muted">
+                  <Text variant="caption" tone="muted">
                     ≈ {formatMoney(line.plannedMinor)} at {state.currency} {state.usdRate} / USD
-                  </T>
+                  </Text>
                 ) : null}
               </View>
 
@@ -457,13 +492,13 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                         >
                           <BankLogo brand={brand} size={40} />
                           <View style={{ flex: 1 }}>
-                            <T variant="bodyStrong" numberOfLines={1}>
+                            <Text variant="bodyStrong" numberOfLines={1}>
                               {card.name}
-                            </T>
+                            </Text>
                             {card.bankName ? (
-                              <T variant="caption" tone="muted" numberOfLines={1}>
+                              <Text variant="caption" tone="muted" numberOfLines={1}>
                                 {card.bankName}
-                              </T>
+                              </Text>
                             ) : null}
                           </View>
                           <Ionicons
@@ -500,9 +535,18 @@ function Chip({
       accessibilityRole="button"
       accessibilityState={{ selected }}
       style={({ pressed }) => ({
-        flex: 1,
+        /*
+         * Sized by its own label, not `flex: 1`.
+         *
+         * These sit in a right-aligned pair beside the AMOUNT label, where
+         * stretching made a two-character code ("LKR") and a three-character
+         * one ("USD") render at different widths depending on what else was on
+         * the row. A minimum width keeps the pair even without forcing it.
+         */
+        minWidth: 62,
         alignItems: 'center',
-        paddingVertical: 10,
+        paddingVertical: 8,
+        paddingHorizontal: space.sm,
         borderRadius: radius.md,
         borderWidth: 1.5,
         borderColor: selected ? colors.accent : colors.hairline,
@@ -510,13 +554,13 @@ function Chip({
         opacity: pressed ? 0.75 : 1,
       })}
     >
-      <T
+      <Text
         variant="small"
         color={selected ? colors.accentInk : colors.inkSecondary}
         style={{ fontWeight: selected ? '700' : '500' }}
       >
         {label}
-      </T>
+      </Text>
     </Pressable>
   );
 }

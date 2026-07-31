@@ -3,7 +3,7 @@ import React from 'react';
 import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { BankBrand } from '../data/banks';
 import { useTheme } from '../theme/ThemeProvider';
-import { T } from './ui';
+import { Text } from './ui';
 
 /**
  * A bank's mark: its monogram on its brand colour. Stands in for a real logo
@@ -35,7 +35,7 @@ export function BankLogo({
         style,
       ]}
     >
-      <T
+      <Text
         variant="label"
         color={brand.onColor}
         style={{
@@ -46,7 +46,7 @@ export function BankLogo({
         }}
       >
         {brand.monogram}
-      </T>
+      </Text>
     </View>
   );
 }
@@ -93,13 +93,13 @@ export function BankSelectTile({
       <View
         style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
       >
-        <T
+        <Text
           variant="figureLarge"
           color={brand.onColor}
           style={{ fontWeight: '800', letterSpacing: 0.5 }}
         >
           {brand.monogram}
-        </T>
+        </Text>
         {selected ? (
           <View
             style={{
@@ -118,9 +118,9 @@ export function BankSelectTile({
         )}
       </View>
 
-      <T variant="caption" color={brand.onColor} numberOfLines={2} style={{ opacity: 0.95 }}>
+      <Text variant="caption" color={brand.onColor} numberOfLines={2} style={{ opacity: 0.95 }}>
         {brand.name}
-      </T>
+      </Text>
     </Pressable>
   );
 }

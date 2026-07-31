@@ -2,7 +2,8 @@ import { Redirect, useGlobalSearchParams, useLocalSearchParams } from 'expo-rout
 import * as Linking from 'expo-linking';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { extractSmsFromUrl, decodeSmsParam } from '../../src/core/smsIntakeUrl';
+import { extractSmsFromUrl, decodeSmsParam, looksTruncated } from '../../src/core/smsIntakeUrl';
+import { logSmsIntake } from '../../src/core/smsIntakeLog';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -39,6 +40,8 @@ export default function SmsIntakeScreen() {
   const handled = useRef(false);
 
   useEffect(() => {
+    // Wait for the store rather than dropping the message: this effect re-runs
+    // when `ready` flips, and `handled` keeps the ingest to exactly once.
     if (!ready || handled.current) return;
     handled.current = true;
 
@@ -57,7 +60,23 @@ export default function SmsIntakeScreen() {
             ? fromUrl
             : decodedParam;
 
-        if (best) ingestSmsText(best);
+        if (best) {
+          const id = ingestSmsText(best);
+          // Same diagnostics as the root layout's listener, so a cold start
+          // that silently drops a message is as visible as a warm one.
+          logSmsIntake(
+            id === 'duplicate'
+              ? 'duplicate'
+              : id
+                ? 'ingested'
+                : looksTruncated(best)
+                  ? 'truncated'
+                  : 'parser-rejected',
+            best,
+          );
+        } else {
+          logSmsIntake('no-text-param', url ?? '(no launch URL)');
+        }
 
         // Deliberately NOT calling `Linking.clearInitialURL()` here: the root
         // layout reads the same launch URL for the cold-start case, and whoever
@@ -66,7 +85,22 @@ export default function SmsIntakeScreen() {
       })
       .catch(() => {
         // A failed URL read must never strand the user on a spinner.
-        if (fromParam) ingestSmsText(decodeSmsParam(fromParam));
+        if (!fromParam) return;
+        const fallback = decodeSmsParam(fromParam);
+        const id = ingestSmsText(fallback);
+        // Logged like every other path: this branch previously ingested
+        // silently, so a message lost here left no trace in the diagnostics
+        // panel — the one place the user can see what happened.
+        logSmsIntake(
+          id === 'duplicate'
+            ? 'duplicate'
+            : id
+              ? 'ingested'
+              : looksTruncated(fallback)
+                ? 'truncated'
+                : 'parser-rejected',
+          fallback,
+        );
       })
       .finally(() => setDone(true));
   }, [ready, text, globalParams.text, ingestSmsText]);

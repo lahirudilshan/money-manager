@@ -252,18 +252,31 @@ export function resolveBrand(input: {
 }
 
 /**
- * How an account reads everywhere in the app: the *bank* is the headline
- * ("HNB", "Sampath"), and the user's own label ("Main account", "Savings") is
- * the secondary line. Falls back gracefully — a hand-typed account with no bank
+ * How an account reads everywhere in the app.
+ *
+ * A **nickname** wins outright when the user has set one, with the bank
+ * demoted to the secondary line: someone holding three HNB accounts cannot tell
+ * them apart from "HNB ••4150" repeated three times, and the whole point of
+ * naming one "Salary" is to see that word first.
+ *
+ * Otherwise the *bank* is the headline ("HNB", "Sampath") and the account's own
+ * name is secondary. Falls back gracefully — a hand-typed account with no bank
  * shows its name as the primary and nothing secondary.
  */
 export function accountLabel(card: {
   bankId?: string | null;
   bankName?: string | null;
+  nickname?: string | null;
   name: string;
 }): { primary: string; secondary: string | null } {
   const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
   const bank = card.bankName ?? (brand.id !== 'other' ? brand.name : null);
+
+  // The user's own name for it leads when set — that is what it is for.
+  const nickname = card.nickname?.trim();
+  if (nickname) {
+    return { primary: nickname, secondary: bank ?? (card.name !== nickname ? card.name : null) };
+  }
 
   // With a known bank: bank is primary, the custom name is secondary (unless
   // it's the same string). Without one: the custom name stands alone.

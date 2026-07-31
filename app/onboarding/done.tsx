@@ -3,7 +3,7 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Button, T } from '../../src/components/ui';
+import { Button, Text } from '../../src/components/ui';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -44,13 +44,13 @@ export default function OnboardingDoneScreen() {
       >
         <Ionicons name="checkmark" size={36} color={colors.completed} />
       </View>
-      <T variant="title" style={{ textAlign: 'center' }}>
+      <Text variant="title" style={{ textAlign: 'center' }}>
         You're set up
-      </T>
-      <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 280 }}>
+      </Text>
+      <Text variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 280 }}>
         Your accounts and plan are ready. The dashboard shows what's due, how
         much to move to each account, and your month at a glance.
-      </T>
+      </Text>
       <Button label="Go to Dashboard" onPress={handleFinish} style={{ width: '100%' }} />
     </View>
   );

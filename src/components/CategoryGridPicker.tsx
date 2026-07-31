@@ -3,7 +3,7 @@ import React from 'react';
 import { LayoutAnimation, Platform, Pressable, UIManager, View } from 'react-native';
 import { formatMoney } from '../core/money';
 import { useTheme } from '../theme/ThemeProvider';
-import { Label, Row, T } from './ui';
+import { Label, Row, Text } from './ui';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -116,19 +116,19 @@ export function CategoryGridPicker({
         {selectedDestination ? (
           <Row gap={4}>
             <Ionicons name="checkmark-circle" size={13} color={colors.completed} />
-            <T
+            <Text
               variant="caption"
               color={colors.completed}
               style={{ fontWeight: '700' }}
               numberOfLines={1}
             >
               {selectedDestination.name}
-            </T>
+            </Text>
           </Row>
         ) : (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             Tap a category
-          </T>
+          </Text>
         )}
       </Row>
 
@@ -307,7 +307,7 @@ function CategoryCell({
           />
         </View>
 
-        <T
+        <Text
           variant="caption"
           color={selected ? colors.inkInverse : open ? category.color : colors.ink}
           numberOfLines={2}
@@ -319,7 +319,7 @@ function CategoryCell({
           }}
         >
           {category.name}
-        </T>
+        </Text>
 
         {expandable ? (
           <Ionicons
@@ -398,7 +398,7 @@ function BillRows({
                     : colors.surface,
               })}
             >
-              <T
+              <Text
                 variant="caption"
                 color={chosen ? colors.inkInverse : colors.ink}
                 numberOfLines={2}
@@ -410,14 +410,14 @@ function BillRows({
                 }}
               >
                 {bill.name}
-              </T>
-              <T
+              </Text>
+              <Text
                 variant="caption"
                 color={chosen ? colors.inkInverse : colors.inkMuted}
                 style={{ fontSize: 10 }}
               >
                 {formatMoney(bill.plannedMinor, { compact: true })}
-              </T>
+              </Text>
             </Pressable>
           </View>
         );
@@ -466,14 +466,14 @@ function ExtraCell({
           size={17}
           color={tile.selected ? colors.accent : colors.inkMuted}
         />
-        <T
+        <Text
           variant="caption"
           color={tile.selected ? colors.accent : colors.inkMuted}
           numberOfLines={1}
           style={{ fontWeight: '600' }}
         >
           {tile.label}
-        </T>
+        </Text>
       </Pressable>
     </View>
   );

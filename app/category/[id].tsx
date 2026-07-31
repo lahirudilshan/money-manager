@@ -3,17 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import {
-  Button,
-  Divider,
-  FundingBar,
-  Glyph,
-  Label,
-  ListRow,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { Button, Divider, FundingBar, Glyph, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
 import { AccountPickerSheet } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
 import { formatMoney } from '../../src/core/money';
@@ -51,7 +41,7 @@ export default function CategoryDetailScreen() {
           gap: space.md,
         }}
       >
-        <T variant="heading">Category not found</T>
+        <Text variant="heading">Category not found</Text>
         <Button label="Go back" onPress={() => router.back()} variant="ghost" />
       </View>
     );
@@ -82,17 +72,32 @@ export default function CategoryDetailScreen() {
   })();
 
   function confirmDelete() {
-    Alert.alert(`Delete ${category.name}?`, 'Its bills will be removed too.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          state.deleteCategory(category.id);
-          router.back();
+    const billCount = view!.rawSubcategories.length;
+
+    Alert.alert(
+      `Delete ${category.name}?`,
+      billCount > 0
+        ? `This also removes its ${billCount} ${billCount === 1 ? 'bill' : 'bills'} and their logged history.`
+        : 'This category has no bills yet.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            // The store refuses when the category holds a loan installment.
+            // Say so and stay put — popping the screen on a refused delete is
+            // what made this look like "delete doesn't work".
+            const result = state.deleteCategory(category.id);
+            if (!result.ok) {
+              Alert.alert('Remove the loan first', result.reason);
+              return;
+            }
+            router.back();
+          },
         },
-      },
-    ]);
+      ],
+    );
   }
 
   return (
@@ -132,11 +137,11 @@ export default function CategoryDetailScreen() {
         <Row>
           <Glyph icon={category.icon as never} color={category.color} size={48} />
           <View style={{ flex: 1, gap: 2 }}>
-            <T variant="title">{category.name}</T>
-            <T variant="caption" tone="muted">
+            <Text variant="title">{category.name}</Text>
+            <Text variant="caption" tone="muted">
               {formatPeriod(state.period)} · {summary.subcategoryCount} bill
               {summary.subcategoryCount === 1 ? '' : 's'}
-            </T>
+            </Text>
           </View>
         </Row>
 
@@ -145,16 +150,16 @@ export default function CategoryDetailScreen() {
           <Row justify="space-between" align="flex-start">
             <View style={{ gap: 2 }}>
               <Label>TOTAL PLAN</Label>
-              <T variant="display">{formatMoney(summary.totalMinor)}</T>
+              <Text variant="display">{formatMoney(summary.totalMinor)}</Text>
             </View>
             <View style={{ alignItems: 'flex-end', gap: 2 }}>
               <Label>PAID</Label>
-              <T
+              <Text
                 variant="figureLarge"
                 color={summary.isSettled ? colors.completed : colors.ink}
               >
                 {formatMoney(summary.paidMinor)}
-              </T>
+              </Text>
             </View>
           </Row>
 
@@ -170,17 +175,17 @@ export default function CategoryDetailScreen() {
               surplus={summary.isSettled}
             />
             <Row justify="space-between">
-              <T variant="caption" tone="muted">
+              <Text variant="caption" tone="muted">
                 {summary.counts.paid}/{summary.subcategoryCount} bills paid
-              </T>
-              <T
+              </Text>
+              <Text
                 variant="caption"
                 color={summary.outstandingMinor > 0 ? colors.pending : colors.completed}
               >
                 {summary.outstandingMinor > 0
                   ? `${formatMoney(summary.outstandingMinor, { compact: true })} left`
                   : 'All paid'}
-              </T>
+              </Text>
             </Row>
           </View>
 
@@ -190,9 +195,9 @@ export default function CategoryDetailScreen() {
               <Divider />
               <Row gap={6}>
                 <Ionicons name="repeat-outline" size={14} color={colors.inkMuted} />
-                <T variant="caption" tone="secondary">
+                <Text variant="caption" tone="secondary">
                   {frequencyLabel}
-                </T>
+                </Text>
               </Row>
             </>
           ) : null}
@@ -225,13 +230,13 @@ export default function CategoryDetailScreen() {
               color={transferred ? transferStyle.fg : colors.inkSecondary}
             />
             <View style={{ flex: 1 }}>
-              <T
+              <Text
                 variant="bodyStrong"
                 color={transferred ? transferStyle.fg : colors.ink}
               >
                 {transferred ? 'Money transferred' : 'Not transferred yet'}
-              </T>
-              <T
+              </Text>
+              <Text
                 variant="caption"
                 color={transferred ? transferStyle.fg : colors.inkMuted}
                 style={transferred ? { opacity: 0.85 } : undefined}
@@ -239,7 +244,7 @@ export default function CategoryDetailScreen() {
                 {transferred
                   ? 'The account holds this category’s money'
                   : 'Tap when the bulk money lands'}
-              </T>
+              </Text>
             </View>
           </Pressable>
 
@@ -298,8 +303,8 @@ function SettingRow({
   return (
     <ListRow
       leading={leading}
-      title={<T variant="body" tone="secondary">{label}</T>}
-      trailing={<T variant="bodyStrong">{value}</T>}
+      title={<Text variant="body" tone="secondary">{label}</Text>}
+      trailing={<Text variant="bodyStrong">{value}</Text>}
       chevron
       onPress={onPress}
       accessibilityLabel={`${label}: ${value}`}

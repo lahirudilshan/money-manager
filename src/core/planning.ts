@@ -76,8 +76,24 @@ export function appliesToPeriod(category: PlannedCategory, period: string): bool
   return category.period === period;
 }
 
-/** Amount that actually counts for a category — actual if set, else planned. */
+/**
+ * Amount that actually counts for a category — actual if set, else planned.
+ *
+ * A spending budget ("unplanned") is the exception, and it must be, because for
+ * that kind of line `actualMinor` is a *running* total rather than a settled
+ * figure. Taking the actual outright would shrink the month's plan every time
+ * the user looked: a Rs 20,000 grocery budget with Rs 8,400 spent so far would
+ * report as a Rs 8,400 plan, so the amount still to fund fell as the month went
+ * on — the opposite of the truth.
+ *
+ * So a budget counts for whichever is larger: the budget it set aside, or what
+ * has actually been spent when that has already overrun it. Money genuinely
+ * spent is never hidden, and money still to be spent is still planned for.
+ */
 export function effectiveAmount(category: PlannedCategory): Minor {
+  if (category.frequency === 'unplanned') {
+    return Math.max(category.plannedMinor, category.actualMinor ?? 0);
+  }
   return category.actualMinor ?? category.plannedMinor;
 }
 

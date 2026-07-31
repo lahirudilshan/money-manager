@@ -7,7 +7,7 @@ import type { BottomTabBarProps } from 'expo-router/build/react-navigation/botto
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeProvider';
-import { T } from './ui';
+import { Text } from './ui';
 
 /**
  * Floating dock.
@@ -215,7 +215,7 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
                   active tab without the width changing, and colour plus the
                   filled glyph still carry the selection.
                 */}
-                <T
+                <Text
                   color={focused ? colors.accent : colors.inkMuted}
                   numberOfLines={1}
                   style={{
@@ -226,7 +226,7 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
                   }}
                 >
                   {meta.label}
-                </T>
+                </Text>
               </View>
             </Pressable>
           );

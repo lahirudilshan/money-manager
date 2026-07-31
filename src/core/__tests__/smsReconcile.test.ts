@@ -218,3 +218,69 @@ describe('accountLabelFor', () => {
     expect(accountLabelFor('', board.cards)).toBe('');
   });
 });
+
+describe('foreign-currency conversion', () => {
+  const usdSalarySms =
+    'Your A/C No: ********7427 is credited with USD2,500.00 on 31 JUL 2026 ref: Inward SWIFT Payment. Your bal is USD5,002.26.';
+
+  it('converts a USD credit into the home currency before logging', () => {
+    const parsed = parseSms(usdSalarySms)!;
+    const draft = reconcileSms(parsed, board, 'd1', [], { currency: 'LKR', usdRate: 300 });
+
+    // 2,500 USD at 300 = 750,000 LKR.
+    expect(draft.amountMinor).toBe(75_000_000);
+    // The message's own figure is preserved for the review UI.
+    expect(draft.foreign).toEqual({ currency: 'USD', amountMinor: 250_000 });
+  });
+
+  it('leaves the parsed amount untouched — only the draft is converted', () => {
+    const parsed = parseSms(usdSalarySms)!;
+    const draft = reconcileSms(parsed, board, 'd2', [], { currency: 'LKR', usdRate: 300 });
+    expect(draft.parsed.amountMinor).toBe(250_000);
+    expect(draft.parsed.currency).toBe('USD');
+  });
+
+  it('does not convert when the message is already in the home currency', () => {
+    const parsed = parseSms(
+      'LKR 9,500.00 debited from AC XXXXXXXX1234 as POS TXN on 24 Jul 2026 at CEYLON ELECTRICITY BOARD. Avl Bal 1.00',
+    )!;
+    const draft = reconcileSms(parsed, board, 'd3', [], { currency: 'LKR', usdRate: 300 });
+    expect(draft.amountMinor).toBe(950_000);
+    expect(draft.foreign).toBeNull();
+  });
+
+  it('scores a converted USD salary against the LKR salary plan', () => {
+    // The board's salary line plans 350,000 LKR. At a rate of 140, the 2,500 USD
+    // credit converts to exactly that — so the amount signal fires only because
+    // the conversion happened before scoring. Without it, 2,500 minor units
+    // would be compared against 350,000 and score nothing.
+    const parsed = parseSms(usdSalarySms)!;
+    const converted = reconcileSms(parsed, board, 'd4', [], { currency: 'LKR', usdRate: 140 });
+    expect(converted.amountMinor).toBe(35_000_000);
+
+    const salaryMatch = converted.matches.find((m) => m.subcategoryId === 'sub-salary');
+    expect(salaryMatch).toBeDefined();
+
+    // The same message with no conversion cannot reach the salary line on amount.
+    const unconverted = reconcileSms(parsed, board, 'd4b', [], { currency: 'USD', usdRate: 140 });
+    const unconvertedMatch = unconverted.matches.find((m) => m.subcategoryId === 'sub-salary');
+    expect(salaryMatch!.score).toBeGreaterThan(unconvertedMatch?.score ?? 0);
+  });
+
+  it('passes an unconvertible currency through rather than using a wrong rate', () => {
+    const parsed = parseSms(
+      'Your account 1234 is credited with EUR 1,200.00 on 01 Jul 2026 ref: Payment',
+    )!;
+    const draft = reconcileSms(parsed, board, 'd5', [], { currency: 'LKR', usdRate: 300 });
+    // No EUR→LKR rate is stored, so the figure is left for the user to correct
+    // rather than silently multiplied by the USD rate.
+    expect(draft.amountMinor).toBe(120_000);
+    expect(draft.foreign).toBeNull();
+  });
+
+  it('ignores a zero or nonsensical stored rate', () => {
+    const parsed = parseSms(usdSalarySms)!;
+    const draft = reconcileSms(parsed, board, 'd6', [], { currency: 'LKR', usdRate: 0 });
+    expect(draft.amountMinor).toBe(250_000);
+  });
+});

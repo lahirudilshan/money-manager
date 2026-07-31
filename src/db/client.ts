@@ -30,6 +30,7 @@ const DDL = [
     kind TEXT NOT NULL DEFAULT 'bank',
     bank_id TEXT,
     bank_name TEXT,
+    nickname TEXT,
     last4 TEXT,
     color TEXT NOT NULL DEFAULT '#6366F1',
     icon TEXT NOT NULL DEFAULT 'card-outline',
@@ -554,6 +555,8 @@ function ensureAdditiveColumns(): void {
     ensureColumn('cards', 'account_number', 'account_number TEXT');
     ensureColumn('cards', 'branch', 'branch TEXT');
     ensureColumn('cards', 'bank_code', 'bank_code TEXT');
+    // The user's own name for the account — see `cards` in schema.ts.
+    ensureColumn('cards', 'nickname', 'nickname TEXT');
   }
 
   const hasLoans = expoDb.getFirstSync(

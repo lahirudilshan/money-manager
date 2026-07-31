@@ -2,7 +2,7 @@ import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { Field } from '../../src/components/forms';
-import { BottomSheet, GradientButton, T } from '../../src/components/ui';
+import { BottomSheet, GradientButton, Text } from '../../src/components/ui';
 import { DatePickerField } from '../../src/components/DatePickerField';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { parseAmount } from '../../src/core/money';
@@ -57,9 +57,9 @@ export default function AddUnplannedTransaction() {
       footer={<GradientButton label="Add entry" icon="add" onPress={handleSave} disabled={!canSave} />}
     >
       {subcategory ? (
-        <T variant="small" tone="muted">
+        <Text variant="small" tone="muted">
           The line&apos;s total is the sum of its entries.
-        </T>
+        </Text>
       ) : null}
 
       <Field label="What was it?" value={name} onChangeText={setName} placeholder="e.g. Keells run" autoFocus />

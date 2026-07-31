@@ -3,7 +3,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../theme/ThemeProvider';
-import { T } from './ui';
+import { Text } from './ui';
 
 /**
  * The one place the Smart Detect feature is named and styled.
@@ -43,13 +43,13 @@ export function SmartDetectBadge({
         }}
       >
         <Ionicons name={showLock ? 'lock-closed' : 'sparkles'} size={small ? 10 : 12} color="#FFFFFF" />
-        <T
+        <Text
           variant="caption"
           color="#FFFFFF"
           style={{ fontWeight: '800', fontSize: small ? 9 : 10, letterSpacing: 0.3 }}
         >
           {SMART_DETECT_NAME.toUpperCase()}
-        </T>
+        </Text>
       </LinearGradient>
     </View>
   );

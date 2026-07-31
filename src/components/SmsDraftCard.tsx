@@ -8,7 +8,7 @@ import { HINT_META } from '../core/smsCategoryHints';
 import { accountLabelFor, cardForAccount, type SmsDraft } from '../core/smsReconcile';
 import type { Card } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
-import { T } from './ui';
+import { Text } from './ui';
 
 /**
  * One parsed-from-SMS draft, as a compact card built around three tiers.
@@ -34,6 +34,7 @@ export function SmsDraftCard({
   matchedBillName,
   onOpen,
   onConfirm,
+  onDismiss,
 }: {
   draft: SmsDraft;
   /** All accounts, used to name which one the SMS's digits point at. */
@@ -42,6 +43,11 @@ export function SmsDraftCard({
   matchedBillName?: string;
   /** Open the detail modal — fired by tapping the body or the left action. */
   onOpen: () => void;
+  /**
+   * Discard this detection without logging it — a duplicate alert, a misread
+   * promo, a transfer between the user's own accounts.
+   */
+  onDismiss: () => void;
   /** Log the draft against its current mapping. */
   onConfirm: () => void;
 }) {
@@ -134,9 +140,9 @@ export function SmsDraftCard({
           <View style={{ flex: 1, gap: 3 }}>
             {/* The merchant gets the whole line — the amount lives in the
                 suggestion band below, paired with the category. */}
-            <T variant="bodyStrong" numberOfLines={1}>
+            <Text variant="bodyStrong" numberOfLines={1}>
               {parsed.merchant || kindLabel}
-            </T>
+            </Text>
 
             {/* Provenance. Deliberately the quietest line on the card: facts to
                 confirm at a glance, not decisions. The account shrinks first
@@ -152,28 +158,66 @@ export function SmsDraftCard({
                   />
                   {/* A recognised account reads a step stronger than an unknown
                       one: it is evidence the draft belongs to the user. */}
-                  <T
+                  <Text
                     variant="caption"
                     tone={matchedCard ? 'secondary' : 'muted'}
                     numberOfLines={1}
                     style={{ flexShrink: 1, fontWeight: matchedCard ? '600' : '500' }}
                   >
                     {accountLabel}
-                  </T>
+                  </Text>
                 </>
               ) : null}
               {accountLabel && whenLabel ? (
-                <T variant="caption" color={colors.inkFaint}>
+                <Text variant="caption" color={colors.inkFaint}>
                   ·
-                </T>
+                </Text>
               ) : null}
               {whenLabel ? (
-                <T variant="caption" tone="muted" numberOfLines={1}>
+                <Text variant="caption" tone="muted" numberOfLines={1}>
                   {whenLabel}
-                </T>
+                </Text>
               ) : null}
             </View>
+
+            {/* What the bank actually said, when it said it in another currency.
+                The figure on the right is the converted, home-currency amount
+                that will be logged — without this line the user cannot reconcile
+                it against the message they just read on their phone. */}
+            {draft.foreign ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="swap-horizontal" size={11} color={colors.inkMuted} />
+                <Text variant="caption" tone="muted" numberOfLines={1}>
+                  {draft.foreign.currency}{' '}
+                  {(draft.foreign.amountMinor / 100).toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  in the message
+                </Text>
+              </View>
+            ) : null}
           </View>
+
+          {/*
+            Discard, as a quiet × in the header rather than a third button
+            beside the two below.
+
+            Dismissing is not one of the card's two real answers ("this belongs
+            to X" / "this is wrong") — it is the exit for a message that should
+            never have become a draft. Giving it equal weight would make every
+            card look like a three-way decision. Its own Pressable so the tap
+            does not fall through to the card body, which opens the detail page.
+          */}
+          <Pressable
+            onPress={onDismiss}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Delete this detection"
+            style={({ pressed }) => ({ opacity: pressed ? 0.4 : 1, padding: 2 })}
+          >
+            <Ionicons name="close" size={16} color={colors.inkMuted} />
+          </Pressable>
         </View>
 
         {/* The card's actual question — category on the left, amount on the
@@ -199,23 +243,40 @@ export function SmsDraftCard({
           paddingBottom: space.md,
         }}
       >
-        {/* Opens the same picker in both states — the label just names what the
-            user is likely correcting: a wrong guess, or nothing chosen yet. */}
+        {/*
+          Same picker either way, but the label names the actual task.
+
+          Keyed on `isMatched` alone, NOT on the hint. A hint is a *category*
+          guess with no bill behind it, so the confirm button stays disabled and
+          this is the only way forward — "Wrong category" would ask the user to
+          correct something they cannot yet accept. Only a genuinely matched
+          bill makes this a correction.
+        */}
         <CardAction
-          label="Wrong category"
+          label={isMatched ? 'Wrong category' : 'Choose category'}
           icon="swap-horizontal-outline"
           variant="secondary"
           onPress={onOpen}
         />
-        {/* `confirmDraft` needs a subcategory, so an uncategorised draft opens
-            the picker instead of committing — the arrow marks that this one
-            leads somewhere rather than finishing the job. */}
+        {/*
+          Disabled until a category exists, rather than quietly re-routing to
+          the picker.
+          
+          It used to say "Yes, log this" and then open the picker instead — a
+          button whose label promised one thing and did another. Disabling it
+          makes the dependency legible: "Wrong category" is the only live action
+          until the draft has somewhere to go, and this one lights up once it
+          does.
+        */}
         <CardAction
           label="Yes, log this"
-          accessibilityLabel={isMatched ? 'Yes, log this' : 'Choose a bill, then log this'}
-          icon={isMatched ? 'checkmark' : 'arrow-forward'}
+          accessibilityLabel={
+            isMatched ? 'Yes, log this' : 'Choose a category first, using Wrong category'
+          }
+          icon="checkmark"
           variant="primary"
-          onPress={isMatched ? onConfirm : onOpen}
+          disabled={!isMatched}
+          onPress={onConfirm}
         />
       </View>
     </View>
@@ -258,20 +319,40 @@ function MatchChip({
   // `prefix` frames what the name is (a guess vs. a settled mapping) so the
   // highlighted word is never ambiguous on its own.
   //
-  // Colour tracks how settled the mapping is: amber for a draft still needing a
-  // category, blue for a guess worth checking, green once it is confirmed. The
-  // amber shares the `pending` role with overdue bills — both are "not finished
-  // yet", and the three-step progression reads at a glance down a stack.
+  /*
+   * Colour tracks how settled the mapping is, across FOUR states:
+   *
+   *   green   confirmed — a learned rule resolved this outright
+   *   blue    a matched bill, offered as a guess to check
+   *   amber   a category was detected but no bill is chosen yet — needs a
+   *           decision before it can be logged
+   *   grey    nothing was detected; the user must choose from scratch
+   *
+   * The amber/grey split is the important one: a draft carrying a hint
+   * ("Looks like Water") HAS a recommendation and only needs confirming, while
+   * one with no hint is an empty prompt. Colouring both the same hid a real
+   * suggestion behind the styling for "nothing here".
+   */
   const { icon, fg, bg, prefix, label } = needsBill
-    ? {
-        icon: 'help-circle' as const,
-        fg: colors.pending,
-        bg: colors.pendingSoft,
-        // The detected category is a real suggestion even without a bill, so it
-        // leads; only a wholly unrecognised message falls back to the prompt.
-        prefix: hintLabel ? 'Looks like' : 'Needs',
-        label: hintLabel ?? 'a category',
-      }
+    ? hintLabel
+      ? {
+          // A detected category with no bill behind it yet. Amber because it
+          // is genuinely awaiting an action — the same "not finished" role the
+          // board uses for a bill that still needs paying.
+          icon: 'sparkles' as const,
+          fg: colors.pending,
+          bg: colors.pendingSoft,
+          prefix: 'Looks like',
+          label: hintLabel,
+        }
+      : {
+          // Nothing recognised — the only genuinely empty state.
+          icon: 'help-circle' as const,
+          fg: colors.inkSecondary,
+          bg: colors.surfaceSunken,
+          prefix: 'Needs',
+          label: 'a category',
+        }
     : isExact
       ? {
           icon: 'checkmark-circle' as const,
@@ -310,20 +391,20 @@ function MatchChip({
           is the decision the card is asking for, so it should not read as small
           print, but it must not out-shout the figure either. */}
       <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-        <T variant="small" color={fg} style={{ opacity: 0.8 }}>
+        <Text variant="small" color={fg} style={{ opacity: 0.8 }}>
           {prefix}
-        </T>
-        <T variant="small" color={fg} numberOfLines={1} style={{ flexShrink: 1, fontWeight: '800' }}>
+        </Text>
+        <Text variant="small" color={fg} numberOfLines={1} style={{ flexShrink: 1, fontWeight: '800' }}>
           {label}
-        </T>
+        </Text>
       </View>
 
       {/* The amount is the one thing in the band that is not a suggestion, so it
           carries the heaviest weight here — against a tinted ground the default
           figure weight read as washed out next to the bold category name. */}
-      <T variant="figureLarge" color={figureColor} style={{ fontSize: 16 }}>
+      <Text variant="figureLarge" color={figureColor} style={{ fontSize: 16 }}>
         {figure}
-      </T>
+      </Text>
     </View>
   );
 }
@@ -341,6 +422,7 @@ function CardAction({
   icon,
   variant,
   onPress,
+  disabled = false,
 }: {
   label: string;
   /**
@@ -352,6 +434,8 @@ function CardAction({
   icon: keyof typeof Ionicons.glyphMap;
   variant: 'primary' | 'secondary';
   onPress: () => void;
+  /** Dims the button and blocks the press — see the primary branch below. */
+  disabled?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
   const isPrimary = variant === 'primary';
@@ -359,9 +443,9 @@ function CardAction({
   const body = (fg: string) => (
     <>
       <Ionicons name={icon} size={14} color={fg} />
-      <T variant="caption" color={fg} numberOfLines={1} style={{ fontWeight: '700' }}>
+      <Text variant="caption" color={fg} numberOfLines={1} style={{ fontWeight: '700' }}>
         {label}
-      </T>
+      </Text>
     </>
   );
 
@@ -390,13 +474,17 @@ function CardAction({
     return (
       <Pressable
         onPress={onPress}
+        disabled={disabled}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel ?? label}
+        accessibilityState={{ disabled }}
         style={({ pressed }) => ({
           flex: 1,
           borderRadius: radius.sm,
           overflow: 'hidden',
-          opacity: pressed ? 0.8 : 1,
+          // Dimmed rather than hidden: the button staying visible is what tells
+          // the user logging is the next step once a category is chosen.
+          opacity: disabled ? 0.4 : pressed ? 0.8 : 1,
         })}
       >
         <LinearGradient

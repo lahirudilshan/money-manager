@@ -4,7 +4,7 @@ import React from 'react';
 import { ActivityIndicator, Image, Pressable, View } from 'react-native';
 import { deletePersistedImage, persistPickedImage } from '../core/imageStorage';
 import { useTheme } from '../theme/ThemeProvider';
-import { Label, T } from './ui';
+import { Label, Text } from './ui';
 
 /**
  * The one receipt/photo attachment control, used everywhere a slip can be
@@ -173,9 +173,9 @@ function SlotButton({
         })}
       >
         <Ionicons name={icon} size={15} color={color} />
-        <T variant="caption" color={color} style={{ fontWeight: '600' }}>
+        <Text variant="caption" color={color} style={{ fontWeight: '600' }}>
           {label}
-        </T>
+        </Text>
       </Pressable>
     );
   }
@@ -205,9 +205,9 @@ function SlotButton({
       ) : (
         <>
           <Ionicons name={icon} size={22} color={colors.inkMuted} />
-          <T variant="caption" tone="muted" style={{ fontWeight: '600' }}>
+          <Text variant="caption" tone="muted" style={{ fontWeight: '600' }}>
             {label}
-          </T>
+          </Text>
         </>
       )}
     </Pressable>

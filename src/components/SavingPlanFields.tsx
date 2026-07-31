@@ -5,7 +5,7 @@ import { formatMoney, parseAmount } from '../core/money';
 import { monthsBetween, savingPlanProgress } from '../core/planning';
 import { useTheme } from '../theme/ThemeProvider';
 import { Field } from './forms';
-import { Divider, Label, Row, Surface, T } from './ui';
+import { Divider, Label, Row, Surface, Text } from './ui';
 
 /** How the user prefers to describe the plan. */
 export type PlanMode = 'total' | 'monthly';
@@ -145,12 +145,12 @@ export function SavingPlanFields({
           color={draft.enabled ? colors.accent : colors.inkMuted}
         />
         <View style={{ flex: 1 }}>
-          <T variant="bodyStrong" color={draft.enabled ? colors.accentInk : colors.ink}>
+          <Text variant="bodyStrong" color={draft.enabled ? colors.accentInk : colors.ink}>
             Save up for this
-          </T>
-          <T variant="caption" tone="muted">
+          </Text>
+          <Text variant="caption" tone="muted">
             A big amount due later — collect it monthly
-          </T>
+          </Text>
         </View>
       </Pressable>
 
@@ -224,39 +224,39 @@ export function SavingPlanFields({
             <Surface style={{ gap: space.sm, backgroundColor: colors.accentSoft }}>
               <Label>PLAN</Label>
               <Row justify="space-between">
-                <T variant="small">Set aside monthly</T>
-                <T variant="figureLarge" color={colors.accentInk}>
+                <Text variant="small">Set aside monthly</Text>
+                <Text variant="figureLarge" color={colors.accentInk}>
                   {formatMoney(resolved.monthlyMinor)}
-                </T>
+                </Text>
               </Row>
               <Divider />
               <Row justify="space-between">
-                <T variant="caption" tone="muted">
+                <Text variant="caption" tone="muted">
                   Total to collect
-                </T>
-                <T variant="caption" tone="secondary">
+                </Text>
+                <Text variant="caption" tone="secondary">
                   {formatMoney(resolved.planTargetMinor)}
-                </T>
+                </Text>
               </Row>
               <Row justify="space-between">
-                <T variant="caption" tone="muted">
+                <Text variant="caption" tone="muted">
                   Due
-                </T>
-                <T variant="caption" tone="secondary">
+                </Text>
+                <Text variant="caption" tone="secondary">
                   {resolved.planDueDate.toLocaleDateString(undefined, {
                     day: 'numeric',
                     month: 'short',
                     year: 'numeric',
                   })}
-                </T>
+                </Text>
               </Row>
             </Surface>
           ) : (
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               {draft.mode === 'total'
                 ? 'Enter the total and pick a due date.'
                 : 'Enter the monthly amount and number of months.'}
-            </T>
+            </Text>
           )}
         </View>
       ) : null}
@@ -291,13 +291,13 @@ function ModeChip({
         opacity: pressed ? 0.75 : 1,
       })}
     >
-      <T
+      <Text
         variant="small"
         color={selected ? colors.accentInk : colors.inkSecondary}
         style={{ fontWeight: selected ? '700' : '500' }}
       >
         {label}
-      </T>
+      </Text>
     </Pressable>
   );
 }
@@ -365,13 +365,13 @@ function DueDateField({
           <Ionicons name="chevron-back" size={18} color={colors.inkSecondary} />
         </Pressable>
 
-        <T variant="bodyStrong">
+        <Text variant="bodyStrong">
           {current.toLocaleDateString(undefined, {
             day: 'numeric',
             month: 'short',
             year: 'numeric',
           })}
-        </T>
+        </Text>
 
         <Pressable
           onPress={() => shiftMonths(1)}
@@ -415,20 +415,20 @@ export function SavingPlanProgressCard({
     <Surface style={{ gap: space.md }}>
       <Row justify="space-between" align="center">
         <Label>SAVING PLAN</Label>
-        <T variant="caption" color={tone} style={{ fontWeight: '700' }}>
+        <Text variant="caption" color={tone} style={{ fontWeight: '700' }}>
           {progress.isComplete
             ? 'Fully saved'
             : progress.isOverdue
               ? `${Math.abs(progress.daysUntilDue)} days overdue`
               : `${progress.daysUntilDue} days left`}
-        </T>
+        </Text>
       </Row>
 
       <Row justify="space-between" align="flex-end">
-        <T variant="figureLarge">{formatMoney(progress.savedMinor)}</T>
-        <T variant="small" tone="muted">
+        <Text variant="figureLarge">{formatMoney(progress.savedMinor)}</Text>
+        <Text variant="small" tone="muted">
           of {formatMoney(progress.targetMinor)}
-        </T>
+        </Text>
       </Row>
 
       <View
@@ -452,15 +452,15 @@ export function SavingPlanProgressCard({
       <Divider />
 
       <Row justify="space-between">
-        <T variant="caption" tone="muted">
+        <Text variant="caption" tone="muted">
           {progress.isComplete
             ? 'Nothing more to set aside'
             : `${formatMoney(progress.monthlyMinor)} / month for ${progress.monthsRemaining} more`}
-        </T>
-        <T variant="caption" tone="secondary">
+        </Text>
+        <Text variant="caption" tone="secondary">
           due{' '}
           {dueDate.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-        </T>
+        </Text>
       </Row>
     </Surface>
   );

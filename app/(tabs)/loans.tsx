@@ -10,16 +10,7 @@ import {
   loanDraftToInput,
   type LoanDraft,
 } from '../../src/components/LoanForm';
-import {
-  BottomSheet,
-  Divider,
-  FundingBar,
-  GradientButton,
-  Label,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { BottomSheet, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { buildSchedule } from '../../src/core/amortization';
 import { formatMoney } from '../../src/core/money';
@@ -79,7 +70,7 @@ export default function LoansScreen() {
         <Row justify="space-between" align="center">
           <View style={{ gap: 1 }}>
             <Label>DEBT</Label>
-            <T variant="title">Loans</T>
+            <Text variant="title">Loans</Text>
           </View>
           {views.length > 0 ? (
             <Pressable
@@ -98,9 +89,9 @@ export default function LoansScreen() {
               })}
             >
               <Ionicons name="add" size={16} color="#FFFFFF" />
-              <T variant="caption" color="#FFFFFF" style={{ fontWeight: '700' }}>
+              <Text variant="caption" color="#FFFFFF" style={{ fontWeight: '700' }}>
                 Loan
-              </T>
+              </Text>
             </Pressable>
           ) : null}
         </Row>
@@ -126,23 +117,23 @@ export default function LoansScreen() {
               >
                 <View style={{ gap: 2 }}>
                   <Label color="rgba(255,255,255,0.75)">TOTAL OUTSTANDING</Label>
-                  <T variant="hero" color="#FFFFFF">
+                  <Text variant="hero" color="#FFFFFF">
                     {formatMoney(totals.outstanding)}
-                  </T>
+                  </Text>
                 </View>
                 <Divider style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
                 <Row justify="space-between">
                   <View style={{ gap: 2 }}>
                     <Label color="rgba(255,255,255,0.65)">PER MONTH</Label>
-                    <T variant="figureLarge" color="#FFFFFF">
+                    <Text variant="figureLarge" color="#FFFFFF">
                       {formatMoney(totals.monthly, { compact: true })}
-                    </T>
+                    </Text>
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 2 }}>
                     <Label color="rgba(255,255,255,0.65)">LIFETIME INTEREST</Label>
-                    <T variant="figureLarge" color="#FFFFFF">
+                    <Text variant="figureLarge" color="#FFFFFF">
                       {formatMoney(totals.interest, { compact: true })}
-                    </T>
+                    </Text>
                   </View>
                 </Row>
               </LinearGradient>
@@ -219,11 +210,11 @@ function LoansEmptyState({ onAdd }: { onAdd: () => void }) {
         </View>
 
         <View style={{ gap: 4, alignItems: 'center' }}>
-          <T variant="title">No loans yet</T>
-          <T variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
+          <Text variant="title">No loans yet</Text>
+          <Text variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
             Add one and its monthly installment joins the plan automatically, so what you owe is
             budgeted rather than remembered.
-          </T>
+          </Text>
         </View>
       </View>
 
@@ -250,9 +241,9 @@ function LoansEmptyState({ onAdd }: { onAdd: () => void }) {
 
       <GradientButton label="Add your first loan" icon="add" onPress={onAdd} />
 
-      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+      <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
         You will need the amount borrowed, the rate, and the term — all on your loan statement.
-      </T>
+      </Text>
     </View>
   );
 }
@@ -283,12 +274,12 @@ function Benefit({
         <Ionicons name={icon} size={17} color={colors.inkSecondary} />
       </View>
       <View style={{ flex: 1, gap: 2 }}>
-        <T variant="small" style={{ fontWeight: '700' }}>
+        <Text variant="small" style={{ fontWeight: '700' }}>
           {title}
-        </T>
-        <T variant="caption" tone="muted">
+        </Text>
+        <Text variant="caption" tone="muted">
           {body}
-        </T>
+        </Text>
       </View>
     </Row>
   );
@@ -349,26 +340,26 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
           </View>
 
           <View style={{ flex: 1, gap: 1 }}>
-            <T variant="heading" color={brand.onColor} numberOfLines={1}>
+            <Text variant="heading" color={brand.onColor} numberOfLines={1}>
               {loan.name}
-            </T>
-            <T
+            </Text>
+            <Text
               variant="caption"
               color={brand.onColor}
               numberOfLines={1}
               style={{ opacity: 0.85 }}
             >
               {loan.bankId ? brand.name : loan.kind}
-            </T>
+            </Text>
           </View>
 
           <View style={{ alignItems: 'flex-end', gap: 1 }}>
-            <T variant="figureLarge" color={brand.onColor}>
+            <Text variant="figureLarge" color={brand.onColor}>
               {formatMoney(view.installmentMinor)}
-            </T>
-            <T variant="caption" color={brand.onColor} style={{ opacity: 0.8 }}>
+            </Text>
+            <Text variant="caption" color={brand.onColor} style={{ opacity: 0.8 }}>
               / month
-            </T>
+            </Text>
           </View>
         </Row>
 
@@ -393,12 +384,12 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
             />
           </View>
           <Row justify="space-between">
-            <T variant="caption" color={brand.onColor} style={{ opacity: 0.85 }}>
+            <Text variant="caption" color={brand.onColor} style={{ opacity: 0.85 }}>
               {view.paidCount} of {loan.termMonths} payments made
-            </T>
-            <T variant="caption" color={brand.onColor} style={{ fontWeight: '700' }}>
+            </Text>
+            <Text variant="caption" color={brand.onColor} style={{ fontWeight: '700' }}>
               {formatMoney(view.remainingMinor, { compact: true })} left
-            </T>
+            </Text>
           </Row>
         </View>
       </LinearGradient>
@@ -422,29 +413,29 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
           }}
         >
           <Row justify="space-between">
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               Principal
-            </T>
-            <T variant="caption" tone="secondary">
+            </Text>
+            <Text variant="caption" tone="secondary">
               {formatMoney(loan.principalMinor)}
-            </T>
+            </Text>
           </Row>
           <Row justify="space-between">
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               Interest
-            </T>
-            <T variant="caption" color={accent}>
+            </Text>
+            <Text variant="caption" color={accent}>
               +{formatMoney(view.totalInterestMinor)}
-            </T>
+            </Text>
           </Row>
           <Divider />
           <Row justify="space-between">
-            <T variant="small" style={{ fontWeight: '700' }}>
+            <Text variant="small" style={{ fontWeight: '700' }}>
               Total repayable
-            </T>
-            <T variant="figure">
+            </Text>
+            <Text variant="figure">
               {formatMoney(loan.principalMinor + view.totalInterestMinor)}
-            </T>
+            </Text>
           </Row>
         </View>
 
@@ -471,13 +462,13 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
               size={16}
               color={expanded ? '#FFFFFF' : colors.accent}
             />
-            <T
+            <Text
               variant="small"
               color={expanded ? '#FFFFFF' : colors.accent}
               style={{ fontWeight: '700' }}
             >
               {expanded ? 'Hide plan' : 'Repayment plan'}
-            </T>
+            </Text>
           </Pressable>
 
           <Pressable
@@ -526,13 +517,13 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
                         backgroundColor: active ? brand.color : colors.surfaceSunken,
                       }}
                     >
-                      <T
+                      <Text
                         variant="caption"
                         color={active ? brand.onColor : colors.inkSecondary}
                         style={{ fontWeight: '700' }}
                       >
                         {y}Y
-                      </T>
+                      </Text>
                     </Pressable>
                   );
                 })}
@@ -540,18 +531,18 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
             ) : null}
 
             <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>
-              <T variant="caption" tone="muted" style={{ width: 28 }}>
+              <Text variant="caption" tone="muted" style={{ width: 28 }}>
                 #
-              </T>
-              <T variant="caption" tone="muted" style={{ flex: 1, textAlign: 'right' }}>
+              </Text>
+              <Text variant="caption" tone="muted" style={{ flex: 1, textAlign: 'right' }}>
                 PRINCIPAL
-              </T>
-              <T variant="caption" tone="muted" style={{ flex: 1, textAlign: 'right' }}>
+              </Text>
+              <Text variant="caption" tone="muted" style={{ flex: 1, textAlign: 'right' }}>
                 INTEREST
-              </T>
-              <T variant="caption" tone="muted" style={{ flex: 1.2, textAlign: 'right' }}>
+              </Text>
+              <Text variant="caption" tone="muted" style={{ flex: 1.2, textAlign: 'right' }}>
                 BALANCE
-              </T>
+              </Text>
             </Row>
             {schedule.map((row) => {
               const isPaid = row.period <= view.paidCount;
@@ -576,25 +567,25 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
                     {isPaid ? (
                       <Ionicons name="checkmark-circle" size={12} color={colors.completed} />
                     ) : null}
-                    <T variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
+                    <Text variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
                       {row.period}
-                    </T>
+                    </Text>
                   </View>
-                  <T variant="caption" color={colors.completed} style={{ flex: 1, textAlign: 'right' }}>
+                  <Text variant="caption" color={colors.completed} style={{ flex: 1, textAlign: 'right' }}>
                     {formatMoney(row.principalMinor, { showCurrency: false, compact: true })}
-                  </T>
-                  <T variant="caption" color={accent} style={{ flex: 1, textAlign: 'right' }}>
+                  </Text>
+                  <Text variant="caption" color={accent} style={{ flex: 1, textAlign: 'right' }}>
                     {formatMoney(row.interestMinor, { showCurrency: false, compact: true })}
-                  </T>
-                  <T variant="caption" tone="secondary" style={{ flex: 1.2, textAlign: 'right' }}>
+                  </Text>
+                  <Text variant="caption" tone="secondary" style={{ flex: 1.2, textAlign: 'right' }}>
                     {formatMoney(row.balanceMinor, { showCurrency: false, compact: true })}
-                  </T>
+                  </Text>
                 </Row>
               );
             })}
-            <T variant="caption" tone="muted" style={{ textAlign: 'center', paddingTop: space.xs }}>
+            <Text variant="caption" tone="muted" style={{ textAlign: 'center', paddingTop: space.xs }}>
               {view.paidCount} of {loan.termMonths} paid · {loan.termMonths - view.paidCount} left
-            </T>
+            </Text>
           </View>
         ) : null}
       </View>
@@ -615,7 +606,7 @@ function CardStat({
   return (
     <View style={{ gap: 2, alignItems: align }}>
       <Label>{label}</Label>
-      <T variant="figure">{value}</T>
+      <Text variant="figure">{value}</Text>
     </View>
   );
 }

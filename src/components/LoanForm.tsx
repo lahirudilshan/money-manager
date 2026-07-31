@@ -8,7 +8,7 @@ import type { NewLoan } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
 import { BankLogo } from './BankLogo';
 import { Field, PillSelect } from './forms';
-import { Divider, Label, Row, Surface, T } from './ui';
+import { Divider, Label, Row, Surface, Text } from './ui';
 
 export const LOAN_KINDS = [
   { key: 'personal', label: 'Personal', icon: 'person-outline' as const },
@@ -198,17 +198,17 @@ export function LoanForm({
           placeholder="11.5"
           keyboardType="decimal-pad"
         />
-        <T variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
+        <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
           The yearly rate as the bank quotes it — not the monthly one.
-        </T>
+        </Text>
 
         <View style={{ gap: space.sm }}>
           <Row justify="space-between" align="center">
             <Label>Term</Label>
             {termMonths > 0 ? (
-              <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
                 {termMonths} months
-              </T>
+              </Text>
             ) : null}
           </Row>
           <Row gap={space.sm} style={{ flexWrap: 'wrap' }}>
@@ -231,13 +231,13 @@ export function LoanForm({
                     opacity: pressed ? 0.75 : 1,
                   })}
                 >
-                  <T
+                  <Text
                     variant="small"
                     color={selected ? colors.accent : colors.inkSecondary}
                     style={{ fontWeight: selected ? '700' : '500' }}
                   >
                     {preset} yr
-                  </T>
+                  </Text>
                 </Pressable>
               );
             })}
@@ -267,11 +267,11 @@ export function LoanForm({
           keyboardType="numeric"
         />
         {termMonths > 0 && paid > 0 ? (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {paid >= termMonths
               ? 'That’s the whole term — this loan would be fully paid.'
               : `${termMonths - paid} of ${termMonths} installments left to pay.`}
-          </T>
+          </Text>
         ) : null}
       </FormSection>
 
@@ -307,17 +307,17 @@ function FormSection({
               justifyContent: 'center',
             }}
           >
-            <T variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+            <Text variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
               {n}
-            </T>
+            </Text>
           </View>
-          <T variant="bodyStrong" style={{ flex: 1 }}>
+          <Text variant="bodyStrong" style={{ flex: 1 }}>
             {title}
-          </T>
+          </Text>
         </Row>
-        <T variant="caption" tone="muted" style={{ paddingLeft: 22 + space.sm }}>
+        <Text variant="caption" tone="muted" style={{ paddingLeft: 22 + space.sm }}>
           {hint}
-        </T>
+        </Text>
       </View>
       {children}
     </View>
@@ -341,13 +341,13 @@ export function BankPicker({
       <Row justify="space-between" align="center">
         <Label>Lender</Label>
         {selectedBank ? (
-          <T variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+          <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
             {selectedBank.name}
-          </T>
+          </Text>
         ) : (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             Choose a bank
-          </T>
+          </Text>
         )}
       </Row>
       <ScrollView
@@ -399,14 +399,14 @@ export function BankPicker({
                   </View>
                 ) : null}
               </View>
-              <T
+              <Text
                 variant="caption"
                 color={selected ? colors.ink : colors.inkMuted}
                 numberOfLines={1}
                 style={{ fontWeight: selected ? '700' : '500' }}
               >
                 {brand.shortName}
-              </T>
+              </Text>
             </Pressable>
           );
         })}
@@ -448,26 +448,26 @@ export function LoanPreview({
           leads as the headline figure rather than sitting in a list. */}
       <View style={{ gap: 2 }}>
         <Label>YOU’LL PAY EACH MONTH</Label>
-        <T variant="hero" color={colors.ink}>
+        <Text variant="hero" color={colors.ink}>
           {formatMoney(summary.installmentMinor)}
-        </T>
+        </Text>
       </View>
 
       <Divider />
 
       <Row justify="space-between">
-        <T variant="small" tone="secondary">
+        <Text variant="small" tone="secondary">
           Total interest
-        </T>
-        <T variant="figure" color={colors.pending}>
+        </Text>
+        <Text variant="figure" color={colors.pending}>
           {formatMoney(summary.totalInterestMinor)}
-        </T>
+        </Text>
       </Row>
       <Row justify="space-between">
-        <T variant="small" tone="secondary">
+        <Text variant="small" tone="secondary">
           Total you repay
-        </T>
-        <T variant="figure">{formatMoney(totalPayable)}</T>
+        </Text>
+        <Text variant="figure">{formatMoney(totalPayable)}</Text>
       </Row>
     </Surface>
   );

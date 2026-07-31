@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { T } from './ui';
+import { Text } from './ui';
 
 /**
  * One day in a calendar grid — the single source of truth for how a day looks.
@@ -66,13 +66,13 @@ export function DayCell({
   });
 
   const text = (
-    <T
+    <Text
       variant="small"
       color={selected ? colors.inkInverse : (restColor ?? colors.ink)}
       style={{ fontWeight: selected || marksToday ? '800' : '500' }}
     >
       {day}
-    </T>
+    </Text>
   );
 
   if (!onPress) {

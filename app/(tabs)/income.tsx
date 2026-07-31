@@ -5,21 +5,7 @@ import { Alert, ScrollView, View } from 'react-native';
 import { Field, PillSelect } from '../../src/components/forms';
 import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
-import {
-  AppHeader,
-  BottomSheet,
-  Button,
-  Divider,
-  Empty,
-  GradientButton,
-  GradientCard,
-  Glyph,
-  Label,
-  ListRow,
-  Row,
-  Surface,
-  T,
-} from '../../src/components/ui';
+import { AppHeader, BottomSheet, Button, Divider, Empty, GradientButton, GradientCard, Glyph, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
@@ -87,23 +73,23 @@ export default function IncomeScreen() {
           <View style={{ gap: space.lg }}>
             <View style={{ gap: 2 }}>
               <Label color="rgba(255,255,255,0.75)">MONTHLY INCOME</Label>
-              <T variant="hero" color="#FFFFFF">
+              <Text variant="hero" color="#FFFFFF">
                 {formatMoney(total)}
-              </T>
+              </Text>
             </View>
             <Divider style={{ backgroundColor: 'rgba(255,255,255,0.2)' }} />
             <Row justify="space-between">
               <View>
                 <Label color="rgba(255,255,255,0.65)">PLANNED OUT</Label>
-                <T variant="figureLarge" color="#FFFFFF">
+                <Text variant="figureLarge" color="#FFFFFF">
                   {formatMoney(totals.plannedMinor, { compact: true })}
-                </T>
+                </Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Label color="rgba(255,255,255,0.65)">LEFT</Label>
-                <T variant="figureLarge" color={left >= 0 ? '#FFFFFF' : '#FFE1E6'}>
+                <Text variant="figureLarge" color={left >= 0 ? '#FFFFFF' : '#FFE1E6'}>
                   {formatMoney(left, { compact: true })}
-                </T>
+                </Text>
               </View>
             </Row>
           </View>
@@ -141,9 +127,9 @@ export default function IncomeScreen() {
                     title={entry.line.name}
                     subtitle={entry.category.name}
                     trailing={
-                      <T variant="figure" color={colors.completed}>
+                      <Text variant="figure" color={colors.completed}>
                         {formatMoney(entry.line.plannedMinor)}
-                      </T>
+                      </Text>
                     }
                     chevron
                     onPress={() => router.push(`/subcategory/${entry.line.id}`)}
@@ -171,9 +157,9 @@ export default function IncomeScreen() {
                         : (state.cards.find((c) => c.id === item.cardId)?.name ?? 'No account')
                     }
                     trailing={
-                      <T variant="figure" color={colors.completed}>
+                      <Text variant="figure" color={colors.completed}>
                         {formatMoney(item.amountMinor)}
-                      </T>
+                      </Text>
                     }
                     chevron
                     onPress={() => setFormId(item.id)}
@@ -287,8 +273,8 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
               <Field label="Exchange rate" value={rate} onChangeText={setRate} keyboardType="decimal-pad" />
               <Surface style={{ backgroundColor: colors.accentSoft }}>
                 <Row justify="space-between">
-                  <T variant="small">Converts to</T>
-                  <T variant="figure">{formatMoney(preview)}</T>
+                  <Text variant="small">Converts to</Text>
+                  <Text variant="figure">{formatMoney(preview)}</Text>
                 </Row>
               </Surface>
             </>

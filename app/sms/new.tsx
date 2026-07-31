@@ -2,7 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { View } from 'react-native';
 import { Field } from '../../src/components/forms';
-import { BottomSheet, GradientButton, T } from '../../src/components/ui';
+import { BottomSheet, GradientButton, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { formatMoney } from '../../src/core/money';
 import { parseSms } from '../../src/core/smsParser';
@@ -51,10 +51,10 @@ export default function PasteSmsScreen() {
       scroll
       footer={<GradientButton label="Add draft" icon="add" onPress={onAdd} />}
     >
-        <T variant="small" tone="muted">
+        <Text variant="small" tone="muted">
           Paste a bank or utility SMS. We read the amount, who it was for, and the date, then add a
           draft you confirm on the dashboard.
-        </T>
+        </Text>
 
         <View style={{ gap: space.sm }}>
           <Field
@@ -81,34 +81,34 @@ export default function PasteSmsScreen() {
               borderColor: colors.completed,
             }}
           >
-            <T variant="caption" color={colors.completed} style={{ fontWeight: '800' }}>
+            <Text variant="caption" color={colors.completed} style={{ fontWeight: '800' }}>
               WILL BE READ AS
-            </T>
-            <T variant="bodyStrong">
+            </Text>
+            <Text variant="bodyStrong">
               {preview.direction === 'credit'
                 ? 'Money in'
                 : preview.direction === 'bill'
                   ? 'Bill due'
                   : 'Paid out'}{' '}
               · {formatMoney(preview.amountMinor, { showDecimals: true })}
-            </T>
+            </Text>
             {preview.merchant ? (
-              <T variant="caption" tone="secondary">
+              <Text variant="caption" tone="secondary">
                 {preview.merchant}
                 {preview.date ? ` · ${preview.date}` : ''}
-              </T>
+              </Text>
             ) : null}
           </View>
         ) : text.trim() ? (
-          <T variant="caption" color={colors.pending}>
+          <Text variant="caption" color={colors.pending}>
             Not recognised as a transaction yet — it may be an OTP, promo, or balance message.
-          </T>
+          </Text>
         ) : null}
 
         {error ? (
-          <T variant="caption" color={colors.danger}>
+          <Text variant="caption" color={colors.danger}>
             {error}
-          </T>
+          </Text>
         ) : null}
     </BottomSheet>
   );

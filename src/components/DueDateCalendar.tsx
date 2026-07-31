@@ -4,7 +4,7 @@ import { View } from 'react-native';
 import { MONTH_NAMES } from '../core/dates';
 import { useTheme } from '../theme/ThemeProvider';
 import { DayCell } from './DayCell';
-import { Label, Row, T } from './ui';
+import { Label, Row, Text } from './ui';
 
 /**
  * Days 1–31 in rows of seven — the exact layout the "new bill in" sheet's
@@ -71,9 +71,9 @@ export function DueDateCalendar({
         <Label>{label.toUpperCase()}</Label>
         <Row gap={5}>
           <Ionicons name="calendar-outline" size={13} color={accent} />
-          <T variant="caption" color={accent} style={{ fontWeight: '700' }}>
+          <Text variant="caption" color={accent} style={{ fontWeight: '700' }}>
             {dueDate.getDate()} {MONTH_NAMES[dueDate.getMonth()]}
-          </T>
+          </Text>
         </Row>
       </Row>
 

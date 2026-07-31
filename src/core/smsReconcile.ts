@@ -44,8 +44,19 @@ export interface SmsDraft {
   hint: CategoryHint | null;
   /** Best guess of the bill this is about; '' when none was confident enough. */
   subcategoryId: string;
-  /** Amount to log, in minor units — starts from the parsed amount. */
+  /**
+   * Amount to log, in minor units of the **home currency** — converted from the
+   * message's currency when it stated a foreign one (see `convertToHomeMinor`).
+   * This is what the board records.
+   */
   amountMinor: Minor;
+  /**
+   * Set only when the message was in a currency other than the user's, so the
+   * review UI can say "USD 2,500.00 → Rs 750,000.00" rather than presenting a
+   * converted figure the user cannot reconcile against the SMS they just read.
+   * Null on ordinary same-currency alerts.
+   */
+  foreign: { currency: string; amountMinor: Minor } | null;
   /** Ranked alternatives for the "pick a different bill" dropdown. */
   matches: DraftMatch[];
   /**
@@ -57,6 +68,39 @@ export interface SmsDraft {
   confidence: MatchConfidence;
   /** When the draft was created, for ordering the queue newest-first. */
   createdAt: number;
+}
+
+/**
+ * Convert an SMS amount into the user's home currency.
+ *
+ * A foreign-currency alert states what the *bank* moved — "credited with
+ * USD2,500.00" — but every plan, bill and total on the board is in the home
+ * currency. Logging 2,500 against an LKR plan would understate a salary by
+ * ~300x, and scoring it against LKR planned amounts would match nothing. So the
+ * figure is converted once, here, and the original is kept on the draft so the
+ * review UI can still show what the message actually said.
+ *
+ * `usdRate` is the app's single stored rate (home currency per 1 USD), so USD
+ * converts exactly and any other foreign code cannot be converted without a rate
+ * the app does not hold — those pass through unchanged rather than being
+ * silently multiplied by the wrong number.
+ */
+export function convertToHomeMinor(
+  amountMinor: Minor,
+  currency: string | null,
+  homeCurrency: string,
+  usdRate: number,
+): Minor {
+  // No code stated, or already the home currency — nothing to convert.
+  if (!currency || currency === homeCurrency) return amountMinor;
+  if (!Number.isFinite(usdRate) || usdRate <= 0) return amountMinor;
+
+  // The one rate the app stores is USD → home, so that is the one pair it can
+  // convert. Anything else is left as-is for the user to correct on the draft.
+  if (currency === 'USD') return Math.round(amountMinor * usdRate);
+  if (homeCurrency === 'USD') return amountMinor;
+
+  return amountMinor;
 }
 
 /** The board slices the reconciler needs — a subset of the store's arrays. */
@@ -195,9 +239,31 @@ export function reconcileSms(
   id: string,
   /** Learned merchant rules; omitted (empty) falls back to keyword-only behaviour. */
   rules: readonly MerchantRule[] = [],
+  /**
+   * The user's currency settings, so a foreign-currency message is converted
+   * before it is scored or logged. Defaults keep existing callers (and the
+   * LKR-only tests) behaving exactly as before.
+   */
+  money: { currency: string; usdRate: number } = { currency: 'LKR', usdRate: 300 },
 ): SmsDraft {
   // A credit is money in (an income line); debit/bill are money out (expense).
   const wantType: 'income' | 'expense' = parsed.direction === 'credit' ? 'income' : 'expense';
+
+  // Convert up front: every comparison below (and the logged figure) must be in
+  // the home currency, or a USD salary would be scored against LKR plans.
+  const homeMinor = convertToHomeMinor(
+    parsed.amountMinor,
+    parsed.currency,
+    money.currency,
+    money.usdRate,
+  );
+  const foreign =
+    parsed.currency && parsed.currency !== money.currency && homeMinor !== parsed.amountMinor
+      ? { currency: parsed.currency, amountMinor: parsed.amountMinor }
+      : null;
+  // Scoring compares against the board's planned amounts, which are all in the
+  // home currency — so it must see the converted figure, not the raw one.
+  const scoringParsed: ParsedSms = { ...parsed, amountMinor: homeMinor };
 
   // What the *learned* table makes of this merchant. This is checked before the
   // keyword guess because a rule the user taught us is better evidence than any
@@ -210,7 +276,10 @@ export function reconcileSms(
 
   const matches: DraftMatch[] = board.subcategories
     .filter((sub) => sub.type === wantType)
-    .map((sub) => ({ subcategoryId: sub.id, score: scoreSubcategory(parsed, sub, board, hint) }))
+    .map((sub) => ({
+      subcategoryId: sub.id,
+      score: scoreSubcategory(scoringParsed, sub, board, hint),
+    }))
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score);
 
@@ -240,7 +309,8 @@ export function reconcileSms(
     parsed,
     hint,
     subcategoryId,
-    amountMinor: parsed.amountMinor,
+    amountMinor: homeMinor,
+    foreign,
     matches,
     confidence,
     createdAt: Date.now(),

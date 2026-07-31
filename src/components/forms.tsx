@@ -5,12 +5,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ALL_ICONS, CATEGORY_ICONS } from '../data/categoryIcons';
 import {
   CATEGORY_DEFAULT_FREQUENCIES,
+  FREQUENCY_HINT,
   FREQUENCY_LABEL,
   SUBCATEGORY_FREQUENCIES,
   type SubcategoryFrequency,
 } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
-import { BottomSheet, Label, T } from './ui';
+import { BottomSheet, Label, Text } from './ui';
 
 /** The single styled input used by every form. */
 export function Field({
@@ -202,13 +203,13 @@ export function PillSelect({
                   color={selected ? colors.inkInverse : colors.inkSecondary}
                 />
               ) : null}
-              <T
+              <Text
                 variant="small"
                 color={selected ? colors.inkInverse : colors.inkSecondary}
                 style={{ fontWeight: selected ? '700' : '500' }}
               >
                 {option.label}
-              </T>
+              </Text>
             </Pressable>
           );
         })}
@@ -260,9 +261,9 @@ export function AmountField({
             paddingHorizontal: space.md,
           }}
         >
-          <T variant="small" tone="muted">
+          <Text variant="small" tone="muted">
             {currency}
-          </T>
+          </Text>
           <TextInput
             value={value}
             onChangeText={onChangeText}
@@ -282,9 +283,9 @@ export function AmountField({
     <View style={{ alignItems: 'center', gap: 4 }}>
       {label ? <Label>{label}</Label> : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
-        <T variant="title" tone="muted">
+        <Text variant="title" tone="muted">
           {currency}
-        </T>
+        </Text>
         <TextInput
           value={value}
           onChangeText={onChangeText}
@@ -459,9 +460,9 @@ export function IconPicker({
               />
             ))}
             {results.length === 0 ? (
-              <T variant="small" tone="muted">
+              <Text variant="small" tone="muted">
                 No icons match “{query}”.
-              </T>
+              </Text>
             ) : null}
           </View>
         </ScrollView>
@@ -492,11 +493,20 @@ export function FrequencyPicker({
     (key) => ({ key, label: FREQUENCY_LABEL[key] }),
   );
   return (
-    <PillSelect
-      label={label}
-      options={options}
-      selectedKey={value}
-      onSelect={(key) => onChange(key as SubcategoryFrequency)}
-    />
+    <View style={{ gap: 6 }}>
+      <PillSelect
+        label={label}
+        options={options}
+        selectedKey={value}
+        onSelect={(key) => onChange(key as SubcategoryFrequency)}
+      />
+      {/* One line saying what the chosen cadence actually does. "Spending
+          budget" especially needs it: it behaves unlike the other three (many
+          entries summed, never ticked off as a whole) and a two-word pill
+          cannot carry that. */}
+      <Text variant="caption" tone="muted">
+        {FREQUENCY_HINT[value]}
+      </Text>
+    </View>
   );
 }

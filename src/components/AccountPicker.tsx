@@ -5,7 +5,7 @@ import { accountLabel, resolveBrand } from '../data/banks';
 import type { Card } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
 import { BankLogo } from './BankLogo';
-import { BottomSheet, T } from './ui';
+import { BottomSheet, Text } from './ui';
 
 /**
  * A single tappable row showing the currently-chosen funding account (bank
@@ -34,9 +34,9 @@ export function AccountField({
 
   return (
     <View style={{ gap: space.sm }}>
-      <T variant="label" tone="muted">
+      <Text variant="label" tone="muted">
         {label.toUpperCase()}
-      </T>
+      </Text>
       <Pressable
         onPress={() => setOpen(true)}
         accessibilityRole="button"
@@ -64,22 +64,22 @@ export function AccountField({
               size={30}
             />
             <View style={{ flex: 1 }}>
-              <T variant="bodyStrong" numberOfLines={1}>
+              <Text variant="bodyStrong" numberOfLines={1}>
                 {accountLabel(selected).primary}
-              </T>
+              </Text>
               {accountLabel(selected).secondary ? (
-                <T variant="caption" tone="muted" numberOfLines={1}>
+                <Text variant="caption" tone="muted" numberOfLines={1}>
                   {accountLabel(selected).secondary}
-                </T>
+                </Text>
               ) : null}
             </View>
           </>
         ) : (
           <>
             <Ionicons name="wallet-outline" size={22} color={colors.inkMuted} />
-            <T variant="body" tone="muted" style={{ flex: 1 }}>
+            <Text variant="body" tone="muted" style={{ flex: 1 }}>
               Choose an account
-            </T>
+            </Text>
           </>
         )}
         <Ionicons name="chevron-down" size={16} color={colors.inkMuted} />
@@ -156,13 +156,13 @@ export function AccountPickerSheet({
           </View>
         )}
         <View style={{ flex: 1 }}>
-          <T variant="bodyStrong" color={isSel ? colors.accent : colors.ink} numberOfLines={1}>
+          <Text variant="bodyStrong" color={isSel ? colors.accent : colors.ink} numberOfLines={1}>
             {primary}
-          </T>
+          </Text>
           {secondary ? (
-            <T variant="caption" tone="muted" numberOfLines={1}>
+            <Text variant="caption" tone="muted" numberOfLines={1}>
               {secondary}
-            </T>
+            </Text>
           ) : null}
         </View>
         {isSel ? <Ionicons name="checkmark-circle" size={22} color={colors.accent} /> : null}

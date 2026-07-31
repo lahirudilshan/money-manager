@@ -4,7 +4,7 @@ import { AccountField } from '../../src/components/AccountPicker';
 import { DayPicker } from '../../src/components/DayPicker';
 import { IconPicker, NameWithIconField } from '../../src/components/forms';
 import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '../../src/data/categoryIcons';
-import { BottomSheet, GradientButton, T } from '../../src/components/ui';
+import { BottomSheet, GradientButton, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
@@ -83,9 +83,9 @@ export default function NewCategoryScreen() {
             onSelect={setCardId}
           />
         ) : (
-          <T variant="small" tone="muted">
+          <Text variant="small" tone="muted">
             Add an account first to choose where this category's money goes.
-          </T>
+          </Text>
         )}
 
         <DayPicker value={dueDay} onChange={setDueDay} />

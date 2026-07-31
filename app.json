@@ -7,9 +7,18 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
+    "_comment_splash": "The NATIVE launch screen, shown by the OS before any JS runs. Its background matches the canvas colour in src/theme so the handoff to SplashOverlay (which draws the animated mark) is a continuation rather than a colour jump. No image: the placeholder splash-icon.png is Expo's stock artwork, and a plain branded field reads better than stock art.",
+    "splash": {
+      "backgroundColor": "#F7F9FB",
+      "dark": { "backgroundColor": "#0B1220" },
+      "resizeMode": "contain"
+    },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.moneymanager"
+      "bundleIdentifier": "com.anonymous.moneymanager",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Money Manager uses Face ID to unlock the app, so your accounts and balances stay private."
+      }
     },
     "android": {
       "adaptiveIcon": {

@@ -13,8 +13,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Field, FrequencyPicker } from '../../src/components/forms';
-import { BottomSheet, Button, Divider, GradientButton, Label, Row, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
+import { DatePickerField } from '../../src/components/DatePickerField';
 import { DueDateCalendar } from '../../src/components/DueDateCalendar';
 import { ImageUploader } from '../../src/components/ImageUploader';
 import { formatMoney, parseAmount } from '../../src/core/money';
@@ -30,6 +31,7 @@ import {
   supportsSavingPlan,
   isUnplanned,
   type SubcategoryFrequency,
+  type Transaction,
 } from '../../src/db/schema';
 import { resolveBrand } from '../../src/data/banks';
 import { BankLogo } from '../../src/components/BankLogo';
@@ -102,6 +104,19 @@ export default function SubcategoryScreen() {
   );
   const [imageUri, setImageUri] = useState<string | null>(stateRow?.imageUri ?? null);
   const [imageViewerOpen, setImageViewerOpen] = useState(false);
+  /**
+   * Paid/pending as an UNSAVED edit, like every other field on this screen.
+   *
+   * It used to write straight through to the database on tap, which meant the
+   * one control that mattered most ignored both the Save button and the act of
+   * backing out — the change was already committed. Holding it here makes the
+   * whole sheet behave consistently: nothing is written until Save.
+   */
+  const [status, setStatus] = useState<SubcategoryStatus>(
+    (stateRow?.status as SubcategoryStatus) ?? 'pending',
+  );
+  /** The entry being edited in the inline sheet, or null when none is open. */
+  const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
 
   if (!subcategory) {
     return (
@@ -114,14 +129,14 @@ export default function SubcategoryScreen() {
           gap: space.md,
         }}
       >
-        <T variant="heading">Not found</T>
+        <Text variant="heading">Not found</Text>
         <Button label="Go back" onPress={() => closeModal()} variant="ghost" />
       </View>
     );
   }
 
   // The repo already collapses legacy values, so this is pending/paid.
-  const status: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
+  const savedStatus: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
 
   // Unplanned lines behave differently: they hold a list of individual
   // transactions, have no single planned/actual amount, and are never marked
@@ -132,6 +147,10 @@ export default function SubcategoryScreen() {
     [state, id, unplanned],
   );
   const unplannedTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
+  // The budget these entries draw against, read from the field being edited so
+  // the bar responds as the user types a new figure rather than after saving.
+  const plannedMinor = parseAmount(planned) ?? 0;
+  const overBudget = plannedMinor > 0 && unplannedTotal > plannedMinor;
 
   function handleSave() {
     const trimmed = name.trim();
@@ -144,8 +163,9 @@ export default function SubcategoryScreen() {
     const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
     state.updateSubcategory(subcategory!.id, {
       name: trimmed,
-      // Unplanned lines have no single planned amount (it's the sum of entries).
-      plannedMinor: unplanned ? 0 : planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
+      // A spending-budget line keeps its planned amount too — that is the
+      // monthly budget its entries are drawn against, not a bill to pay once.
+      plannedMinor: planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
       frequency,
       // Only a one-time line carries a month anchor; any other frequency
       // recurs, so a stale anchor is cleared rather than left behind.
@@ -160,9 +180,10 @@ export default function SubcategoryScreen() {
       state.changeSubcategoryParent(subcategory!.id, parentId);
     }
 
-    // Per-month slip/note/actual only apply to normal (non-unplanned) lines,
-    // whose spend is tracked as one figure per period. Unplanned lines track
-    // each entry separately, so there is nothing to log here for them.
+    // Per-month status/slip/note/actual only apply to normal (non-budget)
+    // lines, whose spend is tracked as one figure per period. A spending-budget
+    // line tracks each entry separately and is never "paid" as a whole, so
+    // there is nothing to log here for it.
     if (!unplanned) {
       const parsedActual = actual.trim() === '' ? null : parseAmount(actual);
       state.logTransaction(subcategory!.id, {
@@ -215,6 +236,9 @@ export default function SubcategoryScreen() {
     (actual.trim() === '' ? null : parseAmount(actual)) !== (stateRow?.actualMinor ?? null) ||
     note.trim() !== (stateRow?.note ?? '') ||
     imageUri !== (stateRow?.imageUri ?? null) ||
+    // Ticking "paid" is an edit like any other — it enables Save and is only
+    // written when Save is pressed.
+    status !== savedStatus ||
     frequency !== subcategory.frequency ||
     // Changing only which month a one-time cost lands in is a real edit.
     (frequency === 'one_time' && oncePeriod !== subcategory.onceInPeriod) ||
@@ -259,45 +283,80 @@ export default function SubcategoryScreen() {
               />
             </View>
             <View style={{ flex: 1 }}>
-              <T variant="heading" numberOfLines={1}>
+              <Text variant="heading" numberOfLines={1}>
                 {subcategory.name}
-              </T>
-              <T variant="caption" tone="muted" numberOfLines={1}>
+              </Text>
+              <Text variant="caption" tone="muted" numberOfLines={1}>
                 {category?.name ?? 'Category'}
                 {subcategory.frequency !== 'monthly'
                   ? ` · ${subcategory.frequency.replace('_', '-')}`
                   : ''}
-              </T>
+              </Text>
             </View>
           </Row>
 
           <Divider />
 
           {unplanned ? (
-            <Row justify="space-between">
-              <T variant="small" tone="secondary">
-                Spent this month
-              </T>
-              <T variant="figureLarge" color={colors.accent}>
-                {formatMoney(unplannedTotal)}
-              </T>
-            </Row>
+            /* A spending budget answers "how much of my budget is left", so it
+               shows spend against the planned amount rather than a bare total.
+               The bar is the fastest read; the figures underneath give the
+               exact numbers. A line with no budget set yet just shows spend. */
+            <View style={{ gap: space.sm }}>
+              <Row justify="space-between" align="flex-end">
+                <View>
+                  <Text variant="small" tone="secondary">
+                    Spent this month
+                  </Text>
+                  <Text
+                    variant="figureLarge"
+                    color={overBudget ? colors.danger : colors.accent}
+                  >
+                    {formatMoney(unplannedTotal)}
+                  </Text>
+                </View>
+                {plannedMinor > 0 ? (
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text variant="caption" tone="muted">
+                      of {formatMoney(plannedMinor)}
+                    </Text>
+                    <Text
+                      variant="small"
+                      color={overBudget ? colors.danger : colors.completed}
+                      style={{ fontWeight: '700' }}
+                    >
+                      {overBudget
+                        ? `${formatMoney(unplannedTotal - plannedMinor)} over`
+                        : `${formatMoney(plannedMinor - unplannedTotal)} left`}
+                    </Text>
+                  </View>
+                ) : null}
+              </Row>
+
+              {plannedMinor > 0 ? (
+                <FundingBar
+                  pct={(unplannedTotal / plannedMinor) * 100}
+                  color={overBudget ? colors.danger : category?.color ?? colors.accent}
+                  height={8}
+                />
+              ) : null}
+            </View>
           ) : (
             <>
               <Row justify="space-between">
-                <T variant="small" tone="secondary">
+                <Text variant="small" tone="secondary">
                   Planned
-                </T>
-                <T variant="figureLarge">{formatMoney(subcategory.plannedMinor)}</T>
+                </Text>
+                <Text variant="figureLarge">{formatMoney(subcategory.plannedMinor)}</Text>
               </Row>
               {stateRow?.actualMinor != null ? (
                 <Row justify="space-between">
-                  <T variant="small" tone="secondary">
+                  <Text variant="small" tone="secondary">
                     Actual
-                  </T>
-                  <T variant="figure" color={colors.accent}>
+                  </Text>
+                  <Text variant="figure" color={colors.accent}>
                     {formatMoney(stateRow.actualMinor)}
-                  </T>
+                  </Text>
                 </Row>
               ) : null}
             </>
@@ -308,9 +367,9 @@ export default function SubcategoryScreen() {
               <Divider />
               <Row gap={space.sm}>
                 <BankLogo brand={brand} size={26} />
-                <T variant="small" tone="secondary" style={{ flex: 1 }}>
+                <Text variant="small" tone="secondary" style={{ flex: 1 }}>
                   Paid from {fundingCard.name}
-                </T>
+                </Text>
               </Row>
             </>
           ) : null}
@@ -322,12 +381,23 @@ export default function SubcategoryScreen() {
           <UnplannedTransactions
             transactions={transactions}
             total={unplannedTotal}
+            plannedMinor={plannedMinor}
             onAdd={() => router.push(`/transaction/unplanned?subcategoryId=${subcategory.id}`)}
-            onRemove={(txnId) => state.deleteTransaction(txnId)}
+            onEdit={(txn) => setEditingTxn(txn)}
+            onRemove={(txnId, txnName) =>
+              Alert.alert(`Delete “${txnName}”?`, 'This entry is removed from the month.', [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: () => state.deleteTransaction(txnId),
+                },
+              ])
+            }
           />
         ) : (
           <Pressable
-            onPress={() => state.cycleStatus(subcategory.id)}
+            onPress={() => setStatus(paid ? 'pending' : 'paid')}
             accessibilityRole="button"
             accessibilityLabel={`Mark as ${paid ? 'pending' : 'paid'}. Currently ${style.label}.`}
             style={({ pressed }) => ({
@@ -344,12 +414,12 @@ export default function SubcategoryScreen() {
           >
             <Ionicons name={style.icon as never} size={26} color={style.fg} />
             <View style={{ flex: 1 }}>
-              <T variant="bodyStrong" color={style.fg}>
+              <Text variant="bodyStrong" color={style.fg}>
                 {paid ? 'Paid this month' : 'Not paid yet'}
-              </T>
-              <T variant="caption" color={style.fg} style={{ opacity: 0.85 }}>
+              </Text>
+              <Text variant="caption" color={style.fg} style={{ opacity: 0.85 }}>
                 Tap to mark as {paid ? 'pending' : 'paid'}
-              </T>
+              </Text>
             </View>
           </Pressable>
         )}
@@ -398,9 +468,9 @@ export default function SubcategoryScreen() {
                       size={18}
                       color={parent?.color ?? colors.inkMuted}
                     />
-                    <T variant="body" style={{ flex: 1 }}>
+                    <Text variant="body" style={{ flex: 1 }}>
                       {parent?.name ?? 'Choose a category'}
-                    </T>
+                    </Text>
                     <Ionicons name="chevron-down" size={16} color={colors.inkMuted} />
                   </>
                 );
@@ -408,15 +478,21 @@ export default function SubcategoryScreen() {
             </Pressable>
           </View>
 
-          {/* An unplanned line has no single planned amount — hide it. */}
-          {!unplanned ? (
-            <Field
-              label="Planned amount"
-              value={planned}
-              onChangeText={setPlanned}
-              keyboardType="numeric"
-              placeholder="0"
-            />
+          {/* Both kinds carry a planned amount, but it means different things:
+              a bill's is what will be paid, a spending budget's is the monthly
+              cap its entries draw down. The label says which. */}
+          <Field
+            label={unplanned ? 'Monthly budget' : 'Planned amount'}
+            value={planned}
+            onChangeText={setPlanned}
+            keyboardType="numeric"
+            placeholder="0"
+          />
+          {unplanned ? (
+            <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
+              What you intend to spend here each month. Entries below count
+              against it.
+            </Text>
           ) : null}
 
           {/* Actual/note only apply to normal per-period bills. */}
@@ -448,9 +524,9 @@ export default function SubcategoryScreen() {
               logged in — and in no other. Stated plainly so the bill silently
               leaving every other month is understood rather than surprising. */}
           {frequency === 'one_time' ? (
-            <T variant="caption" tone="muted">
+            <Text variant="caption" tone="muted">
               Counts only in {formatPeriod(oncePeriod)} — it won&apos;t affect any other month.
-            </T>
+            </Text>
           ) : null}
 
           {/* "Save up for this" — yearly lines only. */}
@@ -497,9 +573,9 @@ export default function SubcategoryScreen() {
           })}
         >
           <Ionicons name="trash-outline" size={16} color={colors.danger} />
-          <T variant="small" color={colors.danger} style={{ fontWeight: '600' }}>
+          <Text variant="small" color={colors.danger} style={{ fontWeight: '600' }}>
             Delete subcategory
-          </T>
+          </Text>
         </Pressable>
 
     {imageUri ? (
@@ -532,6 +608,33 @@ export default function SubcategoryScreen() {
           <Image source={{ uri: imageUri }} style={{ flex: 1 }} resizeMode="contain" />
         </View>
       </Modal>
+    ) : null}
+
+    {/* Edit one entry of a spending budget. Writes immediately (it is its own
+        confirmed action with its own Save), unlike the fields on this screen. */}
+    {editingTxn ? (
+      <EditTransactionSheet
+        txn={editingTxn}
+        onClose={() => setEditingTxn(null)}
+        onSave={(patch) => {
+          state.updateTransaction(editingTxn.id, patch);
+          setEditingTxn(null);
+        }}
+        onDelete={() => {
+          const { id: txnId, name: txnName } = editingTxn;
+          Alert.alert(`Delete “${txnName}”?`, 'This entry is removed from the month.', [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: () => {
+                state.deleteTransaction(txnId);
+                setEditingTxn(null);
+              },
+            },
+          ]);
+        }}
+      />
     ) : null}
 
     {/* Searchable category picker. */}
@@ -593,9 +696,9 @@ export default function SubcategoryScreen() {
                 })}
               >
                 <Ionicons name={(c.icon as never) ?? 'albums-outline'} size={20} color={c.color} />
-                <T variant="body" color={selected ? colors.accent : colors.ink} style={{ flex: 1, fontWeight: selected ? '700' : '500' }}>
+                <Text variant="body" color={selected ? colors.accent : colors.ink} style={{ flex: 1, fontWeight: selected ? '700' : '500' }}>
                   {c.name}
-                </T>
+                </Text>
                 {selected ? <Ionicons name="checkmark-circle" size={20} color={colors.accent} /> : null}
               </Pressable>
             );
@@ -607,68 +710,204 @@ export default function SubcategoryScreen() {
 }
 
 /**
- * The entry list for an unplanned subcategory: a running total, an "add" action,
- * and each transaction (name, date, amount) with swipe-free delete. Replaces the
- * paid toggle, which is meaningless when spend is tracked entry by entry.
+ * The entry list for a spending-budget subcategory: spend against budget, an
+ * "add" action, and every transaction this month. Replaces the paid toggle,
+ * which is meaningless when spend is tracked entry by entry.
+ *
+ * Each row is tappable to edit and carries an explicit delete. Both are needed:
+ * an amount typed wrong (or a mis-parsed SMS draft) previously had to be deleted
+ * and re-entered, losing its date and note, and the running total is only
+ * trustworthy if a wrong entry can be corrected in place.
  */
 function UnplannedTransactions({
   transactions,
   total,
+  plannedMinor,
   onAdd,
+  onEdit,
   onRemove,
 }: {
-  transactions: import('../../src/db/schema').Transaction[];
+  transactions: Transaction[];
   total: number;
+  /** The monthly budget, when set — drives the header's remaining figure. */
+  plannedMinor: number;
   onAdd: () => void;
-  onRemove: (id: string) => void;
+  onEdit: (txn: Transaction) => void;
+  onRemove: (id: string, name: string) => void;
 }) {
-  const { colors, radius, space } = useTheme();
+  const { colors, space } = useTheme();
+  const overBudget = plannedMinor > 0 && total > plannedMinor;
+
   return (
     <Surface padded={false} style={{ overflow: 'hidden' }}>
-      <Row justify="space-between" align="center" style={{ padding: space.lg, paddingBottom: space.sm }}>
+      <Row
+        justify="space-between"
+        align="center"
+        style={{ padding: space.lg, paddingBottom: space.sm }}
+      >
         <View>
           <Label>THIS MONTH</Label>
-          <T variant="figureLarge" color={colors.accent}>
+          <Text variant="figureLarge" color={overBudget ? colors.danger : colors.accent}>
             {formatMoney(total)}
-          </T>
+          </Text>
+          {plannedMinor > 0 ? (
+            <Text variant="caption" tone="muted">
+              {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'} ·{' '}
+              {overBudget
+                ? `${formatMoney(total - plannedMinor)} over budget`
+                : `${formatMoney(plannedMinor - total)} left`}
+            </Text>
+          ) : (
+            <Text variant="caption" tone="muted">
+              {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'}
+            </Text>
+          )}
         </View>
         <Button label="Add" icon="add" size="sm" onPress={onAdd} />
       </Row>
 
       {transactions.length === 0 ? (
-        <T variant="caption" tone="muted" style={{ padding: space.lg, paddingTop: 0 }}>
+        <Text variant="caption" tone="muted" style={{ padding: space.lg, paddingTop: 0 }}>
           No entries yet this month. Tap Add, or confirm an SMS draft against this line.
-        </T>
+        </Text>
       ) : (
         transactions.map((txn, index) => (
           <View key={txn.id}>
             {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
-            <Row gap={space.md} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
+            {/* The whole row opens the editor — a bigger, more obvious target
+                than a pencil icon, and the delete stays separate so a mis-tap
+                cannot destroy an entry. */}
+            <Pressable
+              onPress={() => onEdit(txn)}
+              accessibilityRole="button"
+              accessibilityLabel={`Edit ${txn.name}, ${formatMoney(txn.amountMinor)}`}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: space.md,
+                paddingHorizontal: space.lg,
+                paddingVertical: space.md,
+                backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+              })}
+            >
               <View style={{ flex: 1 }}>
-                <T variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
+                <Text variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
                   {txn.name}
-                </T>
-                <T variant="caption" tone="muted">
+                </Text>
+                <Text variant="caption" tone="muted" numberOfLines={1}>
                   {new Date(txn.date).toLocaleDateString(undefined, {
                     day: 'numeric',
                     month: 'short',
                   })}
-                </T>
+                  {txn.note ? ` · ${txn.note}` : ''}
+                </Text>
               </View>
-              <T variant="figure">{formatMoney(txn.amountMinor)}</T>
+              <Text variant="figure">{formatMoney(txn.amountMinor)}</Text>
+              <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
               <Pressable
-                onPress={() => onRemove(txn.id)}
-                hitSlop={8}
+                onPress={() => onRemove(txn.id, txn.name)}
+                hitSlop={10}
                 accessibilityRole="button"
                 accessibilityLabel={`Delete ${txn.name}`}
               >
                 <Ionicons name="close-circle" size={20} color={colors.inkMuted} />
               </Pressable>
-            </Row>
+            </Pressable>
           </View>
         ))
       )}
     </Surface>
+  );
+}
+
+/**
+ * Edit one existing entry: what it was, how much, and when.
+ *
+ * Deliberately the same three fields as the add sheet, so correcting an entry
+ * and creating one are the same task. Seeded per open from the row being edited,
+ * and it writes through `updateTransaction` — which re-derives the period from
+ * the date, so moving an entry into another month files it there.
+ */
+function EditTransactionSheet({
+  txn,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  txn: Transaction;
+  onClose: () => void;
+  onSave: (patch: { name: string; amountMinor: number; date: Date; note: string | null }) => void;
+  onDelete: () => void;
+}) {
+  const { colors, space } = useTheme();
+  const [name, setName] = useState(txn.name);
+  const [amount, setAmount] = useState(String(txn.amountMinor / 100));
+  const [date, setDate] = useState(() => new Date(txn.date));
+  const [note, setNote] = useState(txn.note ?? '');
+
+  const amountMinor = parseAmount(amount) ?? 0;
+  const canSave = name.trim().length > 0 && amountMinor > 0;
+
+  return (
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title="Edit entry"
+      eyebrow="Spending budget"
+      icon="create-outline"
+      iconColor={colors.accent}
+      scroll
+      footer={
+        <GradientButton
+          label="Save entry"
+          icon="checkmark"
+          disabled={!canSave}
+          onPress={() =>
+            onSave({
+              name: name.trim(),
+              amountMinor,
+              date,
+              note: note.trim() || null,
+            })
+          }
+        />
+      }
+    >
+      <Field label="What was it?" value={name} onChangeText={setName} />
+      <Field
+        label="Amount"
+        value={amount}
+        onChangeText={setAmount}
+        keyboardType="decimal-pad"
+        placeholder="0"
+      />
+      <DatePickerField label="Date" value={date} onChange={setDate} />
+      <Field
+        label="Note (optional)"
+        value={note}
+        onChangeText={setNote}
+        placeholder="Anything worth remembering?"
+        multiline
+      />
+
+      <Pressable
+        onPress={onDelete}
+        accessibilityRole="button"
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+          paddingVertical: space.md,
+          opacity: pressed ? 0.6 : 1,
+        })}
+      >
+        <Ionicons name="trash-outline" size={16} color={colors.danger} />
+        <Text variant="small" color={colors.danger} style={{ fontWeight: '600' }}>
+          Delete this entry
+        </Text>
+      </Pressable>
+    </BottomSheet>
   );
 }
 

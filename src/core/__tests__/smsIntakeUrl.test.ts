@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decodeSmsParam, extractSmsFromUrl } from '../smsIntakeUrl';
+import { decodeSmsParam, extractSmsFromUrl, looksTruncated } from '../smsIntakeUrl';
 import { parseSms } from '../smsParser';
 
 const SMS =
@@ -85,5 +85,64 @@ describe('extractSmsFromUrl', () => {
     expect(parsed!.amountMinor).toBe(1_250_000);
     expect(parsed!.merchant).toContain('KEELLS SUPER');
     expect(parsed!.date).toBe('2026-07-24');
+  });
+});
+
+describe('real Shortcut URL shapes', () => {
+  const SMS =
+    'LKR 2,867.40 debited from AC XXXXXXXX6796 as POS TXN on 24 Jul 2026 12:11 at National Water Supply Rathmalana. Avl Bal 174,121.03';
+
+  it('accepts a case-variant text parameter', () => {
+    // A hand-built Shortcut easily produces `Text=`; rejecting it looked
+    // exactly like the deep link never firing.
+    expect(extractSmsFromUrl(`moneymanager://sms?TEXT=${encodeURIComponent(SMS)}`)).toBe(SMS);
+    expect(extractSmsFromUrl(`moneymanager://sms?Text=${encodeURIComponent(SMS)}`)).toBe(SMS);
+  });
+
+  it('accepts the host-less triple-slash form', () => {
+    expect(extractSmsFromUrl(`moneymanager:///sms?text=${encodeURIComponent(SMS)}`)).toBe(SMS);
+  });
+
+  it('accepts a trailing slash before the query', () => {
+    expect(extractSmsFromUrl(`moneymanager://sms/?text=${encodeURIComponent(SMS)}`)).toBe(SMS);
+  });
+
+  it('still returns null when there is genuinely no text parameter', () => {
+    expect(extractSmsFromUrl('moneymanager://sms')).toBeNull();
+    expect(extractSmsFromUrl('moneymanager://sms?other=1')).toBeNull();
+  });
+
+  it('does not match a parameter that merely ends in "text"', () => {
+    // `?context=` must not be mistaken for `?text=`.
+    expect(extractSmsFromUrl('moneymanager://sms?context=abc')).toBeNull();
+  });
+});
+
+/**
+ * Truncation detection, built from a VERIFIED device capture rather than a
+ * guess: an unencoded 208-character link arrived on an iPhone 13 Pro as 51
+ * characters ending at "HNB", while the encoded form arrived complete.
+ */
+describe('looksTruncated', () => {
+  it('flags the doubled-scheme case seen on device', () => {
+    expect(looksTruncated('moneymanager://sms?text=HNB')).toBe(true);
+  });
+
+  it('flags a bare first word', () => {
+    expect(looksTruncated('HNB')).toBe(true);
+    expect(looksTruncated('Your')).toBe(true);
+  });
+
+  it('does NOT flag the full message', () => {
+    expect(
+      looksTruncated(
+        'HNB SMS ALERT: PURCHASE, Debit account:1380***4150,Location:KEELLS SUPER - SINHARAMUL, LK,Amount(Approx.):7362.18 LKR',
+      ),
+    ).toBe(false);
+  });
+
+  it('does NOT flag a short but complete message', () => {
+    // Unparseable, but it did arrive whole — the parser owns this case.
+    expect(looksTruncated('Bal: 1.00')).toBe(false);
   });
 });

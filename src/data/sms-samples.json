@@ -143,6 +143,20 @@
       }
     },
     {
+      "id": "swift-usd-salary-credit",
+      "source": "Any bank (inward SWIFT)",
+      "raw": "Your A/C No: ********7427 is credited with USD2,500.00 on 31 JUL 2026 ref: Inward SWIFT Payment. Your bal is USD5,002.26. If unauthorized call 0112350035",
+      "expect": {
+        "direction": "credit",
+        "kind": "transfer_in",
+        "amountMinor": 250000,
+        "currency": "USD",
+        "merchant": "Inward SWIFT Payment",
+        "account": "7427",
+        "date": "2026-07-31"
+      }
+    },
+    {
       "id": "ignore-real-otp",
       "source": "Any bank",
       "raw": "123456 is your One Time Password (OTP) for your transaction of LKR 5,000.00. Valid for 5 minutes. Do not share it with anyone.",

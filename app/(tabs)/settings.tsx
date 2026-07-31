@@ -5,14 +5,18 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, T } from '../../src/components/ui';
+import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, Text } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { syncCategoryReminders, unavailableReason } from '../../src/services/notifications';
 import { PinPad } from '../../src/components/PinPad';
 import { SMART_DETECT_NAME } from '../../src/components/SmartDetectBadge';
 import { canUse, inheritedPerks, planById, PLANS, type Perk } from '../../src/core/plans';
 import { clearPin, setPin } from '../../src/services/appPin';
-import { confirmWithBiometrics, describeBiometric } from '../../src/services/biometrics';
+import {
+  canUseBiometrics,
+  confirmWithBiometrics,
+  describeBiometric,
+} from '../../src/services/biometrics';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -64,13 +68,38 @@ export default function SettingsScreen() {
   /** Which PIN flow is open: setting one to enable the lock, or changing it. */
   const [pinSetup, setPinSetup] = useState<PinPurpose | null>(null);
   const [plansOpen, setPlansOpen] = useState(false);
-  /** "Face ID" / "Touch ID" / "" — drives the App Lock row's subtitle. */
+  /**
+   * What this device actually asks for — "Face ID", "Fingerprint", "Iris"… —
+   * resolved at runtime. Never hardcoded: an Android phone has no Face ID, and
+   * naming a sensor the user does not have is worse than saying "Biometrics".
+   */
   const [biometricLabel, setBiometricLabel] = useState('');
+  /** Whether the device can actually authenticate — gates the biometric row. */
+  const [biometricsAvailable, setBiometricsAvailable] = useState(false);
+  /**
+   * The switch position while a biometric scan is in flight, or null when
+   * nothing is pending.
+   *
+   * The row is otherwise bound to store state, which only flips *after* the
+   * scan succeeds — so the switch sat visibly off for the second or two the
+   * Face ID sheet was up, as though the tap had not registered. Holding an
+   * optimistic value here moves it the instant it is tapped, and clearing it on
+   * failure lets the store's real value snap it back.
+   *
+   * Doubles as the in-flight guard: non-null means a prompt is already up, so
+   * the row is disabled and a second tap cannot stack another behind it.
+   */
+  const [pendingLock, setPendingLock] = useState<boolean | null>(null);
 
   // Name the enrolled biometric so the row says what will actually be asked
   // for, rather than listing every possibility on every device.
   useEffect(() => {
     void describeBiometric().then(setBiometricLabel);
+    // Specifically a *biometric*, not merely a device passcode: the toggle
+    // offers Face ID / Touch ID, so a passcode-only phone must read as
+    // unavailable rather than enabling a switch that falls through to a
+    // passcode prompt the unlock screen is designed to avoid.
+    void canUseBiometrics().then(setBiometricsAvailable);
   }, []);
   const [themeOpen, setThemeOpen] = useState(false);
   const [fetchingRate, setFetchingRate] = useState(false);
@@ -153,22 +182,58 @@ export default function SettingsScreen() {
   }
 
   /**
-   * Turn App Lock on only once there is a way back in.
+   * Turn App Lock on or off.
    *
-   * A PIN is always required, even on a phone with Face ID: biometrics fail —
-   * wet hands, a mask, a failed re-enrolment — and without a fallback the lock
-   * screen would be a dead end, with the switch to undo it sitting behind that
-   * same screen. So enabling always routes through PIN setup, and the lock is
-   * only switched on once the PIN is stored.
+   * Enabling it on a biometric device **proves the biometric works first**.
+   * `canUseBiometrics()` only reports what is enrolled — it does not show that a
+   * scan of *this* user will actually succeed. Trusting it meant the switch
+   * could turn on for someone whose Face ID never passes, and the next launch
+   * would lock them out of their own data with no PIN to fall back on and the
+   * switch to undo it sitting behind that same screen. So the prompt runs here,
+   * where failing it costs nothing, rather than at the lock screen where it
+   * costs everything.
    *
-   * Turning it *off* is deliberately not gated: someone who has already unlocked
-   * the app to reach this screen has cleared the bar the lock sets. The PIN is
-   * cleared with it rather than left in the keystore.
+   * A device WITHOUT a biometric routes through PIN setup instead, for the same
+   * reason: there must be a proven way in before the door is locked.
+   *
+   * Turning it off is never gated: someone who has already unlocked the app to
+   * reach this screen has cleared the bar the lock sets. Any stored PIN goes
+   * with it rather than being left behind in the keystore.
    */
-  async function enableAppLock(next: boolean) {
+  async function toggleAppLock(next: boolean) {
     if (!next) {
       state.setAppLockEnabled(false);
       await clearPin();
+      return;
+    }
+
+    if (biometricsAvailable) {
+      // Move the switch NOW, before the sheet appears: the tap should look like
+      // it landed even though the decision is still a second or two away.
+      setPendingLock(true);
+      try {
+        // `biometricOnly` — the device passcode is not proof the *biometric*
+        // works, and the biometric is what the lock screen will ask for.
+        const ok = await confirmWithBiometrics(
+          `Confirm ${biometricLabel || 'your biometrics'} to turn on App Lock`,
+          { biometricOnly: true },
+        );
+
+        if (!ok) {
+          Alert.alert(
+            'App lock not enabled',
+            `${biometricLabel || 'Biometric'} could not be confirmed, so the lock was left off. Without a working scan you would have no way back into the app.`,
+          );
+          return;
+        }
+
+        state.setAppLockEnabled(true);
+      } finally {
+        // Cleared either way. On success the store now says `true` so the
+        // switch holds its position; on failure there is nothing behind the
+        // optimistic value and it snaps back to off.
+        setPendingLock(null);
+      }
       return;
     }
 
@@ -180,6 +245,17 @@ export default function SettingsScreen() {
     if (purpose === 'enable') state.setAppLockEnabled(true);
     setPinSetup(null);
   }
+
+  /**
+   * What the App Lock row says once the lock is on.
+   *
+   * Written from the *user's* side — "You'll need…" — not the app's. "Ask for
+   * Face ID to open the app" describes what the software does, which reads like
+   * a spec; the user only wants to know what will be required of them.
+   */
+  const unlockMethodSummary = biometricsAvailable
+    ? `You'll need ${biometricLabel || 'biometrics'} to open the app`
+    : "You'll need your PIN to open the app";
 
   /**
    * Confirm once, verify it is really the device's owner, then wipe.
@@ -346,31 +422,44 @@ export default function SettingsScreen() {
           />
         </Section>
 
-        <Section title="SECURITY" note="Locks the app when it is opened or resumed.">
+        <Section title="SECURITY">
+          {/*
+            One switch, and on most devices nothing else. The lock uses whatever
+            the phone already authenticates with — a scan, falling back to the
+            device passcode — so there is no second secret to configure and no
+            options screen to hold them. Only a device with no biometric needs
+            the app's own PIN, which is why "Change PIN" appears just there.
+          */}
           <ToggleRow
             icon="lock-closed-outline"
             color={colors.completed}
             title="App lock"
+            /*
+             * Both states are plain sentences addressed to the user, so flipping
+             * the switch changes one idea rather than swapping between two
+             * differently-shaped fragments.
+             */
             subtitle={
               state.appLockEnabled
-                ? biometricLabel
-                  ? `${biometricLabel} or your PIN`
-                  : 'Your PIN'
-                : 'Require unlocking before the app opens'
+                ? unlockMethodSummary
+                : 'Enable App lock security'
             }
-            value={state.appLockEnabled}
-            // The handler prompts, so it is async; the Switch wants a void
-            // callback. The store update it performs re-renders the row.
-            onValueChange={(next) => void enableAppLock(next)}
+            value={pendingLock ?? state.appLockEnabled}
+            disabled={pendingLock !== null}
+            // The handler may prompt or open PIN setup, so it is async; the
+            // Switch wants a void callback. The store update it performs
+            // re-renders the row, which is what snaps the switch back if the
+            // scan fails.
+            onValueChange={(next) => void toggleAppLock(next)}
           />
-          {state.appLockEnabled ? (
+          {state.appLockEnabled && !biometricsAvailable ? (
             <>
               <Divider />
               <SettingRow
                 icon="keypad-outline"
                 color={colors.accent}
                 title="Change PIN"
-                subtitle="The 4 digits used when unlocking fails"
+                subtitle="The 4 digits that unlock this app"
                 onPress={() => setPinSetup('change')}
               />
             </>
@@ -405,21 +494,30 @@ export default function SettingsScreen() {
         </Section>
 
         <View style={{ alignItems: 'center', paddingTop: space.md }}>
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {Constants.expoConfig?.name ?? 'Money Manager'}
             {Constants.expoConfig?.version ? ` · v${Constants.expoConfig.version}` : ''}
-          </T>
+          </Text>
         </View>
       </ScrollView>
 
       {plansOpen ? <PlansSheet onClose={() => setPlansOpen(false)} /> : null}
 
+      {/* PIN setup — only ever reached on a device with no biometric, where
+          these digits are the single way in. Full-screen so the keypad has the
+          height it needs without scrolling under the thumb. */}
       {pinSetup ? (
-        <PinSetupSheet
-          purpose={pinSetup}
+        <BottomSheet
+          visible
+          fullScreen
           onClose={() => setPinSetup(null)}
-          onStored={onPinStored}
-        />
+          title={pinSetup === 'enable' ? 'Set a PIN' : 'Change PIN'}
+          eyebrow="App lock"
+          icon="keypad-outline"
+          iconColor={colors.accent}
+        >
+          <PinSetupBody purpose={pinSetup} onStored={onPinStored} />
+        </BottomSheet>
       ) : null}
 
       {/* USD exchange-rate editor — a bottom sheet with a live rate display, a
@@ -429,17 +527,17 @@ export default function SettingsScreen() {
           contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.md, gap: space.md }}
           keyboardShouldPersistTaps="handled"
         >
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             How many {state.currency} one US dollar is worth — used to convert foreign-currency
             income.
-          </T>
+          </Text>
 
           {/* Big live rate. */}
           <Surface style={{ alignItems: 'center', gap: 2, backgroundColor: colors.accentSoft }}>
             <Label color={colors.accent}>1 USD =</Label>
-            <T variant="display" color={colors.accent}>
+            <Text variant="display" color={colors.accent}>
               {state.currency} {parseFloat(rateText) || 0}
-            </T>
+            </Text>
           </Surface>
 
           <View style={{ gap: space.sm }}>
@@ -474,12 +572,12 @@ export default function SettingsScreen() {
 
           {/* Conversion preview: what $100 becomes. */}
           <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>
-            <T variant="small" tone="muted">
+            <Text variant="small" tone="muted">
               $100 becomes
-            </T>
-            <T variant="figure">
+            </Text>
+            <Text variant="figure">
               {state.currency} {((parseFloat(rateText) || 0) * 100).toLocaleString()}
-            </T>
+            </Text>
           </Row>
 
           <Button label="Save rate" icon="checkmark" onPress={handleSaveRate} />
@@ -546,16 +644,16 @@ export default function SettingsScreen() {
                   backgroundColor: selected ? colors.accentSoft : pressed ? colors.surfaceSunken : 'transparent',
                 })}
               >
-                <T variant="title" style={{ fontSize: 24 }}>
+                <Text variant="title" style={{ fontSize: 24 }}>
                   {c.flag}
-                </T>
+                </Text>
                 <View style={{ flex: 1 }}>
-                  <T variant="bodyStrong" color={selected ? colors.accent : colors.ink}>
+                  <Text variant="bodyStrong" color={selected ? colors.accent : colors.ink}>
                     {c.code} · {c.symbol}
-                  </T>
-                  <T variant="caption" tone="muted">
+                  </Text>
+                  <Text variant="caption" tone="muted">
                     {c.name}
-                  </T>
+                  </Text>
                 </View>
                 {selected ? <Ionicons name="checkmark-circle" size={22} color={colors.accent} /> : null}
               </Pressable>
@@ -598,12 +696,12 @@ export default function SettingsScreen() {
               >
                 <Ionicons name={opt.icon} size={22} color={selected ? colors.accent : colors.inkSecondary} />
                 <View style={{ flex: 1 }}>
-                  <T variant="bodyStrong" color={selected ? colors.accent : colors.ink}>
+                  <Text variant="bodyStrong" color={selected ? colors.accent : colors.ink}>
                     {opt.label}
-                  </T>
-                  <T variant="caption" tone="muted">
+                  </Text>
+                  <Text variant="caption" tone="muted">
                     {opt.desc}
-                  </T>
+                  </Text>
                 </View>
                 {selected ? <Ionicons name="checkmark-circle" size={22} color={colors.accent} /> : null}
               </Pressable>
@@ -670,34 +768,34 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
                 <Row justify="space-between" align="center">
                   <Row gap={6}>
                     <Ionicons name="sparkles" size={15} color="#FFFFFF" />
-                    <T variant="heading" color="#FFFFFF">
+                    <Text variant="heading" color="#FFFFFF">
                       {plan.name}
-                    </T>
+                    </Text>
                   </Row>
                   {active ? <CurrentPill onDark /> : null}
                 </Row>
-                <T variant="small" color="rgba(255,255,255,0.85)">
+                <Text variant="small" color="rgba(255,255,255,0.85)">
                   {plan.tagline}
-                </T>
+                </Text>
                 <Row gap={4} align="baseline">
-                  <T variant="display" color="#FFFFFF">
+                  <Text variant="display" color="#FFFFFF">
                     {plan.price}
-                  </T>
-                  <T variant="small" color="rgba(255,255,255,0.8)">
+                  </Text>
+                  <Text variant="small" color="rgba(255,255,255,0.8)">
                     {plan.period}
-                  </T>
+                  </Text>
                 </Row>
               </LinearGradient>
             ) : (
               <View style={{ padding: space.lg, gap: space.sm }}>
                 <Row justify="space-between" align="center">
-                  <T variant="heading">{plan.name}</T>
+                  <Text variant="heading">{plan.name}</Text>
                   {active ? <CurrentPill /> : null}
                 </Row>
-                <T variant="small" tone="muted">
+                <Text variant="small" tone="muted">
                   {plan.tagline}
-                </T>
-                <T variant="display">Free</T>
+                </Text>
+                <Text variant="display">Free</Text>
               </View>
             )}
 
@@ -705,9 +803,9 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
               {/* A paid tier leads with what it adds, tinted and ticked in the
                   accent, so the reason to upgrade is the first thing read. */}
               {paid ? (
-                <T variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+                <Text variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
                   WHAT YOU GET
-                </T>
+                </Text>
               ) : null}
 
               {plan.perks.map((perk) => (
@@ -719,9 +817,9 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
               {inherited.length > 0 ? (
                 <>
                   <Divider />
-                  <T variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+                  <Text variant="caption" tone="muted" style={{ fontWeight: '700' }}>
                     EVERYTHING IN FREE
-                  </T>
+                  </Text>
                   {inherited.map((perk) => (
                     <PerkRow key={perk.label} perk={perk} muted />
                   ))}
@@ -744,9 +842,9 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
         );
       })}
 
-      <T variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+      <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
         Billing is not connected yet — switching here changes the plan on this device only.
-      </T>
+      </Text>
     </BottomSheet>
   );
 }
@@ -763,13 +861,13 @@ function CurrentPill({ onDark }: { onDark?: boolean }) {
         backgroundColor: onDark ? 'rgba(255,255,255,0.25)' : colors.accentSoft,
       }}
     >
-      <T
+      <Text
         variant="caption"
         color={onDark ? '#FFFFFF' : colors.accent}
         style={{ fontWeight: '800' }}
       >
         CURRENT
-      </T>
+      </Text>
     </View>
   );
 }
@@ -796,17 +894,17 @@ function PerkRow({
         color={highlighted ? colors.accent : muted ? colors.inkMuted : colors.completed}
       />
       <View style={{ flex: 1, gap: 1 }}>
-        <T
+        <Text
           variant="small"
           tone={muted ? 'muted' : 'ink'}
           style={{ fontWeight: highlighted ? '700' : '500' }}
         >
           {perk.label}
-        </T>
+        </Text>
         {perk.detail && !muted ? (
-          <T variant="caption" tone="muted">
+          <Text variant="caption" tone="muted">
             {perk.detail}
-          </T>
+          </Text>
         ) : null}
       </View>
     </Row>
@@ -819,17 +917,22 @@ type PinPurpose = 'enable' | 'change';
 /**
  * Set or change the unlock PIN: enter four digits, then enter them again.
  *
- * The confirm step is not ceremony — this PIN may be the only way back into the
- * app, and a typo during a one-shot entry would lock the user out of their own
- * data with no recovery path.
+ * Only ever reached on a device with NO biometric enrolled, where these digits
+ * are the single way into the app. A phone with Face ID never sees this — it
+ * authenticates by scan, falling back to the device's own passcode.
+ *
+ * The confirm step is not ceremony — on such a device this PIN is the only way
+ * back in, and a typo during a one-shot entry would lock the user out of their
+ * own data with no recovery path.
+ *
+ * A *body*, not a sheet: the caller owns the BottomSheet so the presentation
+ * (full-screen, for keypad height) is decided in one place.
  */
-function PinSetupSheet({
+function PinSetupBody({
   purpose,
-  onClose,
   onStored,
 }: {
   purpose: PinPurpose;
-  onClose: () => void;
   onStored: (purpose: PinPurpose) => void;
 }) {
   const { colors, space } = useTheme();
@@ -863,74 +966,103 @@ function PinSetupSheet({
   }
 
   return (
-    <BottomSheet
-      visible
-      onClose={onClose}
-      title={purpose === 'enable' ? 'Set a PIN' : 'Change PIN'}
-      eyebrow="App lock"
-      icon="keypad-outline"
-      iconColor={colors.accent}
-    >
-      <View style={{ alignItems: 'center', gap: space.lg, paddingVertical: space.md }}>
-        {/* Two dashes marking which pass this is. The pad's own dots track the
-            digits, so without this the second screen looks identical to the
-            first and a mismatch feels like the app lost the entry. */}
-        <Row gap={6}>
-          {[0, 1].map((step) => {
-            const current = first === null ? 0 : 1;
-            return (
-              <View
-                key={step}
-                style={{
-                  width: step === current ? 22 : 8,
-                  height: 4,
-                  borderRadius: 2,
-                  backgroundColor: step <= current ? colors.accent : colors.hairlineStrong,
-                }}
-              />
-            );
-          })}
-        </Row>
+    <>
+      {/*
+        The whole screen, laid out as three bands: the explanation at the top,
+        the keypad centred in the space that remains, and the escape hatch at the
+        bottom. The pad is the one thing that must not move or shrink — it is
+        operated by thumb, so `flex: 1` goes to the space around it rather than
+        to the keys.
+      */}
+      <View style={{ flex: 1, paddingHorizontal: space.lg }}>
+        {/* Step marker + copy. */}
+        <View style={{ alignItems: 'center', gap: space.md, paddingTop: space.lg }}>
+          {/* Two dashes marking which pass this is. The pad's own dots track the
+              digits, so without this the second screen looks identical to the
+              first and a mismatch feels like the app lost the entry. */}
+          <Row gap={6}>
+            {[0, 1].map((step) => {
+              const current = first === null ? 0 : 1;
+              return (
+                <View
+                  key={step}
+                  style={{
+                    width: step === current ? 22 : 8,
+                    height: 4,
+                    borderRadius: 2,
+                    backgroundColor: step <= current ? colors.accent : colors.hairlineStrong,
+                  }}
+                />
+              );
+            })}
+          </Row>
 
-        <View style={{ gap: 4, alignItems: 'center' }}>
-          <T variant="bodyStrong">
-            {first === null ? 'Choose four digits' : 'Enter them again'}
-          </T>
-          <T variant="caption" tone="muted" style={{ textAlign: 'center', maxWidth: 300 }}>
-            {first === null
-              ? 'You will need these if Face ID or Touch ID cannot be used.'
-              : 'Confirming catches a typo before it locks you out.'}
-          </T>
+          <View
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: 32,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colors.accentSoft,
+            }}
+          >
+            <Ionicons
+              name={first === null ? 'keypad' : 'checkmark-circle'}
+              size={30}
+              color={colors.accent}
+            />
+          </View>
+
+          <View style={{ gap: 6, alignItems: 'center' }}>
+            <Text variant="heading">
+              {first === null ? 'Choose four digits' : 'Enter them again'}
+            </Text>
+            <Text variant="small" tone="muted" style={{ textAlign: 'center', maxWidth: 320 }}>
+              {first === null
+                ? 'Your PIN unlocks the app when a biometric scan cannot be used — and on a device without one, it is the only way in.'
+                : 'Confirming catches a typo before it locks you out of your own data.'}
+            </Text>
+          </View>
         </View>
 
-        <PinPad
-          value={value}
-          onChange={(next) => {
-            setValue(next);
-            if (error) setError(null);
-          }}
-          onComplete={(entered) => void handleComplete(entered)}
-          error={error}
-        />
-
-        {/* An escape from the second pass without dismissing the whole sheet. */}
-        {first !== null ? (
-          <Pressable
-            onPress={() => {
-              setFirst(null);
-              setValue('');
-              setError(null);
+        {/* The pad, centred in whatever height is left. */}
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <PinPad
+            value={value}
+            onChange={(next) => {
+              setValue(next);
+              if (error) setError(null);
             }}
-            accessibilityRole="button"
-            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-          >
-            <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
-              Start over
-            </T>
-          </Pressable>
-        ) : null}
+            onComplete={(entered) => void handleComplete(entered)}
+            error={error}
+          />
+        </View>
+
+        {/* One reserved line at the bottom, so the pad above never shifts under
+            the thumb. It shows "Start over" mid-entry (the more urgent escape),
+            and otherwise the way back to the unlock options when this step is
+            running inside the setup sheet. */}
+        <View style={{ height: 48, alignItems: 'center', justifyContent: 'center' }}>
+          {first !== null ? (
+            <Pressable
+              onPress={() => {
+                setFirst(null);
+                setValue('');
+                setError(null);
+              }}
+              accessibilityRole="button"
+              hitSlop={10}
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+              <Text variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+                Start over
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
-    </BottomSheet>
+    </>
   );
 }
 
@@ -941,6 +1073,7 @@ function ToggleRow({
   subtitle,
   value,
   onValueChange,
+  disabled = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   color: string;
@@ -948,6 +1081,8 @@ function ToggleRow({
   subtitle: string;
   value: boolean;
   onValueChange: (value: boolean) => void;
+  /** Dims the row and blocks the switch — used when the device cannot honour it. */
+  disabled?: boolean;
 }) {
   const { colors, space } = useTheme();
   return (
@@ -957,21 +1092,28 @@ function ToggleRow({
         alignItems: 'center',
         gap: space.md,
         padding: space.lg,
+        // Dimmed rather than hidden: a missing row cannot explain itself, and
+        // "why is Face ID not offered here" is a question the subtitle answers.
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       <Glyph icon={icon} color={color} />
-      <View style={{ flex: 1 }}>
-        <T variant="bodyStrong">{title}</T>
-        <T variant="caption" tone="muted">
+      {/* Matches ListRow's title/subtitle spacing, so a switch row and a
+          tappable row sitting in the same section line up. */}
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text variant="bodyStrong">{title}</Text>
+        <Text variant="caption" tone="muted">
           {subtitle}
-        </T>
+        </Text>
       </View>
       <Switch
         value={value}
         onValueChange={onValueChange}
+        disabled={disabled}
         trackColor={{ false: colors.surfaceSunken, true: colors.accent }}
         thumbColor="#FFFFFF"
         accessibilityLabel={title}
+        accessibilityState={{ disabled }}
       />
     </View>
   );
@@ -1006,9 +1148,9 @@ function SettingRow({
       subtitle={subtitle}
       trailing={
         valueLabel ? (
-          <T variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+          <Text variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
             {valueLabel}
-          </T>
+          </Text>
         ) : undefined
       }
       chevron

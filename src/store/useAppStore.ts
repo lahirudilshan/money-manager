@@ -162,7 +162,13 @@ export interface AppState {
 
   addCategory: (input: Omit<NewCategory, 'id' | 'color'>) => Category;
   updateCategory: (id: string, patch: Partial<NewCategory>) => void;
-  deleteCategory: (id: string) => void;
+  /**
+   * Delete a category and its lines. Refuses — reporting why — when it holds a
+   * loan installment, since removing that would leave the debt owed with no
+   * bill on the board. Callers should surface `reason` rather than assume the
+   * delete happened.
+   */
+  deleteCategory: (id: string) => { ok: boolean; reason?: string };
 
   addSubcategory: (input: {
     name: string;
@@ -209,12 +215,15 @@ export interface AppState {
 
   /**
    * Parse an incoming SMS (from a deep link, share sheet, or paste) into a
-   * draft transaction and queue it for confirmation. Returns the draft id, or
-   * null when the text was not a recognisable money movement. Duplicate raw
-   * texts already queued are ignored so re-opening the same deep link does not
-   * stack identical drafts.
+   * draft transaction and queue it for confirmation.
+   *
+   * Returns the new draft's id; `null` when the text was not a recognisable
+   * money movement; or the literal `'duplicate'` when an identical raw text is
+   * already queued. The three are distinguished because callers report the
+   * outcome to the user, and a duplicate is a success (the draft exists) while
+   * null is a failure (nothing was understood).
    */
-  ingestSmsText: (text: string) => string | null;
+  ingestSmsText: (text: string) => string | 'duplicate' | null;
   /**
    * Confirm a queued draft: log it against the chosen bill for the current
    * period (reusing logTransaction), then remove it from the queue. Overrides
@@ -493,14 +502,26 @@ export const useAppStore = create<AppState>((set, get) => ({
      * that would silently destroy every loan's board line while leaving the
      * loans themselves behind — a bill vanishing from the plan with the debt
      * still owed. Loans are removed from the Loans screen, which cleans up both.
+     *
+     * The refusal is REPORTED rather than silent. A bare `return` here read to
+     * the user as "delete is broken": the confirm alert accepted their Delete,
+     * the screen popped, and the category was still on the board with nothing
+     * said. Callers now get the reason and can show it.
      */
     const holdsLoan = get().subcategories.some(
       (sub) => sub.categoryId === id && sub.loanId,
     );
-    if (holdsLoan) return;
+    if (holdsLoan) {
+      return {
+        ok: false,
+        reason:
+          'This category holds a loan installment. Delete the loan from the Loans tab — that removes its bill here too.',
+      };
+    }
 
     categoryRepo.remove(id);
     get().refresh();
+    return { ok: true };
   },
 
   addSubcategory(input) {
@@ -656,18 +677,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const parsed = parseSms(text);
     if (!parsed) return null;
 
-    const { smsDrafts, subcategories, categories, cards, merchantRules } = get();
+    const { smsDrafts, subcategories, categories, cards, merchantRules, currency, usdRate } = get();
 
     // Ignore an identical raw text that is already waiting — re-firing the same
     // deep link (iOS Shortcuts can deliver a message more than once) should not
     // pile up duplicate drafts for the user to dismiss.
-    if (smsDrafts.some((draft) => draft.parsed.raw === parsed.raw)) return null;
+    // 'duplicate' rather than null: the caller logs the outcome, and reporting
+    // this as a parse failure made a successful deep link show an error beside
+    // its own success (both the layout listener and the sms/index route ingest
+    // a cold-start link, so the second delivery always lands here).
+    if (smsDrafts.some((draft) => draft.parsed.raw === parsed.raw)) return 'duplicate';
 
     const draft = reconcileSms(
       parsed,
       { subcategories, categories, cards },
       createId(),
       merchantRules,
+      // A foreign-currency alert (an inward USD salary, say) is converted to the
+      // user's currency before it is matched or logged — the board is entirely
+      // in one currency, so an unconverted figure would match nothing and record
+      // a salary as pocket change.
+      { currency, usdRate },
     );
 
     set({ smsDrafts: [draft, ...smsDrafts] });
@@ -750,16 +780,27 @@ function toPlanned(
   state: SubcategoryState | undefined,
   transactionTotal: Minor | undefined,
 ): PlannedCategory {
-  // An unplanned line has no single planned amount and no per-period paid flag;
-  // its effective value is the SUM of its child transactions, always treated as
-  // "actual" so the board and its transaction list can never disagree. It reads
-  // as paid whenever it has any spend, so it never shows as an outstanding bill.
+  /*
+   * A spending-budget line (stored as `unplanned`) has no per-period paid flag:
+   * its effective value is the SUM of its child transactions, always reported as
+   * "actual" so the board and its entry list can never disagree.
+   *
+   * It DOES carry a planned amount — the monthly budget — which is what the
+   * board should plan for. Reporting `plannedMinor: 0` (as this did before
+   * budgets existed) made a grocery budget invisible in the month's plan until
+   * money was actually spent, so the total to fund jumped around mid-month.
+   * Planning the budget and recording the spend against it is what makes
+   * "Rs 8,400 of Rs 20,000" true on both screens.
+   *
+   * It reads as paid whenever there is any spend, so it never sits in the
+   * outstanding-bills list demanding to be ticked off.
+   */
   if (subcategory.frequency === 'unplanned') {
     const total = transactionTotal ?? 0;
     return {
       id: subcategory.id,
       name: subcategory.name,
-      plannedMinor: 0,
+      plannedMinor: subcategory.plannedMinor,
       actualMinor: total,
       status: total > 0 ? 'paid' : 'pending',
       type: subcategory.type,
@@ -799,7 +840,48 @@ function toPlanned(
   };
 }
 
+/**
+ * Cache for `selectCategoryViews`, keyed by the exact state slices it reads.
+ *
+ * This selector is the app's hot path: six other selectors call it internally,
+ * and the dashboard runs seven of those in one render — so a single mount
+ * rebuilt every category view roughly a dozen times. On a real device that
+ * measured as a 400ms block on the JS thread during launch.
+ *
+ * A one-entry cache is enough because the store replaces these arrays wholesale
+ * on every `refresh()`, so reference equality is an exact test for "the data
+ * did not change" — no deep comparison and no staleness risk. Anything that
+ * mutates the board goes through `refresh()`, which produces new references and
+ * invalidates this automatically.
+ */
+let categoryViewsCache: { deps: unknown[]; value: CategoryView[] } | null = null;
+
 export function selectCategoryViews(state: AppState): CategoryView[] {
+  const deps = [
+    state.categories,
+    state.subcategories,
+    state.states,
+    state.categoryStates,
+    state.fundingTotals,
+    state.transactionTotals,
+    state.cards,
+    state.period,
+  ];
+
+  if (
+    categoryViewsCache &&
+    categoryViewsCache.deps.length === deps.length &&
+    categoryViewsCache.deps.every((dep, i) => dep === deps[i])
+  ) {
+    return categoryViewsCache.value;
+  }
+
+  const value = buildCategoryViews(state);
+  categoryViewsCache = { deps, value };
+  return value;
+}
+
+function buildCategoryViews(state: AppState): CategoryView[] {
   return state.categories.map((category) => {
     const subs = state.subcategories.filter((s) => s.categoryId === category.id);
     const planned = subs.map((s) =>
@@ -839,8 +921,28 @@ export function selectCategoryView(state: AppState, categoryId: string): Categor
 export function selectDraftTargets(state: AppState, draftId: string): Subcategory[] {
   const draft = state.smsDrafts.find((d) => d.id === draftId);
   if (!draft) return [];
-  const wantType = draft.parsed.direction === 'credit' ? 'income' : 'expense';
-  return state.subcategories.filter((s) => s.type === wantType);
+
+  /*
+   * Every line the user could sensibly log against, MATCHING FIRST.
+   *
+   * This used to hard-filter by direction — a debit saw only `expense` lines —
+   * which meant most of the board simply vanished from the picker. Two ways
+   * that goes wrong: the parser reads the direction from wording and can get it
+   * backwards (a refund, an own-account transfer), and a user may legitimately
+   * want a credit against a line typed as an expense. Hiding those left no
+   * route to the right bill at all.
+   *
+   * So the likely type leads and the rest follow, rather than being removed.
+   * Archived lines are excluded outright — they are deleted, not merely
+   * unlikely, and offering one would resurrect a line the user removed.
+   */
+  const likelyType = draft.parsed.direction === 'credit' ? 'income' : 'expense';
+  const live = state.subcategories.filter((s) => s.archivedAt == null);
+
+  return [
+    ...live.filter((s) => s.type === likelyType),
+    ...live.filter((s) => s.type !== likelyType),
+  ];
 }
 
 /** The category name a subcategory belongs to — for draft picker labels. */
