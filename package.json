@@ -51,6 +51,7 @@
     "ios": "yarn prebuild:ios && expo run:ios",
     "ios:dev": "expo run:ios",
     "ios:device": "expo run:ios --device",
+    "ios:real": "LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 expo run:ios --device 00008110-000C1504219B801E",
     "ios:release": "expo run:ios --configuration Release --device",
     "web": "expo start --web",
     "test": "vitest run",

@@ -330,22 +330,14 @@ export default function DashboardScreen() {
                 Read from your SMS — confirm to add
               </T>
             </View>
-            <View
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 4,
-                paddingHorizontal: space.sm,
-                paddingVertical: 4,
-                borderRadius: 999,
-                backgroundColor: colors.accentSoft,
-              }}
-            >
+            {/* Bare text, no pill: the section's own tinted background already
+                sets this apart, and a second tint inside it read as a control. */}
+            <Row gap={4}>
               <Ionicons name="chatbox-ellipses" size={12} color={colors.accent} />
               <T variant="caption" color={colors.accent}>
                 {smsDrafts.length} to review
               </T>
-            </View>
+            </Row>
           </Row>
 
           {smsDrafts.map((draft) => (
@@ -617,9 +609,38 @@ function HeroStat({ label, value }: { label: string; value: string }) {
         colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.06)']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={{ paddingVertical: space.sm, paddingHorizontal: space.sm, gap: 2 }}
+        // Tighter horizontally than vertically: four tiles share the screen's
+        // width, so side padding is the most expensive space here.
+        style={{ paddingVertical: space.sm, paddingHorizontal: 6, gap: 2 }}
       >
-        <Stat label={label} value={value} onDark />
+        <T
+          variant="label"
+          color="rgba(255,255,255,0.65)"
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.8}
+        >
+          {label}
+        </T>
+        {/*
+         * Shrinks to fit rather than truncating.
+         *
+         * These four tiles are a fixed quarter of the screen each, but their
+         * values are not a fixed width — a figure like "1,234.5K" on a 375pt
+         * phone overflowed the tile and ellipsised, hiding the digits the tile
+         * exists to show. `adjustsFontSizeToFit` scales the text down instead,
+         * so the whole number is always readable; the floor keeps it from
+         * shrinking to something illegible on the narrowest device.
+         */}
+        <T
+          variant="figure"
+          color="#FFFFFF"
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
+          {value}
+        </T>
       </LinearGradient>
     </View>
   );

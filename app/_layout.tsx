@@ -85,33 +85,48 @@ function RootNavigator() {
    * store's raw-text dedupe keeps a doubled event from queuing twice.
    */
   useEffect(() => {
-    if (!ready) return;
+    /*
+     * Attached immediately, NOT gated on `ready`.
+     *
+     * A Shortcut delivers its URL the instant the app launches — while the
+     * database is still opening. Waiting for `ready` before subscribing meant
+     * that event fired into a void and the message was lost, which is the
+     * "Shortcut opened the app but no draft appeared" case. Anything arriving
+     * before the store is ready is buffered and replayed by the effect below.
+     */
+    const pending: string[] = [];
 
-    // The URL that launched the app, for the cold-start case.
-    //
-    // `sms/index` also reads this, but only if expo-router actually mounts that
-    // route — and a launch that lands anywhere else (or is redirected away
-    // before the effect runs) drops the message silently. That is the "Shortcut
-    // opened the app but nothing appeared in the dashboard" case: the same text
-    // pasted into the manual box works, because that path never depends on
-    // routing. Ingesting here as well makes the message land regardless, and
-    // the store's raw-text dedupe stops the two paths from double-queueing.
+    const handle = (url: string | null) => {
+      const text = url ? extractSmsFromUrl(url) : null;
+      if (!text) return;
+      if (useAppStore.getState().ready) useAppStore.getState().ingestSmsText(text);
+      else pending.push(text);
+    };
+
+    // The URL that launched the app, for the cold-start case. `sms/index` also
+    // reads this, but only if expo-router actually mounts that route — and a
+    // launch that lands anywhere else drops the message silently. Reading it
+    // here too makes the message land regardless of routing, and the store's
+    // raw-text dedupe stops the two paths from double-queueing.
     void Linking.getInitialURL()
-      .then((url) => {
-        const text = url ? extractSmsFromUrl(url) : null;
-        if (text) useAppStore.getState().ingestSmsText(text);
-      })
+      .then(handle)
       .catch(() => {
         // A failed read must not break startup; the route may still catch it.
       });
 
-    const subscription = Linking.addEventListener('url', ({ url }) => {
-      const text = extractSmsFromUrl(url);
-      if (text) useAppStore.getState().ingestSmsText(text);
+    const subscription = Linking.addEventListener('url', ({ url }) => handle(url));
+
+    // Drain whatever arrived before the store could accept it.
+    const unsubscribe = useAppStore.subscribe((s) => {
+      if (!s.ready || pending.length === 0) return;
+      for (const text of pending.splice(0)) s.ingestSmsText(text);
     });
 
-    return () => subscription.remove();
-  }, [ready]);
+    return () => {
+      subscription.remove();
+      unsubscribe();
+    };
+  }, []);
 
   // Redirect into onboarding only once the navigator below is actually
   // mounted — dispatching `router.replace` while this component is still

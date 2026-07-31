@@ -41,6 +41,8 @@ export function T({
   color,
   style,
   numberOfLines,
+  adjustsFontSizeToFit,
+  minimumFontScale,
 }: {
   children: React.ReactNode;
   variant?: TypeKey;
@@ -48,6 +50,13 @@ export function T({
   color?: string;
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
+  /**
+   * Shrink the text to fit its box rather than truncating. Only takes effect
+   * alongside `numberOfLines`, which is what bounds the box to shrink into.
+   */
+  adjustsFontSizeToFit?: boolean;
+  /** Floor for that shrinking, as a fraction of the original size. */
+  minimumFontScale?: number;
 }) {
   const { colors, type } = useTheme();
   const toneColor = {
@@ -61,6 +70,8 @@ export function T({
   return (
     <Text
       numberOfLines={numberOfLines}
+      adjustsFontSizeToFit={adjustsFontSizeToFit}
+      minimumFontScale={minimumFontScale}
       style={[type[variant] as unknown as TextStyle, { color: color ?? toneColor }, style]}
     >
       {children}
