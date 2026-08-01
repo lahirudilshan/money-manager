@@ -14,6 +14,7 @@ import type { ParsedSms } from './smsParser';
 import { resolveCardId } from './planning';
 import { billMatchesHint, inferCategoryHint, type CategoryHint } from './smsCategoryHints';
 import { matchMerchant, type MatchConfidence, type MerchantRule } from './merchantRules';
+import type { CatalogSuggestion } from './catalogSync';
 import type { Minor } from './money';
 
 /** The minimum a leaf's plan/actual and the SMS must be within to count as an
@@ -66,6 +67,16 @@ export interface SmsDraft {
    * means the user must choose (and that choice is what teaches the system).
    */
   confidence: MatchConfidence;
+  /**
+   * Ranked category suggestions from the shared catalog, best first, at most
+   * three. Empty when the catalog is off, unreachable, or knows this merchant.
+   *
+   * Kept separate from `hint` rather than collapsed into it: `hint` is what the
+   * device concluded and drives matching, while these are what the CROWD
+   * thinks, with confidences the detail sheet shows. Merging them would lose
+   * the alternatives the user is meant to be able to pick from.
+   */
+  suggestions: CatalogSuggestion[];
   /** When the draft was created, for ordering the queue newest-first. */
   createdAt: number;
 }
@@ -313,6 +324,10 @@ export function reconcileSms(
     foreign,
     matches,
     confidence,
+    // Filled in asynchronously by the store once the catalog answers; the draft
+    // is built synchronously so it can appear immediately, and reconciliation
+    // stays a pure function with no network in it.
+    suggestions: [],
     createdAt: Date.now(),
   };
 }

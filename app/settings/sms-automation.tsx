@@ -1,28 +1,135 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, View } from 'react-native';
+import { Alert, Pressable, Switch, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { SMART_DETECT_NAME, SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { BottomSheet, Label, Row, Surface, Text } from '../../src/components/ui';
+import { describeDrain } from '../../src/core/smsInbox';
+import { copyToClipboard } from '../../src/services/clipboard';
 import {
-  clearSmsIntakeLog,
-  describeOutcome,
-  getSmsIntakeLog,
-  subscribeSmsIntakeLog,
-} from '../../src/core/smsIntakeLog';
+  ensureInboxExists,
+  FILES_APP_LOCATION,
+  INBOX_FILE_NAME,
+  INBOX_FILE_PATH,
+  INBOX_FOLDER_NAME,
+} from '../../src/services/smsInboxFile';
+import { openTestAlertComposer } from '../../src/services/testAlert';
+import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
+import { useAppStore } from '../../src/store/useAppStore';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 /**
- * In-app setup guide for the iOS Shortcuts automation that turns incoming bank
- * SMS into Money Manager drafts. Lives under Settings → Auto-detect
- * transactions. iOS gives no app access to the SMS inbox, so this documents the
- * one mechanism that does work — a Shortcuts personal automation opening the
- * app's `moneymanager://sms?text=…` deep link — as numbered, tappable-labelled
- * steps mirroring what the user sees in the Shortcuts app.
+ * Setup guide for the iOS Shortcuts automation behind Smart Detect.
+ *
+ * iOS gives no app access to the SMS inbox, so a Shortcuts personal automation
+ * appends each bank message to a text file the app imports on open.
+ *
+ * The screen teaches ONE path. It previously taught two — this and a deep-link
+ * variant that reopened the app per message — and two full setups on one screen
+ * meant people followed the wrong one or stopped reading. The steps mirror the
+ * Shortcuts UI screen by screen, because the whole difficulty is knowing which
+ * button to press next.
  */
 export default function SmsAutomationGuide() {
   const { colors, radius, space } = useTheme();
   const closeModal = useModalClose();
+
+  const waiting = useAppStore((s) => s.smsInboxWaiting);
+  const drainSmsInbox = useAppStore((s) => s.drainSmsInbox);
+  const refreshInboxCount = useAppStore((s) => s.refreshInboxCount);
+
+  /*
+   * Read from settings, NOT from whether the file exists.
+   *
+   * The app deletes the inbox file every time it drains it, so on a working
+   * setup the file is absent most of the time — inferring the toggle from it
+   * made the switch appear to turn itself off after every import.
+   */
+  const [enabled, setEnabled] = React.useState(
+    () => settingsRepo.get(SETTINGS_KEYS.smsInboxEnabled) === 'true',
+  );
+  const [copied, setCopied] = React.useState(false);
+
+  React.useEffect(() => {
+    refreshInboxCount();
+  }, [refreshInboxCount]);
+
+  function handleToggle(next: boolean) {
+    if (!next) {
+      settingsRepo.set(SETTINGS_KEYS.smsInboxEnabled, 'false');
+      setEnabled(false);
+      return;
+    }
+
+    const result = ensureInboxExists();
+    if (!result.ok) {
+      Alert.alert(
+        'Could not turn this on',
+        'The app could not write to its own folder. Reinstalling usually clears this.',
+      );
+      return;
+    }
+
+    settingsRepo.set(SETTINGS_KEYS.smsInboxEnabled, 'true');
+    setEnabled(true);
+    refreshInboxCount();
+  }
+
+  /**
+   * Offer the path to copy.
+   *
+   * A share sheet rather than a silent clipboard write: `expo-clipboard` throws
+   * on any build that predates it being linked, and the throw escapes a `try`
+   * because Metro hoists the import. Share needs no native module, and its
+   * first item IS Copy — so the user's actual action is one tap either way.
+   */
+  async function handleCopy() {
+    const ok = await copyToClipboard(INBOX_FILE_PATH);
+    if (!ok) {
+      Alert.alert('Could not open', `Type it instead:\n\n${INBOX_FILE_PATH}`);
+      return;
+    }
+    // Acknowledged on the button rather than in an alert the user has to dismiss
+    // before switching back to Shortcuts.
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
+
+  /**
+   * Test the whole chain.
+   *
+   * Explained BEFORE Messages opens, because a screen suddenly switching to a
+   * half-written text is alarming if you did not expect it — and the user has
+   * to know they are sending this to themselves for the test to mean anything.
+   */
+  function handleTest() {
+    Alert.alert(
+      'Send yourself a test alert',
+      `Messages will open with a fake bank alert ready to send.\n\nSend it to your OWN number, then come back here — the draft should be waiting.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Open Messages',
+          onPress: () => {
+            void openTestAlertComposer().then((ok) => {
+              if (!ok) {
+                Alert.alert(
+                  'Could not open Messages',
+                  'Text yourself “debited LKR 1,250.00 at KEELLS” instead.',
+                );
+              }
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  function handleImportNow() {
+    const summary = drainSmsInbox();
+    Alert.alert(summary.queued > 0 ? 'Imported' : 'Nothing yet', describeDrain(summary));
+  }
 
   return (
     <BottomSheet
@@ -34,248 +141,288 @@ export default function SmsAutomationGuide() {
       iconColor={colors.accent}
       scroll
     >
-        {/* Branded so the feature is recognisable wherever it appears. */}
+      <View style={{ gap: space.sm }}>
+        <SmartDetectBadge />
+        <Text variant="small" tone="secondary">
+          {SMART_DETECT_NAME} reads the bank alerts you already receive and turns each one into a
+          draft — amount, shop and account filled in, with the right category already suggested.
+          You confirm with one tap instead of typing it out.
+        </Text>
+      </View>
+
+      {/* The switch, described by what it DOES for the user rather than by its
+          mechanism. "Save messages to a file" named an implementation detail
+          and read like a chore. */}
+      <Surface style={{ gap: space.md }}>
+        <Row justify="space-between" align="center">
+          <View style={{ flex: 1, gap: 3, paddingRight: space.md }}>
+            <Text variant="bodyStrong">Enable smart alert detection</Text>
+            <Text variant="caption" tone="muted">
+              {enabled
+                ? 'On — finish the Shortcuts setup below'
+                : 'Turn bank SMS into ready-to-confirm drafts'}
+            </Text>
+          </View>
+          <Switch
+            value={enabled}
+            onValueChange={handleToggle}
+            trackColor={{ false: colors.surfaceSunken, true: colors.accent }}
+            thumbColor="#FFFFFF"
+            accessibilityLabel="Enable smart alert detection"
+          />
+        </Row>
+
+        {!enabled ? (
+          <View style={{ gap: space.sm }}>
+            <Benefit icon="flash-outline" text="No typing — the amount and shop are read for you" />
+            <Benefit icon="pricetag-outline" text="Category suggested from what you and others log" />
+            <Benefit icon="lock-closed-outline" text="Your messages never leave this phone" />
+          </View>
+        ) : null}
+      </Surface>
+
+      {/*
+        Privacy, stated plainly and specifically.
+
+        "Secure" and "private" are claims anyone can print; what earns trust is
+        naming what happens to each thing the user is worried about. So this
+        lists the actual facts — no permission, nothing uploaded, no account —
+        and the one thing that IS shared, in the same breath, because a privacy
+        note that omits the sharing is the kind users learn not to believe.
+      */}
+      <Surface style={{ gap: space.md }}>
+        <Row gap={space.sm}>
+          <Ionicons name="shield-checkmark" size={19} color={colors.completed} />
+          <Text variant="bodyStrong">Your messages stay yours</Text>
+        </Row>
+
         <View style={{ gap: space.sm }}>
-          <SmartDetectBadge />
-          <Text variant="small" tone="secondary">
-            iOS won&apos;t let apps read messages, so a <B>Shortcut</B> does it: a bank SMS arrives,
-            the app opens, and {SMART_DETECT_NAME} turns it into a draft waiting on your dashboard.
-          </Text>
+          <Privacy text="The app never reads your inbox — iOS doesn’t allow it, and no permission is ever requested." />
+          <Privacy text="Only messages matching your filter are passed along, by a Shortcut you build and can delete." />
+          <Privacy text="Balances, account numbers and message text are never uploaded anywhere." />
+          <Privacy text="No sign-in, no account, no profile. Your transactions live only on this phone." />
         </View>
 
-        {/* A screen recording of the real thing, above the written steps, and
-            playing as soon as the guide opens. Watching the Shortcuts UI once
-            answers "which button, which screen" far faster than the prose can,
-            and step 3 — inserting the variable chip rather than typing it — is
-            much clearer seen than described. */}
-        <Walkthrough />
-
-        {/* Four steps, each one action. Everything that used to be explained in
-            prose beside them is either in the step itself or dropped — the guide
-            was long enough that people stopped reading before step 3, which is
-            the only one that is actually easy to get wrong. */}
-        <PartHeader tag="Shortcuts app" title="Set it up once" />
-        <Surface padded={false} style={{ overflow: 'hidden' }}>
-          <Step n={1}>
-            <Tap>Automation</Tap> → <Tap>＋</Tap> → <Tap>Message</Tap>.
-          </Step>
-          <Step
-            n={2}
-            code="LKR"
-            note="Paid in another currency? Add a second automation with USD (or whichever code your bank prints). The app converts it at your saved rate."
-          >
-            <Tap>Message Contains</Tap> this, then <Tap>Run Immediately</Tap> and <Tap>Next</Tap>.
-          </Step>
-          {/*
-            URL Encode is its own step, not a footnote.
-
-            Without it iOS truncates the URL at the first space in the message —
-            the app receives "HNB" and nothing else, which shows up as "opened,
-            but not read as a payment". It is the single most common reason the
-            automation appears to do nothing, so it gets a numbered step of its
-            own rather than being buried in step 3's prose.
-          */}
-          <Step
-            n={3}
-            result={<Result label="URL Encode" chip="Shortcut Input" />}
-            warn="Skip this and the link breaks at the first space — the app opens but sees only the first word."
-          >
-            Add <Tap>URL Encode</Tap>, set to <Chip>Shortcut Input</Chip>.
-          </Step>
-          <Step
-            n={4}
-            code="moneymanager://sms?text="
-            result={<Result prefix="moneymanager://sms?text=" chip="URL Encoded Text" />}
-            warn="Insert the chip, don’t type it — tap the suggestion above the keyboard."
-          >
-            Add <Tap>Text</Tap>, type the link, then insert <Chip>URL Encoded Text</Chip> after
-            the <B>=</B>.
-          </Step>
-          <Step n={5} last result={<Result label="Open" chip="Text" />}>
-            Add <Tap>Open URLs</Tap>, set it to that <Chip>Text</Chip>, then <Tap>Done</Tap>.
-          </Step>
-        </Surface>
-
-        {/* Test — the one instruction worth its own block, since it is how the
-            user finds out whether any of the above worked. */}
-        <Surface style={{ gap: space.sm, borderColor: colors.accentSoft }}>
-          <Row gap={space.sm}>
-            <Ionicons name="checkmark-circle" size={20} color={colors.completed} />
-            <Text variant="bodyStrong">Test it</Text>
-          </Row>
-          <Text variant="small" tone="secondary">
-            Text yourself <B>&ldquo;debited LKR 1,250.00 at KEELLS&rdquo;</B>. The app should open
-            with a draft waiting.
-          </Text>
-        </Surface>
-
-        {/* Live diagnostics. The intake pipeline stops silently in several
-            legitimate places, and from outside they all look the same: the app
-            opened and nothing happened. This says which one occurred, and for a
-            rejected message shows the text, so an unparsed bank format can be
-            reported instead of guessed at. */}
-        <IntakeLogPanel />
-
-        {/* Two fixes, not three: the third was a restatement of step 3's warning. */}
-        <PartHeader tag="If nothing happens" title="Common fixes" />
-        <Surface padded={false} style={{ overflow: 'hidden' }}>
-          <Fix
-            title="Nothing opened"
-            body="Check Run Immediately is on. With “Notify When Run” enabled, iOS waits for you to tap a notification instead."
-          />
-          <Fix
-            title="It says “Link was cut short”"
-            body="The message may carry no readable amount, or be an OTP or promo — those are ignored on purpose. Paste it into Add → Paste a message to see what’s detected."
-            last
-          />
-        </Surface>
+        <View style={{ height: 1, backgroundColor: colors.hairline }} />
 
         <Text variant="caption" tone="muted">
-          On Android, any automation app that can open a URL on an incoming SMS (Tasker, MacroDroid)
-          works the same way — point it at <B>moneymanager://sms?text=</B> with the message appended.
+          To improve category suggestions for everyone, the app shares shop names it has learned —
+          like “KEELLS SUPER” → Groceries — and nothing else. No amounts, no dates, no account
+          details, and nothing that identifies you.
         </Text>
+      </Surface>
+
+      {enabled ? (
+        <>
+          {/*
+            The path, framed by what the user DOES with it.
+
+            "Where Shortcuts saves them" described the folder without saying why
+            the user was being shown one. Step 6 asks them to paste a path into
+            Shortcuts, so this block names that job, shows the exact string, and
+            puts Copy next to it.
+
+            A card, not a text input: it is something to copy, never to edit, and
+            an input invites both editing and the question of where Save is.
+          */}
+          <Surface style={{ gap: space.md }}>
+            <View style={{ gap: 3 }}>
+              <Text variant="bodyStrong">Paste this into Shortcuts</Text>
+              <Text variant="caption" tone="muted">
+                Step 6 asks for a File Path — this is it.
+              </Text>
+            </View>
+
+            <Row
+              gap={space.md}
+              style={{
+                padding: space.md,
+                borderRadius: radius.md,
+                backgroundColor: colors.surfaceSunken,
+              }}
+            >
+              <Ionicons name="folder-open-outline" size={20} color={colors.accent} />
+              <Text
+                variant="small"
+                selectable
+                style={{ flex: 1, fontFamily: 'Courier', color: colors.ink }}
+              >
+                {INBOX_FILE_PATH}
+              </Text>
+            </Row>
+
+            <Pressable
+              onPress={handleCopy}
+              accessibilityRole="button"
+              accessibilityLabel="Copy file path"
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                paddingVertical: 11,
+                borderRadius: radius.md,
+                backgroundColor: copied ? colors.completedSoft : colors.accentSoft,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Ionicons
+                name={copied ? 'checkmark' : 'copy-outline'}
+                size={15}
+                color={copied ? colors.completed : colors.accent}
+              />
+              <Text
+                variant="caption"
+                color={copied ? colors.completed : colors.accent}
+                style={{ fontWeight: '700' }}
+              >
+                {copied ? 'Shared' : 'Copy path'}
+              </Text>
+            </Pressable>
+
+            <Row gap={6}>
+              <Ionicons name="eye-outline" size={13} color={colors.inkSecondary} />
+              <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+                You can open this file any time in Files → <B>{FILES_APP_LOCATION}</B>
+              </Text>
+            </Row>
+          </Surface>
+
+          <PartHeader tag="Shortcuts app" title="Set it up once" />
+
+          {/* The recording sits with the steps it illustrates, not at the top of
+              the screen: the first decision is the toggle, and a 560pt video
+              above it would push that below the fold. */}
+          <Walkthrough />
+          <Surface padded={false} style={{ overflow: 'hidden' }}>
+            <Step n={1}>
+              Open <Tap>Shortcuts</Tap> → <Tap>Automation</Tap> tab → <Tap>New Automation</Tap>.
+            </Step>
+            <Step n={2}>
+              Search <Tap>Message</Tap> and choose it.
+            </Step>
+            <Step
+              n={3}
+              code="LKR"
+              note="Paid in another currency? Make a second automation with USD, or whichever code your bank prints."
+            >
+              Tap <Tap>Message Contains</Tap> → <Tap>Choose</Tap>, type this, then <Tap>Done</Tap>.
+            </Step>
+            <Step n={4}>
+              Pick <Tap>Run Immediately</Tap>, then <Tap>Next</Tap>.
+            </Step>
+            <Step n={5}>
+              Choose <Tap>New Blank Automation</Tap> → <Tap>Add Action</Tap>, and search{' '}
+              <Tap>Append to Text File</Tap>.
+            </Step>
+            <Step
+              n={6}
+              last
+              warn="Insert the chip, don’t type it — tap and hold Text, then pick Shortcut Input."
+            >
+              Tap and hold <Tap>Text</Tap> → <Chip>Shortcut Input</Chip>. Then under{' '}
+              <Tap>File Path</Tap>, paste the path you copied above.
+            </Step>
+          </Surface>
+
+          {/* Test, as a gradient button: it is the one action on this screen and
+              the only way to find out whether any of the above worked. */}
+          <Surface style={{ gap: space.md }}>
+            <Row gap={space.sm}>
+              <Ionicons name="paper-plane-outline" size={19} color={colors.accent} />
+              <Text variant="bodyStrong">Check it works</Text>
+            </Row>
+            <Text variant="small" tone="secondary">
+              Send yourself a test bank alert. If everything is wired up, a draft appears here.
+            </Text>
+
+            <Pressable
+              onPress={handleTest}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                borderRadius: radius.md,
+                overflow: 'hidden',
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <LinearGradient
+                colors={[colors.gradientStart, colors.gradientEnd]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 7,
+                  paddingVertical: 13,
+                }}
+              >
+                <Ionicons name="send" size={15} color="#FFFFFF" />
+                <Text variant="bodyStrong" color="#FFFFFF">
+                  Send test alert
+                </Text>
+              </LinearGradient>
+            </Pressable>
+
+            <Pressable
+              onPress={handleImportNow}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                paddingVertical: 11,
+                borderRadius: radius.md,
+                backgroundColor: colors.surfaceSunken,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Ionicons name="download-outline" size={15} color={colors.ink} />
+              <Text variant="caption" style={{ fontWeight: '700' }}>
+                {waiting > 0 ? `Import ${waiting} waiting` : 'Check for messages'}
+              </Text>
+            </Pressable>
+          </Surface>
+
+          <Warn>
+            Needs a recent build of the app installed on this phone. On an older one the folder
+            won&apos;t appear in the Files app and Shortcuts will have nowhere to write.
+          </Warn>
+        </>
+      ) : null}
     </BottomSheet>
   );
 }
 
 /**
- * What actually happened to the last few messages the app was handed.
+ * A screen recording of the Shortcuts setup, above the written steps.
  *
- * This exists because every stop in the intake pipeline is silent by design —
- * a message with no readable amount, an OTP, a link with no `text=` — and all of
- * them present to the user as "the Shortcut opened the app and nothing
- * appeared". Naming the outcome turns an unfalsifiable complaint into a fact,
- * and showing the rejected text means an unsupported bank format can be copied
- * into `src/data/sms-samples.json` rather than guessed at.
- *
- * Hidden entirely until something arrives, so the guide stays short for the
- * common case where setup simply works.
- */
-function IntakeLogPanel() {
-  const { colors, radius, space } = useTheme();
-
-  // `useSyncExternalStore` rather than an effect + state: the log is written
-  // from outside React (the root layout's URL listener), and this is the
-  // supported way to read a mutable external source without tearing.
-  const entries = React.useSyncExternalStore(subscribeSmsIntakeLog, getSmsIntakeLog);
-
-  if (entries.length === 0) return null;
-
-  return (
-    <Surface style={{ gap: space.md }}>
-      <Row justify="space-between" align="center">
-        <Row gap={space.sm}>
-          <Ionicons name="pulse-outline" size={18} color={colors.accent} />
-          <Text variant="bodyStrong">Recent messages</Text>
-        </Row>
-        <Pressable
-          onPress={clearSmsIntakeLog}
-          accessibilityRole="button"
-          hitSlop={10}
-          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-        >
-          <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
-            Clear
-          </Text>
-        </Pressable>
-      </Row>
-
-      {entries.map((entry) => {
-        const ok = entry.outcome === 'ingested';
-        return (
-          <View
-            key={`${entry.at}-${entry.text.slice(0, 12)}`}
-            style={{
-              gap: 4,
-              padding: space.md,
-              borderRadius: radius.md,
-              backgroundColor: colors.surfaceSunken,
-            }}
-          >
-            <Row gap={6}>
-              <Ionicons
-                name={ok ? 'checkmark-circle' : 'alert-circle'}
-                size={14}
-                color={ok ? colors.completed : colors.pending}
-              />
-              <Text
-                variant="caption"
-                color={ok ? colors.completed : colors.pending}
-                style={{ fontWeight: '700', flex: 1 }}
-              >
-                {describeOutcome(entry.outcome)}
-              </Text>
-              <Text variant="caption" tone="muted">
-                {new Date(entry.at).toLocaleTimeString(undefined, {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </Text>
-            </Row>
-            {/* The message itself, only when it was NOT understood — that is
-                the case where seeing the exact text is the whole point. */}
-            {!ok ? (
-              <>
-                {/*
-                  The character count is the diagnostic that matters most here.
-                  A truncated URL and a genuinely unparseable message look
-                  identical once the text is shown at 4 lines — but the length
-                  says immediately whether the whole SMS arrived. Anything much
-                  under the real message length means the link was cut, not that
-                  the parser failed.
-                */}
-                <Text variant="caption" tone="muted">
-                  {entry.text.length} characters received
-                </Text>
-                <Text variant="caption" tone="muted" numberOfLines={6}>
-                  {entry.text}
-                </Text>
-              </>
-            ) : null}
-          </View>
-        );
-      })}
-
-      <Text variant="caption" tone="muted">
-        If a real payment shows as “not read as a payment”, that bank’s wording
-        isn’t supported yet — the text above is what needs to be added.
-      </Text>
-    </Surface>
-  );
-}
-
-/**
- * The screen recording of the setup, as it happens in the Shortcuts app.
- *
- * A video rather than a GIF so it can be paused, scrubbed and replayed — at
- * nearly a minute long, a looping GIF gives no way to stop on the one step the
- * user is mid-way through copying, which is the whole reason to watch it.
- *
- * Native controls are used rather than a custom overlay: they bring scrubbing
- * and fullscreen for free, and fullscreen matters here because the recording is
- * of a phone screen, so detail is small at inline size.
+ * Watching the Shortcuts UI once answers "which button, which screen" far faster
+ * than prose can — especially step 6, where the variable chip has to be INSERTED
+ * by tap-and-hold rather than typed, which is much clearer seen than described.
  */
 function Walkthrough() {
-  const { radius, space } = useTheme();
+  const { colors, radius, space } = useTheme();
 
-  // Nothing to show on a binary without the native module — the guide's written
-  // steps are the fallback, and they are complete on their own.
-  if (!VideoPlayback) {
-    return null;
-  }
+  // Nothing to show on a binary without the native module — the written steps
+  // are the fallback, and they are complete on their own.
+  if (!VideoPlayback) return null;
 
   return (
     <View style={{ gap: space.sm }}>
       {/* No frame around the clip: it is already a recording of a phone screen,
-          so a bordered panel put a rectangle inside a rectangle. The player is
-          centred and sized to its own aspect ratio instead, letting the sheet's
-          own surface show through. */}
+          so a bordered panel put a rectangle inside a rectangle. */}
       <View style={{ alignItems: 'center', borderRadius: radius.lg, overflow: 'hidden' }}>
         <VideoPlayback />
       </View>
-      <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
-        Playing from the start — pause on any step, or tap fullscreen for a closer look.
-      </Text>
+      <Row gap={6}>
+        <Ionicons name="information-circle-outline" size={13} color={colors.inkSecondary} />
+        <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+          Pause on any step, or tap fullscreen for a closer look. The written steps below are
+          what to follow — the clip shows an older version of the last action.
+        </Text>
+      </Row>
     </View>
   );
 }
@@ -284,11 +431,11 @@ function Walkthrough() {
  * The player itself, resolved at module load so a binary without `expo-video`
  * linked degrades to no video rather than a crash.
  *
- * `expo-video` ships native code, so a JS-only reload after installing it hits
- * "Cannot find native module 'ExpoVideo'" — and because the import sat at the
- * top of this file, that error took down the whole route rather than just the
- * clip. Requiring inside a try mirrors services/biometrics.ts, which loads its
- * native dependency the same way and for the same reason.
+ * `expo-video` calls `requireNativeModule` at its own top level, so a JS-only
+ * reload after installing it would hit "Cannot find native module 'ExpoVideo'".
+ * It is already in this app's native build, so the require succeeds — but the
+ * guard stays, because a future prebuild that drops it should cost the clip
+ * rather than the whole screen.
  */
 const VideoPlayback: (() => React.ReactElement) | null = (() => {
   try {
@@ -305,14 +452,10 @@ const VideoPlayback: (() => React.ReactElement) | null = (() => {
       );
 
       /*
-       * Start from the beginning every time the guide is opened.
-       *
-       * The `useVideoPlayer` setup callback above runs once per player, so
-       * autoplaying there alone would be enough for a fresh mount — but this
-       * screen is a route modal that expo-router can keep mounted between
-       * visits, and a player left paused mid-clip would sit frozen on whatever
-       * frame the user stopped at. Seeking to 0 first makes "open the guide"
-       * always mean "watch it from the top".
+       * Start from the beginning every time the guide is opened. This screen is
+       * a route modal expo-router can keep mounted between visits, so a player
+       * left paused mid-clip would sit frozen on whatever frame the user
+       * stopped at.
        */
       React.useEffect(() => {
         player.currentTime = 0;
@@ -322,12 +465,10 @@ const VideoPlayback: (() => React.ReactElement) | null = (() => {
       return (
         <VideoView
           player={player}
-          // Sized from the height rather than the width: at 888×1920 a
-          // full-width portrait clip would be far taller than the sheet, and
-          // `width: '100%'` with a maxHeight leaves the view its full width
-          // while the picture shrinks inside it — so the clip looked off-centre
-          // against a much wider transparent box. Fixing the height and letting
-          // the aspect ratio set the width keeps the two the same size.
+          // Sized from the HEIGHT: at 888×1920 a full-width portrait clip would
+          // be taller than the sheet, and `width: '100%'` with a maxHeight
+          // leaves the view its full width while the picture shrinks inside —
+          // so the clip looked off-centre against a much wider transparent box.
           style={{ height: 560, aspectRatio: 888 / 1920 }}
           contentFit="contain"
           // Both default to on; named here because the caption promises pause
@@ -343,7 +484,32 @@ const VideoPlayback: (() => React.ReactElement) | null = (() => {
   }
 })();
 
-/** A "Part A / Part B" section heading with a pill tag. */
+/** One privacy fact, checkmarked so the block scans as a list of assurances. */
+function Privacy({ text }: { text: string }) {
+  const { colors, space } = useTheme();
+  return (
+    <Row gap={space.sm} align="flex-start">
+      <Ionicons name="checkmark-circle" size={15} color={colors.completed} />
+      <Text variant="small" tone="secondary" style={{ flex: 1 }}>
+        {text}
+      </Text>
+    </Row>
+  );
+}
+
+/** One selling point, as an icon and a line — used only in the off state. */
+function Benefit({ icon, text }: { icon: keyof typeof Ionicons.glyphMap; text: string }) {
+  const { colors, space } = useTheme();
+  return (
+    <Row gap={space.sm} align="flex-start">
+      <Ionicons name={icon} size={15} color={colors.accent} />
+      <Text variant="small" tone="secondary" style={{ flex: 1 }}>
+        {text}
+      </Text>
+    </Row>
+  );
+}
+
 function PartHeader({ tag, title }: { tag: string; title: string }) {
   const { colors, space } = useTheme();
   return (
@@ -367,12 +533,11 @@ function PartHeader({ tag, title }: { tag: string; title: string }) {
   );
 }
 
-/** A numbered step card with optional code block, result preview, and callouts. */
+/** A numbered step card with an optional code block and callouts. */
 function Step({
   n,
   children,
   code,
-  result,
   warn,
   note,
   last,
@@ -380,7 +545,6 @@ function Step({
   n: number;
   children: React.ReactNode;
   code?: string;
-  result?: React.ReactNode;
   warn?: string;
   /** A quieter aside under the step — an optional extra, not a correction. */
   note?: string;
@@ -409,7 +573,6 @@ function Step({
             {children}
           </Text>
           {code ? <CodeBlock>{code}</CodeBlock> : null}
-          {result ? result : null}
           {warn ? <Warn>{warn}</Warn> : null}
           {note ? (
             <Text variant="caption" tone="muted" style={{ lineHeight: 17 }}>
@@ -473,66 +636,6 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** "Result should read" preview mimicking a finished Shortcuts action. */
-function Result({ label, prefix, chip }: { label?: string; prefix?: string; chip: string }) {
-  const { colors, radius, space } = useTheme();
-  return (
-    <View
-      style={{
-        backgroundColor: colors.surfaceSunken,
-        borderWidth: 1,
-        borderColor: colors.hairlineStrong,
-        borderRadius: radius.sm,
-        overflow: 'hidden',
-      }}
-    >
-      <View
-        style={{
-          paddingHorizontal: space.md,
-          paddingVertical: 6,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.hairline,
-        }}
-      >
-        <Label>Result should read</Label>
-      </View>
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: 4,
-          paddingHorizontal: space.md,
-          paddingVertical: 10,
-        }}
-      >
-        {label ? (
-          <Text variant="small" color={colors.ink} style={{ fontWeight: '600' }}>
-            {label}
-          </Text>
-        ) : null}
-        {prefix ? (
-          <Text variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
-            {prefix}
-          </Text>
-        ) : null}
-        <View
-          style={{
-            backgroundColor: colors.accentSoft,
-            borderRadius: 6,
-            paddingHorizontal: 8,
-            paddingVertical: 2,
-          }}
-        >
-          <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
-            {chip}
-          </Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
 /** Amber "watch out" callout for the tricky steps. */
 function Warn({ children }: { children: React.ReactNode }) {
   const { colors, radius, space } = useTheme();
@@ -557,51 +660,3 @@ function Warn({ children }: { children: React.ReactNode }) {
 }
 
 /** One troubleshooting entry: the symptom, then what to change. */
-function Fix({ title, body, last }: { title: string; body: string; last?: boolean }) {
-  const { colors, space } = useTheme();
-  return (
-    <View>
-      <View style={{ gap: 4, padding: space.lg }}>
-        <Row gap={space.sm}>
-          <Ionicons name="alert-circle-outline" size={15} color={colors.pending} />
-          <Text variant="small" style={{ fontWeight: '700', flex: 1 }}>
-            {title}
-          </Text>
-        </Row>
-        <Text variant="caption" tone="secondary" style={{ lineHeight: 18 }}>
-          {body}
-        </Text>
-      </View>
-      {!last ? <View style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
-    </View>
-  );
-}
-
-/** One keyword row in the "catch more" list. */
-function Keyword({ word, desc, last }: { word: string; desc: string; last?: boolean }) {
-  const { colors, radius, space } = useTheme();
-  return (
-    <View>
-      <Row gap={space.md} style={{ padding: space.lg }}>
-        <View
-          style={{
-            backgroundColor: colors.surfaceSunken,
-            borderWidth: 1,
-            borderColor: colors.hairlineStrong,
-            borderRadius: radius.sm,
-            paddingHorizontal: 10,
-            paddingVertical: 5,
-          }}
-        >
-          <Text variant="small" style={{ fontFamily: 'Courier', color: colors.ink }}>
-            {word}
-          </Text>
-        </View>
-        <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
-          {desc}
-        </Text>
-      </Row>
-      {!last ? <View style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
-    </View>
-  );
-}

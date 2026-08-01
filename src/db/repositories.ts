@@ -5,6 +5,7 @@ import {
   type RuleUpsert,
 } from '../core/merchantRules';
 import { SEED_MERCHANT_PATTERNS } from '../core/smsCategoryHints';
+import type { CatalogPlan } from '../core/catalogSync';
 import { db } from './client';
 import {
   cards,
@@ -550,6 +551,41 @@ export const merchantRuleRepo = {
     if (rows.length > 0) db.insert(merchantRules).values(rows).run();
   },
 
+  /**
+   * Apply a merge plan from the shared catalog (see core/catalogSync.ts).
+   *
+   * Inserted rows carry `subcategoryId: null` and stay `source: 'seed'`: the
+   * catalog knows what a merchant IS, never which of this user's lines it
+   * belongs to. Keeping them 'seed' is what makes them eligible for a later
+   * catalog correction — and what stops them being uploaded back as votes,
+   * which would let the catalog endlessly re-confirm its own output.
+   *
+   * Returns the counts the Settings screen reports.
+   */
+  applyCatalog(plan: CatalogPlan): { inserted: number; updated: number } {
+    for (const row of plan.insert) {
+      db.insert(merchantRules)
+        .values({
+          id: createId(),
+          pattern: row.pattern,
+          subcategoryId: null,
+          hint: row.hint,
+          source: 'seed',
+          hitCount: 0,
+        })
+        .run();
+    }
+
+    for (const row of plan.updateHint) {
+      db.update(merchantRules)
+        .set({ hint: row.hint, updatedAt: now() })
+        .where(eq(merchantRules.id, row.id))
+        .run();
+    }
+
+    return { inserted: plan.insert.length, updated: plan.updateHint.length };
+  },
+
   remove(id: string): void {
     db.delete(merchantRules).where(eq(merchantRules.id, id)).run();
   },
@@ -596,4 +632,18 @@ export const SETTINGS_KEYS = {
   appLock: 'app_lock',
   /** Subscription tier — see core/plans.ts. */
   plan: 'plan',
+  /** Share anonymous merchant corrections with the shared catalog. */
+  catalogSync: 'catalog_sync',
+  /**
+   * Whether the Shortcuts drop-file intake is set up.
+   *
+   * Stored rather than inferred from the file existing: the app DELETES that
+   * file every time it drains it, so "does it exist" is false most of the time
+   * on a working setup — which made the toggle appear to switch itself off.
+   */
+  smsInboxEnabled: 'sms_inbox_enabled',
+  /** Cursor for incremental catalog pulls — the last row's `updated_at`|`id`. */
+  catalogCursor: 'catalog_cursor',
+  /** When the catalog last synced, for the Settings status line. */
+  catalogSyncedAt: 'catalog_synced_at',
 } as const;

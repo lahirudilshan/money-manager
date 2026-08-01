@@ -43,9 +43,12 @@ export function UpgradeSheet({
       scroll
       footer={
         <View style={{ gap: space.sm }}>
+          {/* Diamond marks the paid TIER, matching Settings' plan row and
+              sheet. The sparkles above and in the perk list mark FEATURES,
+              which is a different thing and keeps its own glyph. */}
           <GradientButton
             label={`Get ${required.name}`}
-            icon="sparkles"
+            icon="diamond"
             onPress={() => {
               setPlan(required.id);
               onClose();

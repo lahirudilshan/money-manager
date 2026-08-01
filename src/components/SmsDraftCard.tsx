@@ -56,7 +56,19 @@ export function SmsDraftCard({
   const { parsed, hint } = draft;
   const hintMeta = hint ? HINT_META[hint] : null;
   const isCredit = parsed.direction === 'credit';
-  const isMatched = draft.subcategoryId !== '' || Boolean(matchedBillName);
+  /**
+   * Whether "Yes, log this" has somewhere to put the money.
+   *
+   * A matched BILL is the obvious case. A detected HINT counts too, even with no
+   * bill behind it: the hint names a category, and confirming creates or reuses
+   * the line it points at (see `createLineForDraft`).
+   *
+   * Previously this required a bill, so a draft reading "Looks like Groceries"
+   * showed its own suggestion next to a dead button — the app had detected the
+   * category and then refused to act on it, which reads as broken.
+   */
+  const hasBill = draft.subcategoryId !== '' || Boolean(matchedBillName);
+  const isMatched = hasBill || Boolean(hint);
   // A learned rule fired on this exact merchant — the user has confirmed this
   // mapping before, so committing is genuinely a one-tap confirmation.
   const isExact = draft.confidence === 'exact';
@@ -227,7 +239,7 @@ export function SmsDraftCard({
           billName={matchedBillName}
           hintLabel={hintMeta?.label}
           isExact={isExact}
-          needsBill={!isMatched}
+          needsBill={!hasBill}
           figure={figure}
           figureColor={isCredit ? colors.completed : colors.ink}
         />

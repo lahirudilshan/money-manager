@@ -344,8 +344,16 @@ export default function SettingsScreen() {
 
         {/* Plan — what the current tier is, and what the other one offers. */}
         <Section title="YOUR PLAN">
+          {/*
+            `diamond` for the paid tier, not `sparkles`.
+
+            Sparkles is this app's Smart Detect mark — on the badge, the draft
+            card, and now the Automation section heading. Using it here too made
+            one glyph mean both "your subscription" and "the SMS feature", so
+            the row read as if it were about Smart Detect rather than billing.
+          */}
           <SettingRow
-            icon={state.plan === 'premium' ? 'sparkles' : 'person-outline'}
+            icon={state.plan === 'premium' ? 'diamond' : 'person-outline'}
             color={colors.accent}
             title={planById(state.plan).name}
             subtitle={planById(state.plan).tagline}
@@ -355,15 +363,41 @@ export default function SettingsScreen() {
         </Section>
 
         {/* Automation — the SMS → draft pipeline setup guide. */}
-        <Section title="AUTOMATION">
+        {/*
+          Bordered in the Smart Detect gradient's start colour — the same blue
+          the badge opens with — so the section reads as belonging to the
+          feature rather than as generic settings. A single flat colour, not the
+          gradient: a gradient border would need an extra wrapper view on a card
+          whose only job is to hold one row.
+        */}
+        {/*
+          `sparkles` rather than a robot or a chip glyph: it is already the mark
+          this app uses for Smart Detect — on the badge, the upgrade sheet and
+          the draft card — so reusing it makes the section obviously the same
+          feature. A different "AI" icon here would read as a second thing.
+        */}
+        <Section title="AUTOMATION" accent={colors.gradientStart} icon="sparkles">
           <SettingRow
             icon="chatbox-ellipses-outline"
             color={colors.accent}
-            title={SMART_DETECT_NAME}
+            // The Smart Detect gradient, matching its badge — this row opens the
+            // setup for that feature, so it should look like it belongs to it.
+            gradient={[colors.gradientStart, colors.gradientEnd]}
+            title={`Setup ${SMART_DETECT_NAME}`}
             subtitle="Turn incoming bank SMS into drafts"
             valueLabel={canUse(state.plan, 'smartDetect') ? undefined : 'Premium'}
             onPress={() => router.push('/settings/sms-automation')}
           />
+          {/*
+            No catalog rows here on purpose.
+
+            The shop catalog refreshes itself: at launch, and again whenever the
+            app is foregrounded (which is when connectivity has usually come
+            back). It never blocks a screen and never asks. A "Update catalog"
+            button would only ever be pressed by someone who thought something
+            was broken — and pressing it would do exactly what already happened
+            a moment ago.
+          */}
         </Section>
 
         {/* Preferences. */}
@@ -767,7 +801,9 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
               >
                 <Row justify="space-between" align="center">
                   <Row gap={6}>
-                    <Ionicons name="sparkles" size={15} color="#FFFFFF" />
+                    {/* Same diamond as the YOUR PLAN row, so the sheet and the
+                        row it opened from mark the paid tier identically. */}
+                    <Ionicons name="diamond" size={15} color="#FFFFFF" />
                     <Text variant="heading" color="#FFFFFF">
                       {plan.name}
                     </Text>
@@ -830,7 +866,7 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
                 <Button
                   label={plan.id === 'free' ? 'Switch to Free' : `Get ${plan.name}`}
                   variant={plan.id === 'free' ? 'secondary' : 'primary'}
-                  icon={plan.id === 'free' ? undefined : 'sparkles'}
+                  icon={plan.id === 'free' ? undefined : 'diamond'}
                   onPress={() => {
                     state.setPlan(plan.id);
                     onClose();
@@ -1128,6 +1164,7 @@ function SettingRow({
   valueLabel,
   danger = false,
   disabled = false,
+  gradient,
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
@@ -1137,12 +1174,14 @@ function SettingRow({
   valueLabel?: string;
   danger?: boolean;
   disabled?: boolean;
+  /** Brand a row's tile with a gradient — see Glyph. */
+  gradient?: readonly [string, string];
   onPress: () => void;
 }) {
   const { colors } = useTheme();
   return (
     <ListRow
-      leading={<Glyph icon={icon} color={color} />}
+      leading={<Glyph icon={icon} color={color} gradient={gradient} />}
       title={title}
       titleColor={danger ? colors.danger : undefined}
       subtitle={subtitle}

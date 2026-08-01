@@ -29,7 +29,19 @@ import { suggestCategoryIcon } from '../data/categoryIcons';
 import { groupColors } from '../theme';
 import { parseSms } from '../core/smsParser';
 import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
-import { planRuleUpsert, type MerchantRule } from '../core/merchantRules';
+import { merchantKey, planRuleUpsert, type MerchantRule } from '../core/merchantRules';
+import { observationsFrom, planCatalogMerge } from '../core/catalogSync';
+import {
+  findGroupForProposal,
+  findLineForHint,
+  proposalForHint,
+} from '../core/hintCatalog';
+import type { CategoryHint } from '../core/smsCategoryHints';
+import { isCatalogConfigured, pullRules, pushObservations } from '../services/catalogApi';
+import { getDeviceId } from '../services/deviceId';
+import { onNetworkRestored } from '../services/network';
+import { EMPTY_SUMMARY, type DrainSummary } from '../core/smsInbox';
+import { countWaiting, drainInbox, ensureInboxExists } from '../services/smsInboxFile';
 import { createId } from '../db/repositories';
 import { DEBT_CATEGORY_ID, initialiseDatabase, resetDatabase } from '../db/client';
 import {
@@ -119,6 +131,22 @@ export interface AppState {
    */
   merchantRules: MerchantRule[];
 
+  /**
+   * Whether this device exchanges anonymous merchant→category data with the
+   * shared catalog.
+   *
+   * No UI toggles it: syncing is invisible and always on, because the payload
+   * carries no personal data — a merchant key and a coarse amount band — and a
+   * switch would only invite someone to turn off the thing making their own
+   * detection better. Kept as a settings key so it can be disabled without a
+   * new build if that ever becomes necessary.
+   */
+  catalogSyncEnabled: boolean;
+  /** ISO timestamp of the last successful sync. Diagnostic only. */
+  catalogSyncedAt: string | null;
+  /** True while a sync is in flight, so a second cannot start alongside it. */
+  catalogSyncing: boolean;
+
   initialise: () => Promise<void>;
   refresh: () => void;
   setPeriod: (period: string) => void;
@@ -128,6 +156,21 @@ export interface AppState {
   setHapticsEnabled: (enabled: boolean) => void;
   setAppLockEnabled: (enabled: boolean) => void;
   setPlan: (plan: PlanId) => void;
+  /**
+   * Mirror the shared catalog locally, then push this device's corrections.
+   * Never throws; returns null when it did not run.
+   */
+  syncCatalog: () => Promise<{ inserted: number; updated: number; shared: number } | null>;
+  /** Offer one resolved draft, with its transaction shape, to the catalog. */
+  contributeDraft: (draft: SmsDraft, subcategoryId: string) => Promise<void>;
+  /**
+   * Create the board line a draft's hint points at, then log the draft against
+   * it. Returns the line's id, or null when the hint has no catalog home.
+   */
+  createLineForDraft: (
+    draftId: string,
+    overrides?: { amountMinor?: Minor },
+  ) => string | null;
   resetAllData: () => Promise<void>;
   seedDemoData: () => void;
   completeOnboarding: () => void;
@@ -225,6 +268,15 @@ export interface AppState {
    */
   ingestSmsText: (text: string) => string | 'duplicate' | null;
   /**
+   * Import everything the Shortcuts automation has appended to the inbox file,
+   * then clear it. Safe to call when the feature is off or the file is missing.
+   */
+  drainSmsInbox: () => DrainSummary;
+  /** Messages waiting in the inbox file, without consuming them. */
+  smsInboxWaiting: number;
+  /** Re-read the waiting count from disk. */
+  refreshInboxCount: () => void;
+  /**
    * Confirm a queued draft: log it against the chosen bill for the current
    * period (reusing logTransaction), then remove it from the queue. Overrides
    * let the confirm card apply the user's edits before logging. A no-op if the
@@ -294,6 +346,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   plan: 'premium',
   smsDrafts: [],
   merchantRules: [],
+  catalogSyncEnabled: true,
+  catalogSyncedAt: null,
+  catalogSyncing: false,
 
   async initialise() {
     initialiseDatabase();
@@ -305,6 +360,46 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({
       ready: true,
       needsOnboarding: settingsRepo.get(SETTINGS_KEYS.onboarded) !== 'true',
+    });
+
+    /*
+     * Import anything the Shortcuts automation queued while the app was closed.
+     *
+     * Synchronous and BEFORE the sync: this is local file work measured in
+     * milliseconds, and it is the reason someone opened the app — seeing their
+     * transactions waiting is the whole feature.
+     */
+    get().drainSmsInbox();
+
+    /*
+     * Refresh the catalog at launch, deliberately UN-AWAITED.
+     *
+     * The app is already fully usable at this point — detection reads the
+     * catalog SQLite already holds — so a first launch on a dead connection
+     * must not sit behind a download. Data lands whenever it lands.
+     */
+    void get().syncCatalog();
+
+    /*
+     * ...and again whenever the app returns to the foreground.
+     *
+     * Without this, someone who opened the app on a train keeps whatever catalog
+     * they had until they fully relaunch. Foregrounding is a good proxy for
+     * "might have signal now", and `syncCatalog` is cheap when nothing changed —
+     * the cursor means an up-to-date device fetches an empty page.
+     *
+     * Never unsubscribed: it lives exactly as long as the store, which lives as
+     * long as the app.
+     */
+    onNetworkRestored(() => {
+      /*
+       * Foregrounding is also when new messages are most likely to be waiting:
+       * the user got a bank SMS, the automation appended it, and now they are
+       * opening the app to deal with it. Draining here is what makes the queue
+       * feel immediate rather than "next time you fully relaunch".
+       */
+      get().drainSmsInbox();
+      void get().syncCatalog();
     });
   },
 
@@ -336,6 +431,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       appLockEnabled: settingsRepo.get(SETTINGS_KEYS.appLock) === 'true',
       // Defaults to premium while there is no billing to buy it with.
       plan: (settingsRepo.get(SETTINGS_KEYS.plan) as PlanId) ?? 'premium',
+      // Opt-out, so an absent key means on — the opposite default to app lock.
+      catalogSyncEnabled: settingsRepo.get(SETTINGS_KEYS.catalogSync) !== 'false',
+      catalogSyncedAt: settingsRepo.get(SETTINGS_KEYS.catalogSyncedAt) ?? null,
     });
   },
 
@@ -372,6 +470,198 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPlan(plan) {
     settingsRepo.set(SETTINGS_KEYS.plan, plan);
     get().refresh();
+  },
+
+  /**
+   * Mirror the shared catalog into SQLite, then contribute this device's
+   * corrections back.
+   *
+   * This is the ONLY network call detection depends on, and nothing waits for
+   * it. Once the catalog is local, every incoming SMS is categorised on-device
+   * with no round trip — which is the point, because an SMS arrives at a fuel
+   * pump or in a supermarket queue, exactly where signal is worst.
+   *
+   * At ~30 bytes per merchant the whole catalog is tens of KB even at a hundred
+   * thousand users, and subsequent pulls are incremental, so mirroring costs far
+   * less than one API call per transaction would.
+   *
+   * Resolves to null when nothing happened (no API configured, sharing off,
+   * offline, or a run already in flight) and never rejects.
+   */
+  async syncCatalog() {
+    if (!isCatalogConfigured()) return null;
+    if (!get().catalogSyncEnabled) return null;
+    // A second run while one is in flight would merge against stale local rules
+    // and contribute the same corrections twice.
+    if (get().catalogSyncing) return null;
+
+    // A fetch with no connectivity fails harmlessly in milliseconds, so there is
+    // nothing to gain by checking first — and `onNetworkRestored` in
+    // `initialise` retries on the next foreground, which is how a launch on a
+    // train still ends up with a catalog.
+    set({ catalogSyncing: true });
+    try {
+      let cursor = settingsRepo.get(SETTINGS_KEYS.catalogCursor) ?? null;
+      let inserted = 0;
+      let updated = 0;
+
+      /*
+       * Page until the server says it is done. The cursor is persisted after
+       * each page, so an interrupted sync resumes where it stopped rather than
+       * refetching the catalog from scratch.
+       *
+       * The page cap bounds a first sync against a large catalog — the rest
+       * arrives on the next launch, and detection is already better meanwhile.
+       */
+      for (let page = 0; page < 20; page++) {
+        const result = await pullRules(cursor);
+        if (result.rules.length === 0) break;
+
+        // Re-read local rules each page: applying page N changes what page N+1
+        // should do, and merging both against one stale snapshot would re-insert
+        // merchants the previous page just added.
+        const plan = planCatalogMerge(result.rules, merchantRuleRepo.all());
+        const counts = merchantRuleRepo.applyCatalog(plan);
+        inserted += counts.inserted;
+        updated += counts.updated;
+
+        if (result.nextSince) {
+          cursor = result.nextSince;
+          settingsRepo.set(SETTINGS_KEYS.catalogCursor, cursor);
+        }
+        if (!result.hasMore) break;
+      }
+
+      /*
+       * Contribute after pulling, so a correction the user made is voted on even
+       * if the catalog already held a different answer for that merchant.
+       *
+       * Only the rule is available here — the transaction shape that produced it
+       * was not stored — so `observationsFrom` fills direction and band with
+       * defaults. The real shape rides along on future corrections, which is why
+       * `confirmDraft` contributes directly rather than waiting for this.
+       */
+      const observations = observationsFrom(merchantRuleRepo.all().map((rule) => ({ rule })));
+
+      let shared = 0;
+      if (observations.length > 0) {
+        const deviceId = await getDeviceId();
+        // No keystore means no stable identity; skip rather than vote with a
+        // per-launch id, which would let one device stuff the ballot.
+        if (deviceId) shared = await pushObservations(deviceId, observations);
+      }
+
+      const syncedAt = new Date().toISOString();
+      settingsRepo.set(SETTINGS_KEYS.catalogSyncedAt, syncedAt);
+
+      // Only refresh when the catalog actually changed — an unconditional
+      // refresh on every launch re-renders the whole board for nothing.
+      if (inserted > 0 || updated > 0) get().refresh();
+      else set({ catalogSyncedAt: syncedAt });
+
+      return { inserted, updated, shared };
+    } catch {
+      // Deliberately swallowed: see the doc comment above.
+      return null;
+    } finally {
+      set({ catalogSyncing: false });
+    }
+  },
+
+  /**
+   * Offer one resolved draft to the shared catalog, with the transaction's
+   * shape attached — the direction and a COARSE amount band, never the amount.
+   *
+   * Done at confirm time rather than only at sync because this is the one moment
+   * the shape is known: the rules table stores the mapping, not the message that
+   * produced it. This is what lets the catalog learn that a ~2k DIALOG debit is
+   * a phone bill while a ~90k one is a handset.
+   *
+   * Silent by design — the user confirmed a transaction, not a network request.
+   */
+  async contributeDraft(draft, subcategoryId) {
+    if (!isCatalogConfigured() || !get().catalogSyncEnabled) return;
+
+    // The rule just written carries the hint the user effectively endorsed by
+    // picking this line.
+    const rule = get().merchantRules.find(
+      (candidate) =>
+        candidate.subcategoryId === subcategoryId &&
+        candidate.pattern === merchantKey(draft.parsed.merchant),
+    );
+    if (!rule?.hint) return;
+
+    const observations = observationsFrom([
+      {
+        rule,
+        // A bill notice is not money leaving yet, but for ranking it behaves
+        // like a debit — both describe an expense at this merchant.
+        direction: draft.parsed.direction === 'credit' ? 'credit' : 'debit',
+        amountMinor: draft.amountMinor,
+      },
+    ]);
+    if (observations.length === 0) return;
+
+    const deviceId = await getDeviceId();
+    if (deviceId) await pushObservations(deviceId, observations);
+  },
+
+  createLineForDraft(draftId, overrides) {
+    const draft = get().smsDrafts.find((candidate) => candidate.id === draftId);
+    if (!draft) return null;
+
+    const proposal = proposalForHint(draft.hint);
+    if (!proposal) return null;
+
+    /*
+     * Prefer what the user already has, in two steps, so this can never grow a
+     * duplicate board:
+     *
+     *   1. an existing line that serves this hint — by catalog name or by the
+     *      same keyword match detection scores with, so a hand-named "CEB bill"
+     *      is reused rather than joined by a second "Electricity";
+     *   2. an existing group with the catalog's name, so a new line lands in the
+     *      user's own "Housing" instead of creating a second one.
+     */
+    const existing = findLineForHint(draft.hint, get().subcategories, get().categories);
+    if (existing) {
+      get().confirmDraft(draftId, {
+        subcategoryId: existing.id,
+        amountMinor: overrides?.amountMinor,
+      });
+      return existing.id;
+    }
+
+    const group =
+      findGroupForProposal(proposal, get().categories) ??
+      get().addCategory({
+        name: proposal.category.name,
+        icon: proposal.category.icon,
+        defaultFrequency: 'monthly',
+      });
+
+    /*
+     * Planned amount stays 0: the user has not planned this line, and seeding it
+     * from a single SMS would invent a budget from one observation. The amount
+     * lands as the logged actual, so the line shows as unplanned spending —
+     * the honest reading of "this happened and you had not budgeted for it".
+     */
+    const created = get().addSubcategory({
+      name: proposal.subcategory.name,
+      type: proposal.type,
+      categoryId: group.id,
+      plannedMinor: 0,
+      frequency: proposal.subcategory.frequency ?? 'monthly',
+      dueDay: proposal.subcategory.dueDay ?? null,
+      icon: proposal.subcategory.icon,
+    });
+
+    get().confirmDraft(draftId, {
+      subcategoryId: created.id,
+      amountMinor: overrides?.amountMinor,
+    });
+
+    return created.id;
   },
 
   /**
@@ -700,8 +990,70 @@ export const useAppStore = create<AppState>((set, get) => ({
       { currency, usdRate },
     );
 
+    // Fully local and synchronous: `reconcileSms` above read the mirrored
+    // catalog straight from SQLite, so the draft is final the first time it
+    // renders. No network call, no spinner, and nothing that can change under
+    // the user a moment later.
     set({ smsDrafts: [draft, ...smsDrafts] });
+
     return draft.id;
+  },
+
+  smsInboxWaiting: 0,
+
+  refreshInboxCount() {
+    set({ smsInboxWaiting: countWaiting() });
+  },
+
+  /**
+   * Drain the Shortcuts inbox file into drafts.
+   *
+   * The file is emptied by `drainInbox` BEFORE these messages are processed, so
+   * a crash mid-import costs a few drafts the user can re-add rather than
+   * replaying the same messages on every launch forever.
+   *
+   * Each message goes through the same `ingestSmsText` a deep link uses, so a
+   * file-imported transaction is indistinguishable from a tapped one — same
+   * parser, same detection, same duplicate guard.
+   */
+  drainSmsInbox() {
+    const drained = drainInbox();
+    if (!drained.ok || drained.messages.length === 0) {
+      set({ smsInboxWaiting: 0 });
+      return { ...EMPTY_SUMMARY, deferred: drained.deferred };
+    }
+
+    let queued = 0;
+    let duplicates = 0;
+    let ignored = 0;
+
+    for (const message of drained.messages) {
+      const result = get().ingestSmsText(message);
+      if (result === 'duplicate') duplicates++;
+      // null means the parser did not see a money movement — an OTP, a promo,
+      // or a balance-only notice the automation's filter let through.
+      else if (result === null) ignored++;
+      else queued++;
+    }
+
+    /*
+     * Put the empty file back.
+     *
+     * `drainInbox` deletes it when it takes everything, and Shortcuts' "Append
+     * to File" needs an existing target — without this, a working setup would
+     * break silently after its very first import, with the automation reporting
+     * success and nothing ever arriving.
+     *
+     * Only when the user has actually set this up, so a device that has never
+     * enabled it does not grow a stray file in its Documents folder.
+     */
+    if (settingsRepo.get(SETTINGS_KEYS.smsInboxEnabled) === 'true') {
+      ensureInboxExists();
+    }
+
+    set({ smsInboxWaiting: drained.deferred });
+
+    return { queued, duplicates, ignored, deferred: drained.deferred };
   },
 
   confirmDraft(draftId, overrides) {
@@ -750,6 +1102,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
     get().refresh();
+
+    // Share this resolution with the catalog. Un-awaited and failure-swallowing:
+    // confirming a draft must feel instant and must never fail because a network
+    // call did.
+    void get().contributeDraft(draft, subcategoryId);
   },
 
   dismissDraft(draftId) {

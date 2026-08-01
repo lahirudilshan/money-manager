@@ -2,5 +2,10 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true
-  }
+  },
+  // `server/` is a separate Next.js deployment with its own tsconfig, its own
+  // `@/*` alias and its own React types. Compiling it as part of the Expo app
+  // resolves none of those and reports errors for code that builds correctly on
+  // its own — run `npm run typecheck` inside server/ to check it.
+  "exclude": ["server"]
 }

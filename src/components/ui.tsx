@@ -43,6 +43,7 @@ export function Text({
   numberOfLines,
   adjustsFontSizeToFit,
   minimumFontScale,
+  selectable,
 }: {
   children: React.ReactNode;
   variant?: TypeKey;
@@ -57,6 +58,12 @@ export function Text({
   adjustsFontSizeToFit?: boolean;
   /** Floor for that shrinking, as a fraction of the original size. */
   minimumFontScale?: number;
+  /**
+   * Let the user select and copy the text. Off by default because selectable
+   * body copy interferes with scrolling; worth turning on for anything the user
+   * needs to get OUT of the app, like a file path.
+   */
+  selectable?: boolean;
 }) {
   const { colors, type } = useTheme();
   const toneColor = {
@@ -72,6 +79,7 @@ export function Text({
       numberOfLines={numberOfLines}
       adjustsFontSizeToFit={adjustsFontSizeToFit}
       minimumFontScale={minimumFontScale}
+      selectable={selectable}
       style={[type[variant] as unknown as TextStyle, { color: color ?? toneColor }, style]}
     >
       {children}
@@ -748,23 +756,42 @@ export function Glyph({
   color,
   size = 38,
   filled = false,
+  gradient,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   color: string;
   size?: number;
   filled?: boolean;
+  /**
+   * Fill the tile with a gradient instead of a flat tint, for a row belonging
+   * to a branded feature. Overrides `color` and `filled`; the glyph goes white,
+   * as it does on every other gradient surface in the app.
+   */
+  gradient?: readonly [string, string];
 }) {
+  const box = {
+    width: size,
+    height: size,
+    borderRadius: size / 3.2,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  };
+
+  if (gradient) {
+    return (
+      <LinearGradient
+        colors={gradient}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={box}
+      >
+        <Ionicons name={icon} size={size * 0.48} color="#FFFFFF" />
+      </LinearGradient>
+    );
+  }
+
   return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 3.2,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: filled ? color : `${color}18`,
-      }}
-    >
+    <View style={[box, { backgroundColor: filled ? color : `${color}18` }]}>
       <Ionicons name={icon} size={size * 0.48} color={filled ? '#FFFFFF' : color} />
     </View>
   );
@@ -1213,16 +1240,41 @@ export function Section({
   title,
   note,
   children,
+  accent,
+  icon,
 }: {
   title: string;
   note?: string;
   children: React.ReactNode;
+  /**
+   * Tint the card's border and its heading, marking the section as belonging to
+   * a named feature rather than being ordinary settings chrome.
+   *
+   * Kept to the border and the label on purpose: a tinted background or a
+   * thicker rule would make the section shout for attention it does not need,
+   * and every row inside it still has to read as a plain settings row.
+   */
+  accent?: string;
+  /**
+   * A glyph beside the heading, for a section that belongs to a named feature.
+   *
+   * Takes `accent`'s colour when one is set, so the icon, the label and the
+   * border stay a single deliberate accent rather than three near-matches.
+   */
+  icon?: keyof typeof Ionicons.glyphMap;
 }) {
-  const { space } = useTheme();
+  const { colors, space } = useTheme();
   return (
-    <Surface style={{ gap: space.xs }} padded={false}>
+    <Surface style={accent ? { gap: space.xs, borderColor: accent } : { gap: space.xs }} padded={false}>
       <View style={{ padding: space.lg, paddingBottom: note ? space.xs : space.md, gap: space.xs }}>
-        <Label>{title}</Label>
+        {icon ? (
+          <Row gap={6}>
+            <Ionicons name={icon} size={12} color={accent ?? colors.inkMuted} />
+            <Label color={accent}>{title}</Label>
+          </Row>
+        ) : (
+          <Label color={accent}>{title}</Label>
+        )}
         {note ? (
           <Text variant="caption" tone="muted">
             {note}

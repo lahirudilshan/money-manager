@@ -1,14 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
 import { Field } from '../../src/components/forms';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { to12Hour } from '../../src/core/dates';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
-import { HINT_META } from '../../src/core/smsCategoryHints';
+import { HINT_META, type CategoryHint } from '../../src/core/smsCategoryHints';
+import type { CatalogSuggestion } from '../../src/core/catalogSync';
+import {
+  findGroupForProposal,
+  findLineForHint,
+  proposalForHint,
+} from '../../src/core/hintCatalog';
 import { accountLabelFor } from '../../src/core/smsReconcile';
 import {
   categoryNameOf,
@@ -149,6 +155,62 @@ export default function SmsDraftModal() {
     closeModal();
   };
 
+  /*
+   * Crowd suggestions worth OFFERING, which is not the same as all of them.
+   *
+   * The top suggestion usually agrees with the hint already driving the confirm
+   * card above, and repeating it as a "suggestion" makes one answer look like
+   * two. So anything matching the current hint is dropped, and what remains are
+   * genuine alternatives — the 2nd and 3rd opinions the user asked to see.
+   */
+  const alternativeSuggestions = draft.suggestions.filter(
+    (suggestion) => suggestion.hint !== draft.hint,
+  );
+
+  /**
+   * Take a crowd suggestion: switch the draft to that hint and let the normal
+   * flow continue.
+   *
+   * It resolves to a LINE the same way detection does — via the hint catalog —
+   * because a hint is a category of thing, not a budget line, and only the
+   * user's own board can say which line that is. When the board has no home for
+   * it, the picker opens with the create-line offer rather than the tap doing
+   * nothing.
+   */
+  const pickSuggestedHint = (hint: CategoryHint) => {
+    const existing = findLineForHint(hint, state.subcategories, state.categories);
+    if (existing) {
+      setSubcategoryId(existing.id);
+      setPicking(false);
+      return;
+    }
+    setPicking(true);
+  };
+
+  /*
+   * The catalog line this message's hint proposes — offered only when the board
+   * genuinely lacks somewhere to put it. `findLineForHint` suppresses the offer
+   * when a suitable line already exists (including hand-named ones like "CEB
+   * bill"), so this never invites the user to duplicate their own board.
+   */
+  const createTarget = (() => {
+    if (!draft.hint) return null;
+    if (findLineForHint(draft.hint, state.subcategories, state.categories)) return null;
+    return proposalForHint(draft.hint);
+  })();
+
+  // Whether the new line joins a group the user already has, or brings a new
+  // one with it — worth saying plainly, since the second changes their board
+  // structure and the first does not.
+  const createTargetGroupExists = createTarget
+    ? findGroupForProposal(createTarget, state.categories) !== null
+    : false;
+
+  const createAndLog = () => {
+    state.createLineForDraft(draft.id, { amountMinor });
+    closeModal();
+  };
+
   const markAlreadyLogged = () => {
     // Nothing is written — the user recorded this by hand; just clear it.
     state.dismissDraft(draft.id);
@@ -260,6 +322,19 @@ export default function SmsDraftModal() {
           />
         ) : null}
 
+        {/*
+          What other users settled on for this merchant, when the crowd offers
+          more than the one answer already shown above. Placed between the
+          detected card and the full picker because that is the order of effort:
+          confirm the guess, else take a near-miss, else hunt the whole board.
+        */}
+        {alternativeSuggestions.length > 0 ? (
+          <CommunitySuggestions
+            suggestions={alternativeSuggestions}
+            onPick={(suggestion) => pickSuggestedHint(suggestion.hint)}
+          />
+        ) : null}
+
         {/* Remap: the category grid over every eligible bill. Hidden behind the
             confirm card until the user says the guess was wrong. */}
         {picking ? (
@@ -277,6 +352,22 @@ export default function SmsDraftModal() {
             </Text>
           ) : null}
 
+          {/*
+            The hint had no home on the board. Rather than leave the user to
+            back out, build the line by hand and lose the draft, offer the
+            onboarding-catalog line this hint maps to — one tap creates it,
+            logs the message against it, and teaches the merchant rule.
+          */}
+          {createTarget ? (
+            <CreateLineOption
+              categoryName={createTarget.category.name}
+              lineName={createTarget.subcategory.name}
+              icon={createTarget.subcategory.icon}
+              existingGroup={createTargetGroupExists}
+              onPress={createAndLog}
+            />
+          ) : null}
+
           {destinations.length === 0 ? (
             /*
              * A dead end until now: the picker only lists bills that already
@@ -287,7 +378,9 @@ export default function SmsDraftModal() {
              */
             <Surface style={{ gap: space.md }}>
               <Text variant="small" tone="muted">
-                No bills on your board yet, so there is nowhere to log this.
+                {createTarget
+                  ? 'Or build a different line from scratch.'
+                  : 'No bills on your board yet, so there is nowhere to log this.'}
               </Text>
               <Button
                 label="Create one"
@@ -326,6 +419,82 @@ export default function SmsDraftModal() {
         />
 
     </BottomSheet>
+  );
+}
+
+/**
+ * The offer to create the line this hint points at — the way out of a detected
+ * message with nowhere to go.
+ *
+ * Presented as a proposal the user accepts rather than something the app did on
+ * its own: the group and line are named up front, and whether the group is one
+ * they already have is stated, because that is the difference between filing
+ * into their board and changing its shape.
+ */
+function CreateLineOption({
+  categoryName,
+  lineName,
+  icon,
+  existingGroup,
+  onPress,
+}: {
+  categoryName: string;
+  lineName: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  existingGroup: boolean;
+  onPress: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  return (
+    <View
+      style={{
+        gap: space.md,
+        padding: space.lg,
+        borderRadius: radius.lg,
+        borderWidth: 1.5,
+        borderStyle: 'dashed',
+        borderColor: colors.accent,
+        backgroundColor: colors.accentSoft,
+      }}
+    >
+      <Row gap={6}>
+        <Ionicons name="add-circle-outline" size={14} color={colors.accent} />
+        <Text variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+          NOTHING ON YOUR BOARD FOR THIS YET
+        </Text>
+      </Row>
+
+      <Row gap={space.md}>
+        <View
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: radius.md,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surface,
+          }}
+        >
+          <Ionicons name={icon} size={21} color={colors.accent} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text variant="bodyStrong" numberOfLines={1}>
+            {lineName}
+          </Text>
+          <Text variant="caption" tone="muted" numberOfLines={1}>
+            {existingGroup ? `Into your ${categoryName}` : `New group · ${categoryName}`}
+          </Text>
+        </View>
+      </Row>
+
+      <Button
+        label={`Create "${lineName}" and log it`}
+        icon="add"
+        variant="secondary"
+        onPress={onPress}
+      />
+    </View>
   );
 }
 
@@ -398,6 +567,95 @@ function DetectedCategoryCard({
           ) : null}
         </View>
       </Row>
+    </View>
+  );
+}
+
+/**
+ * What other users settled on for this merchant.
+ *
+ * Shown only as ALTERNATIVES — the leading answer is already presented above as
+ * the detected category, so repeating it here would make one conclusion look
+ * like two independent ones.
+ *
+ * Confidence is stated as a plain percentage rather than a bar or a star
+ * rating: this is a number the user is being asked to judge a suggestion by, and
+ * an honest "62%" invites the scepticism a row of four filled stars does not.
+ * The count of contributing users is deliberately absent — it would read as
+ * authority ("500 people say…") when what matters is the share who agreed.
+ */
+function CommunitySuggestions({
+  suggestions,
+  onPick,
+}: {
+  suggestions: CatalogSuggestion[];
+  onPick: (suggestion: CatalogSuggestion) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Row gap={6}>
+        <Ionicons name="people-outline" size={13} color={colors.inkSecondary} />
+        <Label>OTHER USERS FILED THIS AS</Label>
+      </Row>
+
+      <View style={{ gap: space.sm }}>
+        {suggestions.map((suggestion) => {
+          const meta = HINT_META[suggestion.hint];
+          return (
+            <Pressable
+              key={suggestion.hint}
+              onPress={() => onPick(suggestion)}
+              accessibilityRole="button"
+              accessibilityLabel={`${meta.label}, ${Math.round(suggestion.confidence * 100)} percent of users`}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: space.md,
+                padding: space.md,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+                backgroundColor: colors.surface,
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <View
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: radius.md,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: colors.surfaceSunken,
+                }}
+              >
+                <Ionicons
+                  name={meta.icon as keyof typeof Ionicons.glyphMap}
+                  size={17}
+                  color={colors.inkSecondary}
+                />
+              </View>
+
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="bodyStrong">{meta.label}</Text>
+                <Text variant="caption" tone="muted">
+                  {suggestion.reason === 'sender'
+                    ? 'Based on this bank’s other alerts'
+                    : suggestion.reason === 'merchant-amount'
+                      ? 'Matches this shop and amount'
+                      : 'Matches this shop'}
+                </Text>
+              </View>
+
+              <Text variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+                {Math.round(suggestion.confidence * 100)}%
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }

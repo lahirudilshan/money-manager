@@ -142,13 +142,44 @@ export function inferCategoryHints(text: string): CategoryHint[] {
 }
 
 /**
+ * Words a BILL may use to name a tag's own category.
+ *
+ * HINT_KEYWORDS is tuned to recognise MESSAGES, where the useful signals are
+ * merchant and biller names. Bills are named the other way round — after the
+ * category — and several tags had no pattern for their own name, so a bill
+ * called "Groceries" did not match the groceries tag while "Electricity"
+ * matched electricity purely because that word appears in both roles.
+ *
+ * Mirrors HINT_SELF_WORDS in server/lib/hints.ts; the server owns detection now
+ * and this is the offline fallback, so the two must agree or a message would be
+ * categorised differently depending on whether the network was up.
+ */
+const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
+  water: [/\bwater\b/i],
+  electricity: [/\belectric(?:ity)?\b/i, /\bpower\b/i],
+  telecom: [/\bphone\b/i, /\bmobile\b/i, /\binternet\b/i, /\bbroadband\b/i, /\btelecom\b/i],
+  groceries: [/\bgrocer(?:y|ies)\b/i, /\bfood\b/i, /\bshopping\b/i],
+  fuel: [/\bfuel\b/i, /\bpetrol\b/i, /\bdiesel\b/i, /\bgas\b/i],
+  subscription: [/\bsubscription(?:s)?\b/i, /\bstreaming\b/i],
+  loan: [/\bloan(?:s)?\b/i, /\blease\b/i, /\bdebt\b/i, /\bcredit\b/i],
+  transfer: [/\btransfer(?:s)?\b/i, /\bcash\b/i],
+  atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i],
+  income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
+};
+
+/**
  * Whether a bill (its name + category name) plausibly belongs to a tag, so the
- * suggestion list can be pre-filtered. Reuses the same keyword patterns against
- * the bill's own text — a bill literally called "Water" matches the water tag.
+ * suggestion list can be pre-filtered.
+ *
+ * Two ways to match: the message keywords, so a hand-named "CEB bill" is
+ * recognised as electricity, and the category's own names, so a plainly-named
+ * "Groceries" is too.
  */
 export function billMatchesHint(hint: CategoryHint, billText: string): boolean {
   const patterns = HINT_KEYWORDS.find(([h]) => h === hint)?.[1] ?? [];
-  return patterns.some((pattern) => pattern.test(billText));
+  if (patterns.some((pattern) => pattern.test(billText))) return true;
+
+  return HINT_SELF_WORDS[hint].some((pattern) => pattern.test(billText));
 }
 
 /**

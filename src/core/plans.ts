@@ -68,7 +68,9 @@ export const PLANS: readonly PlanDefinition[] = [
   {
     id: 'premium',
     name: 'Premium',
-    tagline: 'Let your bank messages do the typing.',
+    // Short enough to fit the Settings row without truncating — the old
+    // "Let your bank messages do the typing." was cut to "…do the ty…" there.
+    tagline: 'Bank SMS become drafts.',
     price: 'LKR 450',
     period: '/ month',
     perks: [

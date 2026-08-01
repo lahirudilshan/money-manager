@@ -346,9 +346,32 @@ export default function DashboardScreen() {
               onOpen={() =>
                 smartDetect ? router.push(`/sms/${draft.id}`) : setUpgradeOpen(true)
               }
-              onConfirm={() =>
-                smartDetect ? state.confirmDraft(draft.id) : setUpgradeOpen(true)
-              }
+              /*
+               * With a bill chosen, log against it. With only a HINT — "Looks
+               * like Groceries", no line behind it yet — create or reuse the
+               * line that hint points at, then log. `createLineForDraft`
+               * prefers an existing line and only builds one when the board
+               * genuinely has nowhere to put it.
+               *
+               * Without this branch the button was live but did nothing, since
+               * `confirmDraft` bails with no subcategoryId.
+               */
+              onConfirm={() => {
+                if (!smartDetect) {
+                  setUpgradeOpen(true);
+                  return;
+                }
+                if (draft.subcategoryId) {
+                  state.confirmDraft(draft.id);
+                  return;
+                }
+                // Null means the hint has no catalog home, so nothing was
+                // created or logged. Send the user to the picker rather than
+                // letting the tap appear to do nothing.
+                if (state.createLineForDraft(draft.id) === null) {
+                  router.push(`/sms/${draft.id}`);
+                }
+              }}
               /*
                * Dismissing is NOT gated on the plan, unlike the two actions
                * above. Those write to the board, which is the paid capability;
