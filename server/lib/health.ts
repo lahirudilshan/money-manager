@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { connection } from 'next/server';
 import * as repo from './repository';
 
 /**
@@ -34,6 +35,23 @@ export interface HealthReport {
  * The HTTP status is the caller's job — see `healthStatusCode`.
  */
 export async function checkHealth(): Promise<HealthReport> {
+  /*
+   * Stop prerendering before anything request-time is read.
+   *
+   * Without this the BUILD fails, and the failure is easy to misread: under
+   * `cacheComponents` Next prerenders `/`, `Date.now()` below is a request-time
+   * API, and reading one before any uncached data is an error rather than a
+   * fallback to dynamic rendering. The database query would eventually stop
+   * prerendering too, but it runs AFTER the timestamp — and on a build machine
+   * with no DATABASE_URL it throws instead, so prerendering never stops and the
+   * whole build exits non-zero.
+   *
+   * `connection()` is the documented answer for exactly this: a component that
+   * uses no cookies or headers but must still produce per-request output. It
+   * must come FIRST, before the clock and before the query.
+   */
+  await connection();
+
   const startedAt = Date.now();
 
   try {
