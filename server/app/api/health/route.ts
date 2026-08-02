@@ -28,49 +28,12 @@
  * tool on the market.
  */
 
-import * as repo from '@/lib/repository';
+import { checkHealth, healthStatusCode, HEALTH_HEADERS } from '@/lib/health';
 import { json, preflight } from '@/lib/http';
 
 export async function GET() {
-  const startedAt = Date.now();
-
-  try {
-    const merchants = await repo.catalogSize();
-
-    return json(
-      {
-        status: 'ok',
-        database: 'reachable',
-        /*
-         * Included because "reachable but empty" is a real and confusing
-         * failure — a fresh deploy pointed at an unseeded branch answers every
-         * request with a valid, empty catalog, and the app degrades silently to
-         * local-only detection with nothing anywhere reporting a problem.
-         */
-        merchants,
-        latencyMs: Date.now() - startedAt,
-        checkedAt: new Date().toISOString(),
-      },
-      200,
-      // Belt and braces against a CDN or proxy that caches 200s by default.
-      { 'Cache-Control': 'no-store' },
-    );
-  } catch (error) {
-    // Logged in full for the operator; the response stays vague because this
-    // endpoint is unauthenticated and a driver error can name hosts and roles.
-    console.error('health check failed', error);
-
-    return json(
-      {
-        status: 'error',
-        database: 'unreachable',
-        latencyMs: Date.now() - startedAt,
-        checkedAt: new Date().toISOString(),
-      },
-      503,
-      { 'Cache-Control': 'no-store' },
-    );
-  }
+  const report = await checkHealth();
+  return json(report, healthStatusCode(report), HEALTH_HEADERS);
 }
 
 export function OPTIONS() {
