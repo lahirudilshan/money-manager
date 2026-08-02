@@ -28,21 +28,29 @@
 /** The line that separates two messages. Must be the whole line. */
 export const RECORD_SEPARATOR = '---';
 
-/** The file Shortcuts appends to. */
-export const INBOX_FILENAME = 'sms-inbox.txt';
+/**
+ * The file Shortcuts appends to, in the root of the app's Documents folder.
+ *
+ * "temp-" is doing real work in that name. The file is a HANDOFF, not storage:
+ * the automation appends to it, the app moves each message into the `sms_inbox`
+ * table and clears it, and the queue the user actually reviews lives in the
+ * database. Someone browsing Files needs to know at a glance that this is not
+ * where their transactions are kept and that it is safe to see empty.
+ *
+ * No subfolder. Documents' root is one less level for the user to navigate in
+ * the Shortcuts folder picker, and the subfolder's original justification —
+ * keeping the app's SQLite directory out of view — disappeared when the
+ * database moved to Application Support (see db/client.ts).
+ */
+export const INBOX_FILENAME = 'temp-sms-inbox.txt';
 
 /**
- * The folder that file lives in, inside the app's Documents.
+ * What the user types into Shortcuts' File Path field.
  *
- * A named subfolder rather than Documents' root: in Shortcuts the user picks a
- * folder and then types a path relative to it, and "money-manager/sms-inbox.txt"
- * is something they can read back and confirm they got right. It also keeps the
- * app's own SQLite directory out of view when they browse there in Files.
+ * Just the filename now that the inbox sits in Documents' root. Kept as its own
+ * export so the guide, the copy button and the file itself cannot disagree.
  */
-export const INBOX_FOLDER = 'money-manager';
-
-/** What the user types into Shortcuts' File Path field. */
-export const INBOX_RELATIVE_PATH = `${INBOX_FOLDER}/${INBOX_FILENAME}`;
+export const INBOX_RELATIVE_PATH = INBOX_FILENAME;
 
 /**
  * A cap on how many messages one drain will process.
@@ -76,6 +84,38 @@ export function parseInbox(contents: string): string[] {
     .split(/^---\s*$/m)
     .map((record) => record.trim())
     .filter((record) => record.length > 0);
+}
+
+/**
+ * A stable fingerprint of a message, used as the queue's dedupe key.
+ *
+ * Normalised before hashing so the trivial differences between two deliveries
+ * of the same alert — a trailing newline, CRLF from one Shortcuts action and LF
+ * from another, runs of spaces — do not read as two distinct messages. Case is
+ * folded for the same reason.
+ *
+ * Deliberately NOT a cryptographic hash: this guards against accidental repeats,
+ * not against an adversary, and a 32-bit FNV-1a over normalised text plus the
+ * length is ample for the handful of messages a phone sees in a month while
+ * needing no native module. The length suffix makes the common collision shapes
+ * (anagram-ish texts of different sizes) impossible.
+ *
+ * Two genuinely distinct transactions that produce identical text — the same
+ * amount at the same shop on the same second — would collide and the second
+ * would be dropped. That is the intended trade: a bank alert carries a
+ * timestamp, so real duplicates of this kind are re-sends, not new spends.
+ */
+export function fingerprintMessage(message: string): string {
+  const normalised = message.replace(/\r\n/g, '\n').replace(/\s+/g, ' ').trim().toLowerCase();
+
+  // FNV-1a, 32-bit. `>>> 0` keeps it unsigned after the multiply overflows.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < normalised.length; index += 1) {
+    hash ^= normalised.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+
+  return `${hash.toString(36)}-${normalised.length.toString(36)}`;
 }
 
 /** The outcome of draining the inbox, for the UI to report. */

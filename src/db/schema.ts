@@ -387,6 +387,75 @@ export const merchantRules = sqliteTable(
   (t) => [index('merchant_rules_pattern_idx').on(t.pattern)],
 );
 
+/**
+ * The durable queue of bank messages waiting to be reviewed.
+ *
+ * Drafts used to live only in React state, which made the drain lossy in a way
+ * that was invisible: the file was cleared first, so anything not confirmed
+ * before the app was killed was gone for good, and the same message could be
+ * re-imported after a restart because the duplicate check was in memory too.
+ *
+ * A row is written the moment a message is taken out of the file, and it stays
+ * until the user acts on it. The parsed fields are stored alongside the raw text
+ * so the review list renders without re-parsing, while `raw` keeps the original
+ * for the confirm sheet to display — and for a future parser to re-read, which
+ * matters because the parser is still learning bank formats.
+ *
+ * This holds real bank message text, so it is a direct reason the database must
+ * not sit in a file-shared folder (see DATABASE_DIRECTORY in db/client.ts).
+ */
+export const smsInbox = sqliteTable(
+  'sms_inbox',
+  {
+    id: text('id').primaryKey(),
+    /** The message exactly as received — the source of truth for a re-parse. */
+    raw: text('raw').notNull(),
+    /**
+     * Stable fingerprint of `raw`, uniquely indexed.
+     *
+     * This is what makes the queue idempotent: the drain can re-run after a
+     * crash, and Shortcuts can append the same alert twice, without producing a
+     * duplicate row. Derived rather than natural-keyed on `raw` itself because
+     * an index over unbounded message text is wasteful.
+     */
+    fingerprint: text('fingerprint').notNull(),
+    /**
+     * pending    awaiting the user's Yes/Edit/No
+     * confirmed  logged to a budget line; kept so the same SMS cannot re-import
+     * dismissed  the user said it was not a transaction
+     *
+     * Acted-on rows are retained rather than deleted precisely so `fingerprint`
+     * keeps rejecting repeats.
+     */
+    status: text('status', { enum: ['pending', 'confirmed', 'dismissed'] })
+      .notNull()
+      .default('pending'),
+    /** Parsed movement, mirrored from ParsedSms so the list needs no re-parse. */
+    direction: text('direction'),
+    kind: text('kind'),
+    amountMinor: integer('amount_minor'),
+    /** ISO code the message stated, or null when it used a bare symbol. */
+    currency: text('currency'),
+    merchant: text('merchant'),
+    /** Account/card fragment the message referenced, for matching a card. */
+    account: text('account'),
+    /** ISO "YYYY-MM-DD" the message referenced, or null. */
+    occurredOn: text('occurred_on'),
+    /** 24-hour "HH:MM" the message referenced, or null. */
+    occurredAt: text('occurred_at'),
+    /** When the app took this out of the file — the queue's ordering key. */
+    receivedAt: integer('received_at', { mode: 'timestamp_ms' })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    /** Set when the row left `pending`, for pruning old acted-on rows. */
+    resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
+    ...timestamps,
+  },
+  (t) => [
+    index('sms_inbox_status_idx').on(t.status, t.receivedAt),
+  ],
+);
+
 /** Key/value app settings (currency, USD rate, onboarding marker). */
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
@@ -416,6 +485,11 @@ export type Loan = typeof loans.$inferSelect;
 export type NewLoan = typeof loans.$inferInsert;
 export type MerchantRuleRow = typeof merchantRules.$inferSelect;
 export type NewMerchantRuleRow = typeof merchantRules.$inferInsert;
+export type SmsInboxRow = typeof smsInbox.$inferSelect;
+export type NewSmsInboxRow = typeof smsInbox.$inferInsert;
+
+/** Where a queued message stands. See `smsInbox.status`. */
+export type SmsInboxStatus = SmsInboxRow['status'];
 
 /** How often a subcategory recurs. */
 export type SubcategoryFrequency = Subcategory['frequency'];

@@ -28,6 +28,28 @@ import type { Observation, SharedRule } from '../core/catalogSync';
 const BASE_URL = process.env.EXPO_PUBLIC_HINTS_API?.replace(/\/+$/, '') ?? '';
 
 /**
+ * Key identifying this app to the catalog API, injected at build time.
+ *
+ * NOT a secret, and nothing here pretends otherwise: it ships inside the bundle
+ * and can be read out of any installed build, exactly like BASE_URL. It exists
+ * so the server can turn away traffic that is not from a build of this app —
+ * scanners and casual pokers — and so a key that starts being abused can be
+ * revoked server-side without shipping an app update.
+ *
+ * The API keeps working when this is unset; the server only enforces the header
+ * once it has keys configured.
+ */
+const APP_KEY = process.env.EXPO_PUBLIC_APP_KEY ?? '';
+
+/** Headers every catalog call carries. */
+function apiHeaders(extra?: Record<string, string>): Record<string, string> {
+  return {
+    ...(APP_KEY ? { 'X-App-Key': APP_KEY } : {}),
+    ...extra,
+  };
+}
+
+/**
  * Sync and contribution both run unattended in the background, so the timeout
  * only needs to stop a stalled socket holding a promise open — nothing is
  * waiting on either.
@@ -78,7 +100,9 @@ export async function pullRules(since: string | null): Promise<PullResult> {
 
   try {
     const query = since ? `?since=${encodeURIComponent(since)}` : '';
-    const response = await fetchWithTimeout(`${BASE_URL}/api/hints${query}`, SYNC_TIMEOUT_MS);
+    const response = await fetchWithTimeout(`${BASE_URL}/api/hints${query}`, SYNC_TIMEOUT_MS, {
+      headers: apiHeaders(),
+    });
     if (!response.ok) return EMPTY_PULL;
 
     const body = (await response.json()) as Partial<PullResult>;
@@ -126,7 +150,7 @@ export async function pushObservations(
   try {
     const response = await fetchWithTimeout(`${BASE_URL}/api/contribute`, SYNC_TIMEOUT_MS, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         deviceId,
         observations: observations.map((observation) => ({

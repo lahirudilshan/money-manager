@@ -27,7 +27,7 @@ import {
 } from '../core/planning';
 import { suggestCategoryIcon } from '../data/categoryIcons';
 import { groupColors } from '../theme';
-import { parseSms } from '../core/smsParser';
+import { parseSms, type ParsedSms } from '../core/smsParser';
 import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
 import { merchantKey, planRuleUpsert, type MerchantRule } from '../core/merchantRules';
 import { observationsFrom, planCatalogMerge } from '../core/catalogSync';
@@ -40,9 +40,14 @@ import type { CategoryHint } from '../core/smsCategoryHints';
 import { isCatalogConfigured, pullRules, pushObservations } from '../services/catalogApi';
 import { getDeviceId } from '../services/deviceId';
 import { onNetworkRestored } from '../services/network';
-import { EMPTY_SUMMARY, type DrainSummary } from '../core/smsInbox';
-import { countWaiting, drainInbox, ensureInboxExists } from '../services/smsInboxFile';
-import { createId } from '../db/repositories';
+import { EMPTY_SUMMARY, fingerprintMessage, type DrainSummary } from '../core/smsInbox';
+import {
+  countWaiting,
+  drainInbox,
+  ensureInboxExists,
+  migrateLegacyInbox,
+  watchInbox,
+} from '../services/smsInboxFile';
 import { DEBT_CATEGORY_ID, initialiseDatabase, resetDatabase } from '../db/client';
 import {
   cardRepo,
@@ -53,6 +58,7 @@ import {
   loanRepo,
   merchantRuleRepo,
   settingsRepo,
+  smsInboxRepo,
   stateRepo,
   subcategoryRepo,
   transactionRepo,
@@ -272,6 +278,17 @@ export interface AppState {
    * then clear it. Safe to call when the feature is off or the file is missing.
    */
   drainSmsInbox: () => DrainSummary;
+  /**
+   * Rebuild the review queue from the `sms_inbox` table, re-matching each row
+   * against the board as it stands now.
+   */
+  loadSmsDrafts: () => void;
+  /**
+   * Watch the inbox folder and drain as messages land, for updates while the
+   * app is open. Returns an unsubscribe function. Does not replace the
+   * launch/foreground drains — iOS fires no events while the app is suspended.
+   */
+  watchSmsInbox: () => () => void;
   /** Messages waiting in the inbox file, without consuming them. */
   smsInboxWaiting: number;
   /** Re-read the waiting count from disk. */
@@ -324,6 +341,16 @@ function nextColor(existingCount: number): string {
   return groupColors[existingCount % groupColors.length];
 }
 
+/**
+ * Whether a drain is in flight.
+ *
+ * Module-level rather than store state on purpose: it must be readable and
+ * writable synchronously within one drain, and putting it in the store would
+ * publish a meaningless flag to every subscriber and re-render the board twice
+ * per import. See the guard in `drainSmsInbox`.
+ */
+let draining = false;
+
 export const useAppStore = create<AppState>((set, get) => ({
   ready: false,
   needsOnboarding: false,
@@ -363,6 +390,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     /*
+     * Move a pre-rename inbox to the current path first, so anything queued at
+     * the old location is picked up by the drain below rather than stranded.
+     * A no-op on every device that never used the old path.
+     */
+    migrateLegacyInbox();
+
+    /*
      * Import anything the Shortcuts automation queued while the app was closed.
      *
      * Synchronous and BEFORE the sync: this is local file work measured in
@@ -370,6 +404,21 @@ export const useAppStore = create<AppState>((set, get) => ({
      * transactions waiting is the whole feature.
      */
     get().drainSmsInbox();
+
+    /*
+     * Show anything still awaiting review from previous sessions.
+     *
+     * This is what the durable queue buys: before, a draft the user did not act
+     * on before closing the app was gone, because the file had already been
+     * cleared and the draft only ever lived in memory.
+     */
+    get().loadSmsDrafts();
+
+    /*
+     * React to messages that arrive while the app is open. Never unsubscribed:
+     * it lives exactly as long as the store, which lives as long as the app.
+     */
+    get().watchSmsInbox();
 
     /*
      * Refresh the catalog at launch, deliberately UN-AWAITED.
@@ -967,36 +1016,82 @@ export const useAppStore = create<AppState>((set, get) => ({
     const parsed = parseSms(text);
     if (!parsed) return null;
 
-    const { smsDrafts, subcategories, categories, cards, merchantRules, currency, usdRate } = get();
+    /*
+     * Persist BEFORE building the draft.
+     *
+     * The queue is a table now, so the duplicate check is the unique index on
+     * `fingerprint` rather than a scan of what happens to be in memory. That
+     * closes the hole the in-memory check left open: the same alert arriving
+     * after a restart used to sail through, because the previous draft had
+     * evaporated with the process.
+     */
+    const inserted = smsInboxRepo.add({
+      raw: parsed.raw,
+      fingerprint: fingerprintMessage(parsed.raw),
+      direction: parsed.direction,
+      kind: parsed.kind,
+      amountMinor: parsed.amountMinor,
+      currency: parsed.currency,
+      merchant: parsed.merchant,
+      account: parsed.account,
+      occurredOn: parsed.date,
+      occurredAt: parsed.time,
+    });
 
-    // Ignore an identical raw text that is already waiting — re-firing the same
-    // deep link (iOS Shortcuts can deliver a message more than once) should not
-    // pile up duplicate drafts for the user to dismiss.
     // 'duplicate' rather than null: the caller logs the outcome, and reporting
     // this as a parse failure made a successful deep link show an error beside
     // its own success (both the layout listener and the sms/index route ingest
     // a cold-start link, so the second delivery always lands here).
-    if (smsDrafts.some((draft) => draft.parsed.raw === parsed.raw)) return 'duplicate';
+    if (!inserted) return 'duplicate';
 
-    const draft = reconcileSms(
-      parsed,
-      { subcategories, categories, cards },
-      createId(),
-      merchantRules,
-      // A foreign-currency alert (an inward USD salary, say) is converted to the
-      // user's currency before it is matched or logged — the board is entirely
-      // in one currency, so an unconverted figure would match nothing and record
-      // a salary as pocket change.
-      { currency, usdRate },
+    // Rebuild from the table so the rows the user sees are exactly the rows
+    // that are stored — no path where the two can drift apart.
+    get().loadSmsDrafts();
+
+    return get().smsDrafts.find((draft) => draft.parsed.raw === parsed.raw)?.id ?? null;
+  },
+
+  /**
+   * Rebuild `smsDrafts` from the `sms_inbox` table.
+   *
+   * Matching runs here rather than at insert time because it depends on the
+   * board — cards, bills, learned merchant rules — all of which change while a
+   * message sits in the queue. Re-reconciling on load means a draft queued
+   * yesterday is matched against the board as it is NOW, so a bill created in
+   * between is picked up instead of the draft being stuck with a stale guess.
+   */
+  loadSmsDrafts() {
+    const { subcategories, categories, cards, merchantRules, currency, usdRate } = get();
+
+    const drafts = smsInboxRepo.pending().map((row) =>
+      reconcileSms(
+        {
+          direction: (row.direction ?? 'debit') as ParsedSms['direction'],
+          kind: (row.kind ?? 'other') as ParsedSms['kind'],
+          amountMinor: row.amountMinor ?? 0,
+          currency: row.currency,
+          merchant: row.merchant ?? '',
+          account: row.account ?? '',
+          date: row.occurredOn,
+          time: row.occurredAt,
+          raw: row.raw,
+        },
+        { subcategories, categories, cards },
+        // The ROW's id, so confirming a draft can resolve the row it came from.
+        row.id,
+        merchantRules,
+        // A foreign-currency alert (an inward USD salary, say) is converted to
+        // the user's currency before it is matched or logged — the board is
+        // entirely in one currency, so an unconverted figure would match nothing
+        // and record a salary as pocket change.
+        { currency, usdRate },
+      ),
     );
 
-    // Fully local and synchronous: `reconcileSms` above read the mirrored
-    // catalog straight from SQLite, so the draft is final the first time it
-    // renders. No network call, no spinner, and nothing that can change under
-    // the user a moment later.
-    set({ smsDrafts: [draft, ...smsDrafts] });
-
-    return draft.id;
+    // Newest first: the queue is stored oldest-first (arrival order), but the
+    // message someone just received is the one they came into the app to deal
+    // with.
+    set({ smsDrafts: drafts.reverse(), smsInboxWaiting: 0 });
   },
 
   smsInboxWaiting: 0,
@@ -1006,54 +1101,88 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   /**
-   * Drain the Shortcuts inbox file into drafts.
+   * Drain the Shortcuts inbox file into the `sms_inbox` table.
    *
-   * The file is emptied by `drainInbox` BEFORE these messages are processed, so
-   * a crash mid-import costs a few drafts the user can re-add rather than
-   * replaying the same messages on every launch forever.
+   * Rows are written BEFORE the file is cleared (see `drainInbox`), so an
+   * interrupted import replays rather than losing messages — the unique
+   * fingerprint index makes the replay a no-op.
    *
    * Each message goes through the same `ingestSmsText` a deep link uses, so a
    * file-imported transaction is indistinguishable from a tapped one — same
    * parser, same detection, same duplicate guard.
    */
   drainSmsInbox() {
-    const drained = drainInbox();
-    if (!drained.ok || drained.messages.length === 0) {
-      set({ smsInboxWaiting: 0 });
-      return { ...EMPTY_SUMMARY, deferred: drained.deferred };
-    }
-
     let queued = 0;
     let duplicates = 0;
     let ignored = 0;
 
-    for (const message of drained.messages) {
-      const result = get().ingestSmsText(message);
-      if (result === 'duplicate') duplicates++;
-      // null means the parser did not see a money movement — an OTP, a promo,
-      // or a balance-only notice the automation's filter let through.
-      else if (result === null) ignored++;
-      else queued++;
-    }
-
     /*
-     * Put the empty file back.
+     * Re-entrancy guard.
      *
-     * `drainInbox` deletes it when it takes everything, and Shortcuts' "Append
-     * to File" needs an existing target — without this, a working setup would
-     * break silently after its very first import, with the automation reporting
-     * success and nothing ever arriving.
-     *
-     * Only when the user has actually set this up, so a device that has never
-     * enabled it does not grow a stray file in its Documents folder.
+     * The drain writes to the very folder the watcher is watching (it clears the
+     * file, then recreates it), so every drain schedules another watcher event.
+     * Without this the second drain finds an empty file and stops, but it still
+     * costs a wasted read and a redundant re-render on every single import.
      */
-    if (settingsRepo.get(SETTINGS_KEYS.smsInboxEnabled) === 'true') {
-      ensureInboxExists();
+    if (draining) return { ...EMPTY_SUMMARY };
+    draining = true;
+
+    try {
+      const drained = drainInbox((messages) => {
+        for (const message of messages) {
+          const result = get().ingestSmsText(message);
+          if (result === 'duplicate') duplicates++;
+          // null means the parser did not see a money movement — an OTP, a
+          // promo, or a balance-only notice the automation's filter let through.
+          else if (result === null) ignored++;
+          else queued++;
+        }
+      });
+
+      if (!drained.ok || drained.messages.length === 0) {
+        set({ smsInboxWaiting: 0 });
+        return { ...EMPTY_SUMMARY, deferred: drained.deferred };
+      }
+
+      /*
+       * Put the empty file back.
+       *
+       * `drainInbox` deletes it when it takes everything, and Shortcuts' "Append
+       * to File" needs an existing target — without this, a working setup would
+       * break silently after its very first import, with the automation
+       * reporting success and nothing ever arriving.
+       *
+       * Only when the user has actually set this up, so a device that has never
+       * enabled it does not grow a stray file in its Documents folder.
+       */
+      if (settingsRepo.get(SETTINGS_KEYS.smsInboxEnabled) === 'true') {
+        ensureInboxExists();
+      }
+
+      set({ smsInboxWaiting: drained.deferred });
+
+      return { queued, duplicates, ignored, deferred: drained.deferred };
+    } finally {
+      draining = false;
     }
+  },
 
-    set({ smsInboxWaiting: drained.deferred });
-
-    return { queued, duplicates, ignored, deferred: drained.deferred };
+  /**
+   * Start reacting to messages that arrive while the app is open.
+   *
+   * Complements, and cannot replace, the launch/foreground drains: iOS suspends
+   * the app in the background, so a message appended while it is closed fires no
+   * event and is picked up on the next foreground instead.
+   *
+   * Returns an unsubscribe function.
+   */
+  watchSmsInbox() {
+    return watchInbox(() => {
+      // The guard inside `drainSmsInbox` absorbs the events caused by the
+      // drain's own writes to this folder.
+      const summary = get().drainSmsInbox();
+      if (summary.queued > 0) get().refresh();
+    });
   },
 
   confirmDraft(draftId, overrides) {
@@ -1100,6 +1229,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     );
     if (upsert) merchantRuleRepo.apply(upsert);
 
+    /*
+     * Resolve the stored row as well as the in-memory list.
+     *
+     * A draft's id IS its `sms_inbox` row id (see `loadSmsDrafts`), so this
+     * settles the queue durably. Without it the row would stay `pending` and the
+     * draft would come back the next time the queue is loaded — already logged,
+     * and offered for logging again.
+     */
+    smsInboxRepo.resolve(draftId, 'confirmed');
     set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
     get().refresh();
 
@@ -1110,6 +1248,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   dismissDraft(draftId) {
+    // Kept as a `dismissed` row rather than deleted, so its fingerprint still
+    // rejects the same message if the automation delivers it again.
+    smsInboxRepo.resolve(draftId, 'dismissed');
     set({ smsDrafts: get().smsDrafts.filter((d) => d.id !== draftId) });
   },
 }));

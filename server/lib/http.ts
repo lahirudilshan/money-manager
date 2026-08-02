@@ -11,15 +11,63 @@ import type { ZodType } from 'zod';
  * CORS is permissive because the catalog is public-read and every write is
  * validated and vote-limited server-side. An origin allowlist would add no
  * security (a native app sends no Origin at all) while blocking a browser
- * dashboard later.
+ * dashboard later. `requireAppKey` below is the gate that does the filtering,
+ * and it is honest about how much that is worth.
  */
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type,X-App-Key',
   'Access-Control-Max-Age': '86400',
 };
+
+/**
+ * Keys the app may present, newest first. Empty means the check is off.
+ *
+ * A LIST rather than one value so a key can be rotated without breaking every
+ * installed build: ship a new key, keep the old one here until those versions
+ * age out, then drop it. With a single value, rotating would lock out everyone
+ * who had not updated.
+ */
+const APP_KEYS = (process.env.APP_KEYS ?? '')
+  .split(',')
+  .map((key) => key.trim())
+  .filter((key) => key.length > 0);
+
+/**
+ * Reject a caller that did not present a known app key.
+ *
+ * BE CLEAR ABOUT WHAT THIS IS: the key ships inside the app bundle, so anyone
+ * who unpacks an install can read it. It is not authentication and it cannot
+ * make the API "ours only" — that is not achievable for a public client, since
+ * any secret the app holds is a secret the user's device holds.
+ *
+ * What it does buy, which is worth the ten lines:
+ *
+ *   - drive-by traffic (scanners, crawlers, someone who found the URL) is
+ *     refused before it reaches Postgres;
+ *   - a leaked or abused key can be REVOKED by editing one env var, without
+ *     shipping an app update;
+ *   - it separates "our builds" from everything else in the logs, so abuse is
+ *     visible rather than buried in normal traffic.
+ *
+ * Unset `APP_KEYS` disables the check entirely, so an existing deployment and a
+ * fresh clone both keep working until the key is deliberately configured.
+ *
+ * The real defences remain the ones that do not depend on a secret: per-client
+ * rate limits, `.strict()` payloads, one vote per device, and recomputed tallies.
+ */
+export function requireAppKey(request: Request): Response | null {
+  if (APP_KEYS.length === 0) return null;
+
+  const presented = request.headers.get('x-app-key');
+  if (presented && APP_KEYS.includes(presented)) return null;
+
+  // Deliberately vague: a precise reason would help someone probe for a valid
+  // key. Real clients either have it or do not.
+  return json({ error: 'forbidden' }, 403);
+}
 
 /** A JSON response carrying the CORS headers. */
 export function json(body: unknown, status = 200, extra?: Record<string, string>): Response {

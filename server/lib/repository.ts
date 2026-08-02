@@ -152,6 +152,26 @@ export async function catalogPage(
   `) as CatalogRow[];
 }
 
+/**
+ * Prove the catalog database is reachable and has its schema.
+ *
+ * `COUNT(*)` over `merchant_hints` rather than `SELECT 1`: a bare literal proves
+ * only that a connection opened, which is the easy half. Touching the table the
+ * API actually serves also catches the failures that look identical from
+ * outside — a database restored empty, a role that can connect but not read, a
+ * deploy pointed at the wrong branch. The count is the cheapest query that
+ * distinguishes those from healthy.
+ *
+ * Deliberately NOT cached: a health check served from cache would report the
+ * last good state rather than the current one, which is exactly backwards.
+ */
+export async function catalogSize(): Promise<number> {
+  const rows = (await sql`SELECT COUNT(*)::int AS count FROM merchant_hints`) as {
+    count: number;
+  }[];
+  return rows[0]?.count ?? 0;
+}
+
 /** Whether a merchant has been forced out of circulation by a moderator. */
 export async function isBlocked(key: string): Promise<boolean> {
   const rows = (await sql`

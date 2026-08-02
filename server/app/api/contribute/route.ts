@@ -21,7 +21,7 @@ import { revalidateTag } from 'next/cache';
 import { CATALOG_TAG } from '@/lib/catalog';
 import { contributeSchema } from '@/lib/contract';
 import { merchantKey } from '@/lib/db';
-import { guard, json, preflight, readJson } from '@/lib/http';
+import { guard, json, preflight, readJson, requireAppKey } from '@/lib/http';
 import { clientKey, rateLimit } from '@/lib/rateLimit';
 import * as repo from '@/lib/repository';
 
@@ -38,6 +38,9 @@ import * as repo from '@/lib/repository';
 const WRITE_LIMIT = 600;
 
 export async function POST(request: Request) {
+  const forbidden = requireAppKey(request);
+  if (forbidden) return forbidden;
+
   const input = await readJson(request, contributeSchema);
   if (!input.ok) return input.response;
 

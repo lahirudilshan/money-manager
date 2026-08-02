@@ -4,14 +4,12 @@ import { Alert, Pressable, Switch, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SMART_DETECT_NAME, SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { BottomSheet, Label, Row, Surface, Text } from '../../src/components/ui';
-import { describeDrain } from '../../src/core/smsInbox';
+import { describeDrain, RECORD_SEPARATOR } from '../../src/core/smsInbox';
 import { copyToClipboard } from '../../src/services/clipboard';
 import {
   ensureInboxExists,
   FILES_APP_LOCATION,
-  INBOX_FILE_NAME,
   INBOX_FILE_PATH,
-  INBOX_FOLDER_NAME,
 } from '../../src/services/smsInboxFile';
 import { openTestAlertComposer } from '../../src/services/testAlert';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
@@ -280,10 +278,18 @@ export default function SmsAutomationGuide() {
               </Text>
             </Pressable>
 
+            {/*
+              Says the file empties itself, because otherwise the healthy state
+              looks broken: the app clears this file on every import, so anyone
+              who opens it to check their setup finds it empty and concludes
+              nothing is working.
+            */}
             <Row gap={6}>
               <Ionicons name="eye-outline" size={13} color={colors.inkSecondary} />
               <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-                You can open this file any time in Files → <B>{FILES_APP_LOCATION}</B>
+                You can open this file any time in Files → <B>{FILES_APP_LOCATION}</B>. It is only a
+                hand-off — the app moves each message into its own storage and empties the file, so
+                finding it empty means everything has been imported.
               </Text>
             </Row>
           </Surface>
@@ -317,11 +323,27 @@ export default function SmsAutomationGuide() {
             </Step>
             <Step
               n={6}
-              last
               warn="Insert the chip, don’t type it — tap and hold Text, then pick Shortcut Input."
             >
               Tap and hold <Tap>Text</Tap> → <Chip>Shortcut Input</Chip>. Then under{' '}
               <Tap>File Path</Tap>, paste the path you copied above.
+            </Step>
+            {/*
+              The separator earns a step of its own, and a warning rather than a
+              note, because getting it wrong fails SILENTLY: two messages with
+              nothing between them are read as one, and only the first amount is
+              ever seen. Nothing errors, so the user's evidence is a transaction
+              that simply never appeared.
+            */}
+            <Step
+              n={7}
+              last
+              code={RECORD_SEPARATOR}
+              warn="Without this line, two alerts arriving together are read as one — and the second transaction is lost with no error."
+            >
+              Still in <Tap>Text</Tap>, press return after the{' '}
+              <Chip>Shortcut Input</Chip> chip and type three dashes on their own line. This is what
+              marks the end of each message.
             </Step>
           </Surface>
 

@@ -16,6 +16,7 @@ import {
   loans,
   merchantRules,
   settings,
+  smsInbox,
   subcategories,
   subcategoryStates,
   transactions,
@@ -32,8 +33,11 @@ import {
   type NewFunding,
   type NewIncome,
   type NewLoan,
+  type NewSmsInboxRow,
   type NewSubcategory,
   type NewTransaction,
+  type SmsInboxRow,
+  type SmsInboxStatus,
   type Subcategory,
   type SubcategoryState,
   type SubcategoryStatus,
@@ -603,6 +607,65 @@ function toMerchantRule(row: MerchantRuleRow): MerchantRule {
     updatedAt: row.updatedAt.getTime(),
   };
 }
+
+/**
+ * The durable SMS review queue.
+ *
+ * Every write here is idempotent on `fingerprint`, which is what lets the drain
+ * be retried safely: the file is cleared only AFTER these rows land, so a crash
+ * in between replays the same messages and the unique index absorbs them.
+ */
+export const smsInboxRepo = {
+  /**
+   * Queue a message, or do nothing if it is already known.
+   *
+   * Returns whether a new row was created, which is what the drain reports back
+   * to the user as "3 to review" versus "already added". `onConflictDoNothing`
+   * covers both a retried drain and a Shortcut that appended the same alert
+   * twice, without a read-then-write race.
+   */
+  add(input: Omit<NewSmsInboxRow, 'id'>): boolean {
+    const changes = db
+      .insert(smsInbox)
+      .values({ ...input, id: createId() })
+      .onConflictDoNothing({ target: smsInbox.fingerprint })
+      .run().changes;
+
+    return changes > 0;
+  },
+
+  /** Messages still awaiting the user, oldest first — the review queue order. */
+  pending(): SmsInboxRow[] {
+    return db
+      .select()
+      .from(smsInbox)
+      .where(eq(smsInbox.status, 'pending'))
+      .orderBy(asc(smsInbox.receivedAt))
+      .all();
+  },
+
+  /** How many are waiting, for the badge — cheaper than loading the rows. */
+  pendingCount(): number {
+    const row = db
+      .select({ count: sql<number>`count(*)` })
+      .from(smsInbox)
+      .where(eq(smsInbox.status, 'pending'))
+      .get();
+
+    return row?.count ?? 0;
+  },
+
+  /**
+   * Mark a row acted-on. The row is KEPT, not deleted: its fingerprint is what
+   * stops the same message being re-queued if it arrives again.
+   */
+  resolve(id: string, status: Extract<SmsInboxStatus, 'confirmed' | 'dismissed'>): void {
+    db.update(smsInbox)
+      .set({ status, resolvedAt: now(), updatedAt: now() })
+      .where(eq(smsInbox.id, id))
+      .run();
+  },
+};
 
 export const settingsRepo = {
   get(key: string): string | undefined {

@@ -13,9 +13,32 @@
 
 import { getSuggestions } from '@/lib/catalog';
 import { suggestQuerySchema } from '@/lib/contract';
-import { guard, preflight, readQuery } from '@/lib/http';
+import { guard, json, preflight, readQuery, requireAppKey } from '@/lib/http';
+import { clientKey, rateLimit } from '@/lib/rateLimit';
+
+/**
+ * Lookups per minute per client.
+ *
+ * Lower than the other routes because nothing in the app calls this — it exists
+ * for a dashboard and for debugging, so a human-paced ceiling is ample. It also
+ * needs a limit more than the others do: `merchant` is free text and part of the
+ * `'use cache'` key, so every distinct value is a guaranteed cache miss and a
+ * fresh set of queries. Without this, a dictionary of merchant names is an
+ * unbounded, uncached load generator.
+ */
+const SUGGEST_LIMIT = 60;
 
 export async function GET(request: Request) {
+  const forbidden = requireAppKey(request);
+  if (forbidden) return forbidden;
+
+  const limited = rateLimit(clientKey(request), SUGGEST_LIMIT);
+  if (!limited.ok) {
+    return json({ error: 'too many requests' }, 429, {
+      'Retry-After': String(limited.retryAfter),
+    });
+  }
+
   const input = readQuery(request, suggestQuerySchema, (params) => ({
     merchant: params.get('merchant') ?? '',
     sender: params.get('sender'),

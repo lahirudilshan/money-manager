@@ -32,7 +32,7 @@
 import { getSuggestions, type Suggestion } from '@/lib/catalog';
 import { bucketFor, detectSchema, type Hint } from '@/lib/contract';
 import { inferHint } from '@/lib/hints';
-import { guard, json, preflight, readJson } from '@/lib/http';
+import { guard, json, preflight, readJson, requireAppKey } from '@/lib/http';
 import { rankLines, CONFIDENT_MATCH_SCORE, type RankedLine } from '@/lib/rank';
 import { clientKey, rateLimit } from '@/lib/rateLimit';
 
@@ -70,6 +70,9 @@ const NO_DETECTION: DetectResult = {
 };
 
 export async function POST(request: Request) {
+  const forbidden = requireAppKey(request);
+  if (forbidden) return forbidden;
+
   const limit = rateLimit(clientKey(request), DETECT_LIMIT);
   if (!limit.ok) {
     return json({ error: 'too many requests' }, 429, { 'Retry-After': String(limit.retryAfter) });

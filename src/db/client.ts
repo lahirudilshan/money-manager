@@ -1,16 +1,115 @@
 import * as SQLite from 'expo-sqlite';
 import { drizzle } from 'drizzle-orm/expo-sqlite';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as schema from './schema';
 
 const DATABASE_NAME = 'money-manager.db';
 
 /**
+ * Where the database lives — deliberately NOT the default.
+ *
+ * expo-sqlite defaults to `Documents/SQLite`, and this app sets
+ * `UIFileSharingEnabled` so the Shortcuts automation can drop SMS files into
+ * Documents (see services/smsInboxFile.ts). Those two facts together put the
+ * entire database — every balance, account number and stored bank message —
+ * in a folder the Files app lists, where anyone holding the unlocked phone can
+ * read, copy or delete it. App Lock does not help: it guards the UI, not a file
+ * another app can open.
+ *
+ * `Library/Application Support` is the Apple-designated home for app data the
+ * user should not manage by hand, and it is never exposed by file sharing. It
+ * is also backed up, unlike Caches, which the system may delete under storage
+ * pressure — losing the user's entire board.
+ *
+ * A path string rather than a `Paths` constant because expo-file-system exposes
+ * only cache/bundle/document; `openDatabaseSync` joins this to the filename
+ * verbatim, so deriving it from the document directory is the reliable route.
+ */
+const DATABASE_DIRECTORY = (() => {
+  const documents = Paths.document.uri.replace(/\/$/, '');
+  const container = documents.replace(/\/Documents$/, '');
+
+  /*
+   * If the path did not end in `/Documents` the platform layout is not what
+   * this assumed, and a blind `.replace()` would silently leave the database
+   * inside the shared folder — the exact exposure this exists to prevent. A
+   * private subfolder of Documents is the safe fallback: still not ideal, but
+   * `.no-sync`-style naming keeps it out of the way and the data stays intact.
+   */
+  if (container === documents) return `${documents}/.private`;
+
+  return `${container}/Library/Application Support`;
+})();
+
+/**
+ * Move a database that predates {@link DATABASE_DIRECTORY} out of Documents.
+ *
+ * Must run BEFORE the database is opened: opening at the new path would create
+ * an empty database and the user's real data would silently vanish from the app
+ * while still sitting, exposed, in the old location.
+ *
+ * All three SQLite files move together. `-wal` holds committed transactions not
+ * yet folded into the main file, so moving `.db` alone can discard the most
+ * recent writes; `-shm` is disposable but is moved for tidiness rather than
+ * left behind to confuse the next reader.
+ *
+ * Best-effort by design: a device that cannot complete the move keeps working
+ * from the old location (the fallback below), because failing to start is far
+ * worse than staying where we were.
+ */
+function migrateDatabaseLocation(): string {
+  const legacyDir = new Directory(Paths.document, 'SQLite');
+  const targetDir = new Directory(DATABASE_DIRECTORY);
+
+  try {
+    if (!targetDir.exists) targetDir.create({ intermediates: true });
+
+    const target = new File(targetDir, DATABASE_NAME);
+    // Already migrated (or a fresh install): nothing in the old spot to move.
+    if (target.exists || !legacyDir.exists) return DATABASE_DIRECTORY;
+
+    const legacy = new File(legacyDir, DATABASE_NAME);
+    if (!legacy.exists) return DATABASE_DIRECTORY;
+
+    /*
+     * `moveSync`, never `move`: the async variant returns a Promise, and this
+     * function's return value is passed straight to `openDatabaseSync` below.
+     * An un-awaited move would race the open, which would find a missing (or
+     * half-written) file and silently create an empty database in its place.
+     */
+    for (const suffix of ['', '-wal', '-shm']) {
+      const from = new File(legacyDir, `${DATABASE_NAME}${suffix}`);
+      if (from.exists) from.moveSync(new File(targetDir, `${DATABASE_NAME}${suffix}`));
+    }
+
+    // Only when empty, so anything unexpected the user parked there survives.
+    if (legacyDir.list().length === 0) legacyDir.delete();
+
+    return DATABASE_DIRECTORY;
+  } catch {
+    /*
+     * Fall back to wherever the data actually is. Returning the new directory
+     * after a half-finished move would open an empty database and present the
+     * user with an app that has lost everything.
+     */
+    try {
+      if (new File(legacyDir, DATABASE_NAME).exists) return legacyDir.uri;
+    } catch {
+      // Fall through to the new directory: there is nothing to preserve.
+    }
+    return DATABASE_DIRECTORY;
+  }
+}
+
+/**
  * Single shared connection. expo-sqlite handles concurrency internally, and
  * opening the database twice risks divergent WAL state.
  */
-const expoDb = SQLite.openDatabaseSync(DATABASE_NAME, {
-  enableChangeListener: true,
-});
+const expoDb = SQLite.openDatabaseSync(
+  DATABASE_NAME,
+  { enableChangeListener: true },
+  migrateDatabaseLocation(),
+);
 
 export const db = drizzle(expoDb, { schema });
 export type Database = typeof db;
@@ -21,7 +120,7 @@ export { expoDb, DATABASE_NAME };
  * files: for a local-only app this removes a codegen step while staying
  * explicit. `user_version` gates destructive upgrades.
  */
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 const DDL = [
   `CREATE TABLE IF NOT EXISTS cards (
@@ -189,6 +288,29 @@ const DDL = [
   // different line (a supermarket that is sometimes groceries, sometimes fuel).
   // `matchMerchant` picks between them by hit count.
   `CREATE INDEX IF NOT EXISTS merchant_rules_pattern_idx ON merchant_rules(pattern)`,
+  // The durable SMS review queue — see `smsInbox` in schema.ts.
+  `CREATE TABLE IF NOT EXISTS sms_inbox (
+    id TEXT PRIMARY KEY NOT NULL,
+    raw TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    direction TEXT,
+    kind TEXT,
+    amount_minor INTEGER,
+    currency TEXT,
+    merchant TEXT,
+    account TEXT,
+    occurred_on TEXT,
+    occurred_at TEXT,
+    received_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    resolved_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  // Unique: this is what makes the drain idempotent, so a retry after a crash
+  // (or a Shortcut that appends the same alert twice) cannot double-queue.
+  `CREATE UNIQUE INDEX IF NOT EXISTS sms_inbox_fingerprint_idx ON sms_inbox(fingerprint)`,
+  `CREATE INDEX IF NOT EXISTS sms_inbox_status_idx ON sms_inbox(status, received_at)`,
 ];
 
 /**
@@ -876,6 +998,8 @@ export function resetDatabase(): void {
     'incomes',
     'loans',
     'cards',
+    // Holds raw bank message text — clearing data must not leave it behind.
+    'sms_inbox',
     'settings',
   ];
   expoDb.execSync('PRAGMA foreign_keys = OFF;');
