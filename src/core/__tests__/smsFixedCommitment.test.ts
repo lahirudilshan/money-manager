@@ -81,11 +81,28 @@ describe('exact amount against a fixed commitment', () => {
     expect(pick('LKR 42,350.00 debited at KEELLS')).toBe('Groceries');
   });
 
-  /** A line named like a fixed commitment qualifies without a loan link. */
-  it('applies to a hand-named rent line with no loan record', () => {
-    const rent = line('r1', 'House Rent', 8_500_000);
+  /**
+   * A loan-linked line whose NAME says nothing about being one.
+   *
+   * "Toyota Aqua" is a lease as far as the user is concerned, and the earlier
+   * name-sniffing had no way to know that. The link to the loan record is what
+   * makes the exact-amount match work, with nothing for the user to configure.
+   */
+  it('applies to a loan-linked line whose name says nothing about being one', () => {
+    const car = line('r2', 'Toyota Aqua', 8_500_000, 'loan-2');
 
-    expect(pick('LKR 85,000.00 debited from AC 6796', [rent, WATER])).toBe('House Rent');
+    expect(pick('LKR 85,000.00 debited from AC 6796', [car, WATER])).toBe('Toyota Aqua');
+  });
+
+  /**
+   * The inverse: a line NAMED like a commitment but not linked to a loan gets
+   * no bonus. Only the loan record counts, so a hand-named "House Rent" that
+   * happens to equal a debit is still treated as coincidence.
+   */
+  it('ignores a commitment-sounding name with no loan link', () => {
+    const rent = line('r3', 'House Rent', 8_500_000);
+
+    expect(pick('LKR 85,000.00 debited from AC 6796', [rent, WATER])).toBeNull();
   });
 });
 

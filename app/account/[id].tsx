@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, View } from 'react-native';
-import { BottomSheet, Button, DetailRow, Divider, FundingBar, Label, Row, Surface, Text } from '../../src/components/ui';
+import { Alert, Pressable, View } from 'react-native';
+import { BottomSheet, Button, DetailRow, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { BankLogo } from '../../src/components/BankLogo';
 import { formatMoney } from '../../src/core/money';
@@ -22,6 +22,7 @@ export default function AccountDetailScreen() {
   const { colors, space } = useTheme();
   const closeModal = useModalClose();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const state = useAppStore();
 
   const view = useMemo(
@@ -50,13 +51,6 @@ export default function AccountDetailScreen() {
   const { card } = view;
   const label = accountLabel(card);
   const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
-  const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
-  // Clamped low as well as high — a balance can go negative once spending is
-  // deducted, and a negative width is not renderable.
-  const goalPct = hasGoal
-    ? Math.max(0, Math.min(100, (view.balanceMinor / card.targetMinor!) * 100))
-    : 0;
-
   // Categories funded from this account, each with its bills and their
   // effective (actual-or-planned) amounts — so the detail shows *where the
   // money goes*, not just a list of names.
@@ -77,6 +71,66 @@ export default function AccountDetailScreen() {
         })),
       }));
   }, [state, card.id]);
+
+  /**
+   * Every stored field, whether or not it holds anything.
+   *
+   * The blanks are shown on purpose: an account is only useful to the app once
+   * these are filled — the last four digits are what let a bank SMS match this
+   * account at all — so a visible "Not set" is a prompt to go and add it. Hiding
+   * empty rows made a half-configured account look complete.
+   *
+   * Empty reads as "Not set" rather than an em-dash, which is ambiguous between
+   * "nothing here" and "not applicable".
+   */
+  const details = React.useMemo(() => {
+    const rows: {
+      label: string;
+      value: string;
+      empty: boolean;
+      action?: { icon: 'eye-outline' | 'eye-off-outline'; onPress: () => void };
+    }[] = [];
+
+    /** One row, with the blank state handled in a single place. */
+    const add = (
+      label: string,
+      value: string | null | undefined,
+      action?: { icon: 'eye-outline' | 'eye-off-outline'; onPress: () => void },
+    ) => {
+      const filled = Boolean(value);
+      rows.push({ label, value: filled ? value! : 'Not set', empty: !filled, action });
+    };
+
+    if (card.isCard) {
+      add(
+        'Card number',
+        card.cardNumber
+          ? revealed
+            ? card.cardNumber
+            : `•••• •••• •••• ${card.cardNumber.slice(-4)}`
+          : null,
+        card.cardNumber
+          ? {
+              icon: revealed ? 'eye-off-outline' : 'eye-outline',
+              onPress: () => setRevealed((v) => !v),
+            }
+          : undefined,
+      );
+      add('Expiry', card.expiry);
+      add('CVV', card.cvv ? (revealed ? card.cvv : '•••') : null);
+    } else {
+      add('Account number', card.accountNumber);
+      add('Bank', card.bankName ?? brand.name);
+      add('Branch', card.branch);
+      add('Bank code', card.bankCode);
+    }
+
+    // The digits bank SMS quote — the field that makes auto-detection match
+    // this account, so its absence is worth surfacing rather than hiding.
+    add('Last 4 digits', card.last4 ? `••${card.last4}` : null);
+
+    return rows;
+  }, [card, brand.name, revealed]);
 
   function confirmDelete() {
     Alert.alert(`Delete ${label.primary}?`, 'Categories pointing at it will need a new account.', [
@@ -102,126 +156,40 @@ export default function AccountDetailScreen() {
       icon={card.isCard ? 'card-outline' : 'wallet-outline'}
       iconColor={brand.color}
       scroll
+      footer={
+        <GradientButton
+          label="Edit details"
+          icon="create-outline"
+          onPress={() => {
+            closeModal();
+            router.push(`/(tabs)/cards?edit=${card.id}`);
+          }}
+        />
+      }
     >
-        {/* Identity + balance — accented with the bank's brand colour. */}
-        <Surface padded={false} style={{ overflow: 'hidden' }}>
-          <View style={{ backgroundColor: `${brand.color}14`, padding: space.lg }}>
-            <Row gap={space.md}>
-              <BankLogo brand={brand} size={48} />
-              <View style={{ flex: 1 }}>
-                <Text variant="heading" numberOfLines={1}>
-                  {label.primary}
-                </Text>
-                <Text variant="caption" tone="muted">
-                  {label.secondary ?? (card.isCard ? 'Card' : 'Account')}
-                  {card.last4 ? ` · ••${card.last4}` : ''}
-                </Text>
+        {/* Stored details — every field, with the unset ones marked. */}
+        <View style={{ gap: space.sm }}>
+          <Label>{card.isCard ? 'CARD DETAILS' : 'ACCOUNT DETAILS'}</Label>
+          <Surface padded={false}>
+            {details.map((row, index) => (
+              <View key={row.label}>
+                {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+                <DetailRow
+                  label={row.label}
+                  value={row.value}
+                  action={row.action}
+                  muted={row.empty}
+                />
               </View>
-            </Row>
-          </View>
-
-          <View style={{ padding: space.lg, gap: space.md }}>
-            <Row justify="space-between">
-              <Text variant="small" tone="secondary">
-                Balance
-              </Text>
-              <Text
-                variant="figureLarge"
-                color={view.balanceMinor < 0 ? colors.danger : brand.color}
-              >
-                {formatMoney(view.balanceMinor)}
-              </Text>
-            </Row>
-
-            {/* How that balance was reached, so the figure is checkable rather
-                than a number the user has to trust. */}
-            {view.fundedInMinor > 0 || view.spentMinor > 0 ? (
-              <>
-                <Row justify="space-between">
-                  <Text variant="caption" tone="muted">
-                    Funded in this month
-                  </Text>
-                  <Text variant="caption" tone="secondary">
-                    + {formatMoney(view.fundedInMinor)}
-                  </Text>
-                </Row>
-                <Row justify="space-between">
-                  <Text variant="caption" tone="muted">
-                    Paid out this month
-                  </Text>
-                  <Text variant="caption" tone="secondary">
-                    − {formatMoney(view.spentMinor)}
-                  </Text>
-                </Row>
-              </>
-            ) : null}
-
-            {view.committedMinor > 0 ? (
-              <Row justify="space-between">
-                <Text variant="small" tone="secondary">
-                  Still to pay from here
-                </Text>
-                <Text variant="figure" color={colors.pending}>
-                  {formatMoney(view.committedMinor)}
-                </Text>
-              </Row>
-            ) : null}
-
-            {hasGoal ? (
-              <View style={{ gap: 4 }}>
-                <FundingBar pct={goalPct} color={brand.color} height={6} />
-                <Row justify="space-between">
-                  <Text variant="caption" tone="muted">
-                    {Math.round(goalPct)}% of {formatMoney(card.targetMinor!, { compact: true })}
-                  </Text>
-                </Row>
-              </View>
-            ) : null}
-          </View>
-        </Surface>
-
-        {/* Stored details. */}
-        <Surface padded={false}>
-          {card.isCard ? (
-            <>
-              <DetailRow
-                label="Card number"
-                value={
-                  card.cardNumber
-                    ? revealed
-                      ? card.cardNumber
-                      : `•••• •••• •••• ${card.cardNumber.slice(-4)}`
-                    : '—'
-                }
-                action={
-                  card.cardNumber
-                    ? { icon: revealed ? 'eye-off-outline' : 'eye-outline', onPress: () => setRevealed((v) => !v) }
-                    : undefined
-                }
-              />
-              <Divider style={{ marginHorizontal: space.lg }} />
-              <DetailRow label="Expiry" value={card.expiry || '—'} />
-              <Divider style={{ marginHorizontal: space.lg }} />
-              <DetailRow label="CVV" value={card.cvv ? (revealed ? card.cvv : '•••') : '—'} />
-            </>
-          ) : (
-            <>
-              <DetailRow label="Account number" value={card.accountNumber || '—'} />
-              <Divider style={{ marginHorizontal: space.lg }} />
-              <DetailRow label="Bank" value={card.bankName ?? brand.name} />
-              <Divider style={{ marginHorizontal: space.lg }} />
-              <DetailRow label="Branch" value={card.branch || '—'} />
-              <Divider style={{ marginHorizontal: space.lg }} />
-              <DetailRow label="Bank code" value={card.bankCode || '—'} />
-            </>
-          )}
-        </Surface>
+            ))}
+          </Surface>
+        </View>
 
         {/* What draws from this account — each category with its bills and the
             amount each will cost (actual when logged, else planned). */}
         {!card.isCard ? (
           <View style={{ gap: space.sm }}>
-            <Label>FUNDS THESE</Label>
+            <Label>WHAT THIS FUNDS</Label>
             {fundedCategories.length > 0 ? (
               fundedCategories.map((cat) => (
                 <Surface key={cat.id} padded={false} style={{ overflow: 'hidden' }}>

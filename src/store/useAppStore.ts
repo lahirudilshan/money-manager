@@ -71,8 +71,11 @@ import {
   SETTINGS_KEYS,
 } from '../db/repositories';
 import { seedSampleTemplate } from '../db/seed';
-import { cancelAllReminders, notifyDraftsImported } from '../services/notifications';
-import { supportsSavingPlan } from '../db/schema';
+import {
+  cancelAllReminders,
+  notifyDraftsImported,
+} from '../services/notifications';
+import { isUnplanned, supportsSavingPlan } from '../db/schema';
 import type {
   Card,
   Category,
@@ -208,7 +211,12 @@ export interface AppState {
   /** Set the category's bulk-transfer status (the salary→account move). */
   setCategoryTransfer: (categoryId: string, status: CategoryFundingStatus) => void;
   /** Toggle the category's bulk-transfer status. */
-  toggleCategoryTransfer: (categoryId: string) => void;
+  /**
+   * Mark an account's money as moved, or undo it. The dashboard's "money to
+   * move" action — see the implementation for why this writes through to the
+   * categories the account funds.
+   */
+  toggleAccountTransfer: (cardId: string) => void;
 
   fundCategory: (categoryId: string, amountMinor: Minor, note?: string) => void;
   unfundCategory: (categoryId: string) => void;
@@ -822,14 +830,62 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refresh();
   },
 
-  toggleCategoryTransfer(categoryId) {
-    const { period, categoryStates } = get();
-    const current = categoryStates.get(categoryId)?.status ?? 'pending';
-    categoryStateRepo.setStatus(
-      categoryId,
-      period,
-      current === 'transferred' ? 'pending' : 'transferred',
+  /**
+   * Mark every category funded from an account as transferred, or undo that.
+   *
+   * This is the real-world action: the salary lands in one place, and the user
+   * moves a lump sum to each account according to what it is FOR — savings,
+   * living costs, vehicle-and-health. The thing they need to remember is "have
+   * I moved money to the vehicle account yet?", which is a fact about the
+   * ACCOUNT, not about any one category inside it.
+   *
+   * Written through to `category_states` rather than stored on the card,
+   * deliberately. An account's purpose IS its set of categories here, so a
+   * separate per-account record would be a second place to store one fact —
+   * and the two could then disagree, leaving an account marked moved while the
+   * categories it funds still read as pending in every total on the board.
+   * Writing through keeps one source of truth and leaves every existing
+   * calculation working untouched.
+   *
+   * Resolves per LEAF, matching `selectAccountTransfers`: a subcategory can
+   * override its category's card, so "categories funded from this account"
+   * means any category with at least one line drawing on it.
+   */
+  toggleAccountTransfer(cardId) {
+    const { period, categories, subcategories, categoryStates } = get();
+
+    const fundedCategoryIds = new Set(
+      categories
+        .filter((category) =>
+          subcategories.some(
+            (sub) =>
+              sub.categoryId === category.id &&
+              sub.type === 'expense' &&
+              resolveCardId(sub.cardId, category.cardId) === cardId,
+          ),
+        )
+        .map((category) => category.id),
     );
+
+    if (fundedCategoryIds.size === 0) return;
+
+    /*
+     * One tap sets them all the same way, rather than flipping each in place.
+     *
+     * The account reads as done only when everything it funds is transferred,
+     * so a half-transferred account must resolve to "mark the rest" — toggling
+     * each category independently would leave it in the same mixed state and
+     * the tap would appear to do nothing.
+     */
+    const allTransferred = [...fundedCategoryIds].every(
+      (id) => (categoryStates.get(id)?.status ?? 'pending') === 'transferred',
+    );
+    const next = allTransferred ? 'pending' : 'transferred';
+
+    for (const id of fundedCategoryIds) {
+      categoryStateRepo.setStatus(id, period, next);
+    }
+
     get().refresh();
   },
 
@@ -1826,9 +1882,14 @@ export function selectCardViews(state: AppState): CardView[] {
  * that draws from it and has not yet been transferred.
  *
  * This is the dashboard's "move this much to each account" answer. It resolves
- * per leaf (a subcategory can override its category's card), and counts only
- * lines still awaiting money — once a line is transferred or completed, its
- * cash is already sitting on the card.
+ * per leaf (a subcategory can override its category's card), and splits the
+ * total by whether the line's CATEGORY has been marked transferred — the state
+ * the dashboard's slider writes.
+ *
+ * Deliberately not keyed on whether the bills are paid. Paying a bill from an
+ * account says nothing about whether the salary money was moved there, and
+ * conflating the two made an account with settled bills read as "all moved"
+ * before the user had transferred anything.
  */
 export interface AccountTransferView {
   card: Card;
@@ -1868,11 +1929,29 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
           planned += amount;
           categoryNames.add(view.category.name);
 
-          if (line.status === 'pending') {
+          /*
+           * Moved-ness comes from the CATEGORY's transfer state, not from
+           * whether its bills are paid.
+           *
+           * These are two different real-world steps and were conflated here: a
+           * bill being `paid` meant "this account needs no more money", so an
+           * account whose bills happened to be settled showed as fully moved
+           * even though the user had never transferred anything — and the
+           * slider could not be reverted, because the state it reads was never
+           * the state it writes.
+           *
+           * Paying a bill from an account says nothing about whether the salary
+           * money was moved there; the user might have paid it from whatever
+           * balance was already sitting on the card.
+           */
+          const transferred =
+            (state.categoryStates.get(view.category.id)?.status ?? 'pending') === 'transferred';
+
+          if (transferred) {
+            moved += amount;
+          } else {
             toTransfer += amount;
             pendingCount += 1;
-          } else {
-            moved += amount;
           }
         }
       }
@@ -1901,8 +1980,6 @@ export interface ReminderView {
   card: Card | undefined;
   amountMinor: Minor;
   status: SubcategoryStatus;
-  /** Whether the bulk money for this bill's category has landed. */
-  categoryTransferred: boolean;
   dueDate: Date;
   daysUntil: number;
   urgency: DueUrgency;
@@ -1962,11 +2039,22 @@ export function selectReminders(state: AppState, today = new Date()): ReminderVi
 
   for (const category of state.categories) {
     const subs = state.subcategories.filter((s) => s.categoryId === category.id);
-    const categoryTransferred =
-      (state.categoryStates.get(category.id)?.status ?? 'pending') === 'transferred';
-
     for (const sub of subs) {
       if (sub.type === 'income') continue;
+
+      /*
+       * A spending budget is never a reminder.
+       *
+       * It has no single payment to make and is never ticked "paid" as a whole
+       * — its spend is the running sum of its entries — so it could never leave
+       * this list once its due day passed. A grocery budget sat on the
+       * dashboard reading "2 days overdue" permanently, which is both wrong and
+       * the kind of false alarm that teaches people to ignore the section.
+       *
+       * Its money is handled by the account transfer, and its spending shows on
+       * the plan as a running total against the budget. Neither is a deadline.
+       */
+      if (isUnplanned(sub.frequency)) continue;
 
       const status: SubcategoryStatus =
         (state.states.get(sub.id)?.status as SubcategoryStatus) ?? 'pending';
@@ -1986,9 +2074,14 @@ export function selectReminders(state: AppState, today = new Date()): ReminderVi
         card: state.cards.find(
           (c) => c.id === resolveCardId(sub.cardId, category.cardId),
         ),
-        amountMinor: state.states.get(sub.id)?.actualMinor ?? sub.plannedMinor,
+        /*
+         * `??` is wrong here and was the "LKR 0" on screen: a logged actual of
+         * zero is not nullish, so it won any comparison against the plan. A
+         * bill can legitimately be logged at 0 (a waived charge), and the
+         * reminder should then show what is still PLANNED, not the zero.
+         */
+        amountMinor: state.states.get(sub.id)?.actualMinor || sub.plannedMinor,
         status,
-        categoryTransferred,
         dueDate,
         daysUntil: daysUntil(dueDate, today),
         urgency: urgencyFor(dueDate, today),

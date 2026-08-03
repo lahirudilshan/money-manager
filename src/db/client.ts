@@ -656,10 +656,12 @@ function migrateV3ToV4(): void {
  * any device that already got bumped to v3 without picking up the column
  * (as happened here: `cards` DDL was missed from the original migration).
  */
-function ensureColumn(table: string, column: string, ddl: string): void {
+/** Returns whether the column was actually added, so a caller can backfill it. */
+function ensureColumn(table: string, column: string, ddl: string): boolean {
   const columns = expoDb.getAllSync(`PRAGMA table_info(${table})`) as { name: string }[];
-  if (columns.some((c) => c.name === column)) return;
+  if (columns.some((c) => c.name === column)) return false;
   expoDb.execSync(`ALTER TABLE ${table} ADD COLUMN ${ddl};`);
+  return true;
 }
 
 function ensureAdditiveColumns(): void {
@@ -715,6 +717,7 @@ function ensureAdditiveColumns(): void {
     );
     // Which month a one-time cost belongs to — see `subcategories` in schema.ts.
     ensureColumn('subcategories', 'once_in_period', 'once_in_period TEXT');
+
   }
 
   const hasSubcategoryStates = expoDb.getFirstSync(

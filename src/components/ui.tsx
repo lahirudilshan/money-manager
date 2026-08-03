@@ -352,6 +352,15 @@ type SheetProps = {
   eyebrow?: string;
   /** Leading header icon. Defaults to a neutral list glyph when a title is set. */
   icon?: keyof typeof Ionicons.glyphMap;
+  /**
+   * Turns the leading icon tile into a BACK button.
+   *
+   * For a sheet that has a second step inside it — choosing a bank from a long
+   * list, say — so the step reads as "further in" rather than as a new sheet
+   * stacked on the old one. Close stays in its usual place on the right, so
+   * leaving entirely is still one tap from anywhere.
+   */
+  onBack?: () => void;
   /** Background for the icon tile (e.g. a category colour). Defaults to accent. */
   iconColor?: string;
   /** Pinned footer action bar (keyboard-aware) — usually a GradientButton. */
@@ -381,6 +390,7 @@ type SheetProps = {
 /** The shared chrome: header + body + footer. Identical in every sheet. */
 function SheetChrome({
   onClose,
+  onBack,
   title,
   eyebrow,
   icon,
@@ -442,18 +452,36 @@ function SheetChrome({
               paddingBottom: space.md,
             }}
           >
-            <View
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: radius.md,
-                backgroundColor: iconColor ?? colors.accent,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Ionicons name={(icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
-            </View>
+            {onBack ? (
+              <Pressable
+                onPress={onBack}
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+                style={({ pressed }) => ({
+                  width: 40,
+                  height: 40,
+                  borderRadius: radius.pill,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                })}
+              >
+                <Ionicons name="chevron-back" size={24} color={colors.inkSecondary} />
+              </Pressable>
+            ) : (
+              <View
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: radius.md,
+                  backgroundColor: iconColor ?? colors.accent,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Ionicons name={(icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               {eyebrow ? (
                 <Text variant="caption" tone="muted">
@@ -1132,10 +1160,18 @@ export function DetailRow({
   label,
   value,
   action,
+  muted,
 }: {
   label: string;
   value: string;
   action?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void };
+  /**
+   * Dim the value, for a placeholder like "Not set".
+   *
+   * Keeps an unfilled row readable as a gap rather than as data, so a column of
+   * details still reads at a glance as "these three are set, this one is not".
+   */
+  muted?: boolean;
 }) {
   const { colors, space } = useTheme();
   return (
@@ -1152,7 +1188,11 @@ export function DetailRow({
         {label}
       </Text>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
-        <Text variant="small" style={{ fontWeight: '600' }}>
+        <Text
+          variant="small"
+          tone={muted ? 'muted' : undefined}
+          style={{ fontWeight: muted ? '400' : '600' }}
+        >
           {value}
         </Text>
         {action ? (

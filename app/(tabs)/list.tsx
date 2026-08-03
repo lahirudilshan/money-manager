@@ -1037,8 +1037,6 @@ function CategoryCard({
   const state = useAppStore();
   const { category, card, summary, subcategories } = view;
 
-  const transferred = view.transferStatus === 'transferred';
-  const transferStyle = statusStyle('transferred', colors);
   const paidPct =
     summary.subcategoryCount > 0
       ? Math.round((summary.counts.paid / summary.subcategoryCount) * 100)
@@ -1107,47 +1105,6 @@ function CategoryCard({
             </Pressable>
           </View>
         </Row>
-
-        {/* Transfer toggle — the bulk salary→account move, one tap. Income
-            categories skip it: that money arrives in the account by itself. */}
-        {view.isIncomeOnly ? null : (
-        <Pressable
-          onPress={() => state.toggleCategoryTransfer(category.id)}
-          accessibilityRole="button"
-          accessibilityState={{ checked: transferred }}
-          accessibilityLabel={`Bulk transfer ${transferred ? 'done' : 'not done'}. Tap to toggle.`}
-          style={({ pressed }) => ({
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: space.sm,
-            paddingVertical: 9,
-            paddingHorizontal: space.md,
-            borderRadius: radius.md,
-            backgroundColor: transferred ? transferStyle.bg : colors.surface,
-            borderWidth: 1,
-            borderColor: transferred ? transferStyle.fg : colors.hairline,
-            opacity: pressed ? 0.85 : 1,
-          })}
-        >
-          <Ionicons
-            name={transferred ? 'checkmark-circle' : 'swap-horizontal'}
-            size={18}
-            color={transferred ? transferStyle.fg : colors.inkSecondary}
-          />
-          <Text
-            variant="small"
-            color={transferred ? transferStyle.fg : colors.inkSecondary}
-            style={{ flex: 1, fontWeight: '600' }}
-          >
-            {transferred ? 'Money transferred to account' : 'Mark money transferred'}
-          </Text>
-          {!transferred && summary.totalMinor > 0 ? (
-            <Text variant="caption" tone="muted">
-              {formatMoney(summary.totalMinor, { compact: true })}
-            </Text>
-          ) : null}
-        </Pressable>
-        )}
 
         <ProgressBar pct={paidPct} color={category.color} height={6} />
       </View>

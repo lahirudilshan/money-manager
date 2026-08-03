@@ -9,7 +9,7 @@ import { SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { SmsDraftCard } from '../../src/components/SmsDraftCard';
 import { UpgradeSheet } from '../../src/components/UpgradeSheet';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import { Divider, Empty, FundingBar, GradientCard, Label, Row, Stat, Surface, Text } from '../../src/components/ui';
+import { Divider, Empty, GradientCard, Label, Row, Stat, Surface, Text } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
 import { canUse } from '../../src/core/plans';
@@ -457,74 +457,129 @@ export default function DashboardScreen() {
         </Surface>
       ) : null}
 
-      {/* Per-account transfers — "how much do I move where". */}
+      {/*
+        Per-account transfers — "how much do I move where".
+
+        A once-a-month sweep after the salary lands: read the amount, open the
+        banking app, move it, mark it. One row per account with an explicit
+        button, because the action deserves a label — a bare checkbox does not
+        say what ticking it MEANS, and this one writes through to every category
+        the account funds.
+      */}
       {accounts.length > 0 ? (
         <View style={{ gap: space.sm }}>
           <Row justify="space-between" align="center">
             <Label>MONEY TO MOVE</Label>
             <Text variant="figure" color={totalToTransfer > 0 ? colors.pending : colors.completed}>
-              {formatMoney(totalToTransfer)}
+              {totalToTransfer > 0 ? formatMoney(totalToTransfer) : 'All moved'}
             </Text>
           </Row>
 
-          <View style={{ gap: space.sm }}>
-            {accounts.map((account) => {
+          {/* One surface, hairline-divided: with three or four accounts this
+              is a list to work down, and a card each turned it into a scroll. */}
+          <Surface padded={false}>
+            {accounts.map((account, index) => {
               const brand = resolveBrand({
                 bankId: account.card.bankId,
                 bankName: account.card.bankName,
                 name: account.card.name,
               });
               const done = account.toTransferMinor === 0;
-              const pct =
-                account.plannedMinor > 0
-                  ? (account.movedMinor / account.plannedMinor) * 100
-                  : 100;
-
               const label = accountLabel(account.card);
+
               return (
-                <Surface
-                  key={account.card.id}
-                  onPress={() => router.push(`/account/${account.card.id}`)}
-                  style={{ gap: space.md }}
-                >
-                  <Row gap={space.md}>
-                    <BankLogo brand={brand} size={42} />
-                    <View style={{ flex: 1 }}>
-                      <Text variant="bodyStrong" numberOfLines={1}>
-                        {label.primary}
-                      </Text>
-                      <Text variant="caption" tone="muted" numberOfLines={1}>
-                        {label.secondary ??
-                          account.categoryNames.slice(0, 3).join(' · ') ??
-                          'No categories'}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text variant="figureLarge" color={done ? colors.completed : colors.ink}>
-                        {done ? 'Done' : formatMoney(account.toTransferMinor, { compact: true })}
-                      </Text>
-                      <Text variant="caption" tone="muted">
-                        {done
-                          ? 'all transferred'
-                          : `${account.pendingCount} line${account.pendingCount === 1 ? '' : 's'} to fund`}
-                      </Text>
-                    </View>
-                  </Row>
+                <View key={account.card.id}>
+                  {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+                  <Row
+                    gap={space.md}
+                    style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
+                  >
+                    {/* Identity and amount — tapping opens the account detail. */}
+                    <Pressable
+                      onPress={() => router.push(`/account/${account.card.id}`)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${label.primary} details`}
+                      style={({ pressed }) => ({
+                        flex: 1,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: space.md,
+                        opacity: pressed ? 0.7 : 1,
+                      })}
+                    >
+                      <BankLogo brand={brand} size={34} />
+                      {/* `minWidth: 0` so the NAME truncates when the figure is
+                          long, rather than the row overflowing. The amount is
+                          the thing being acted on, so it keeps its space. */}
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text variant="bodyStrong" numberOfLines={1} tone={done ? 'muted' : 'ink'}>
+                          {label.primary}
+                        </Text>
+                        <Text variant="caption" tone="muted" numberOfLines={1}>
+                          {/* What the account is FOR — the categories it funds
+                              are the reason a given sum goes there. */}
+                          {account.categoryNames.slice(0, 3).join(' · ') || 'No categories'}
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        {/* Full figure, not compact: this is the number the user
+                            types into their banking app, and "4.1K" is not a
+                            number you can transfer. */}
+                        <Text
+                          variant="figure"
+                          color={done ? colors.completed : colors.ink}
+                          numberOfLines={1}
+                        >
+                          {done
+                            ? formatMoney(account.plannedMinor)
+                            : formatMoney(account.toTransferMinor)}
+                        </Text>
+                        <Text variant="caption" tone="muted">
+                          {done ? 'moved' : 'click to move'}
+                        </Text>
+                      </View>
+                    </Pressable>
 
-                  <FundingBar pct={pct} color={brand.color} surplus={done} />
+                    {/*
+                      The check sits LAST, right after the figure it settles —
+                      the eye reads the account, then the amount, then ticks it
+                      off, which is the order the task actually happens in.
 
-                  <Row justify="space-between">
-                    <Text variant="caption" tone="muted">
-                      {formatMoney(account.movedMinor)} moved
-                    </Text>
-                    <Text variant="caption" tone="muted">
-                      of {formatMoney(account.plannedMinor)}
-                    </Text>
+                      Its own hit target so ticking never opens the detail by
+                      accident, with `hitSlop` giving a thumb-sized area without
+                      making the circle itself heavy.
+                    */}
+                    <Pressable
+                      onPress={() => state.toggleAccountTransfer(account.card.id)}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: done }}
+                      accessibilityLabel={
+                        done
+                          ? `${label.primary}, money moved. Tap to undo.`
+                          : `Mark money moved to ${label.primary}`
+                      }
+                      hitSlop={12}
+                      style={({ pressed }) => ({
+                        width: 28,
+                        height: 28,
+                        borderRadius: 14,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: done ? colors.completed : 'transparent',
+                        borderWidth: done ? 0 : 1.5,
+                        borderColor: colors.hairline,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      {done ? (
+                        <Ionicons name="checkmark" size={17} color={colors.inkInverse} />
+                      ) : null}
+                    </Pressable>
                   </Row>
-                </Surface>
+                </View>
               );
             })}
-          </View>
+          </Surface>
         </View>
       ) : null}
 
@@ -787,9 +842,12 @@ function ReminderRow({
           <Text variant="caption" color={accent} style={{ fontWeight: '700' }}>
             {when}
           </Text>
+          {/* Category only. "money ready" used to be appended when the account
+              had been funded, but whether the cash is sitting there is a
+              different question from whether this bill is due — and on an
+              overdue row it read as reassurance next to an alarm. */}
           <Text variant="caption" tone="muted" numberOfLines={1}>
             · {reminder.categoryName}
-            {reminder.categoryTransferred ? ' · money ready' : ''}
           </Text>
         </Row>
       </View>

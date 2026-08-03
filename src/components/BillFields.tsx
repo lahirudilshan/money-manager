@@ -171,7 +171,10 @@ export function BillFields({
       {draft.plan.enabled && draft.frequency === 'yearly' ? (
         <View style={{ alignItems: 'center', gap: 4 }}>
           <Label>MONTHLY SET-ASIDE</Label>
-          <Row gap={space.xs} align="center">
+          {/* Matches the editable hero in `AmountField` — same 42px digits, so
+              the same gap, or the read-only figure would sit tighter than the
+              one the user types into. */}
+          <Row gap={space.sm} align="center">
             <Text variant="title" tone="muted">
               {state.currency}
             </Text>
@@ -224,7 +227,7 @@ export function BillFields({
       ) : null}
 
       <FrequencyPicker
-        label="How often?"
+        label="How is it paid?"
         value={draft.frequency}
         onChange={draft.setFrequency}
         includeUnplanned

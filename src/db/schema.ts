@@ -521,6 +521,32 @@ export const FREQUENCY_LABEL: Record<SubcategoryFrequency, string> = {
 };
 
 /**
+ * Pill-sized labels, for pickers that put every option on one row.
+ *
+ * Only differs where the full label is too long to sit beside its siblings —
+ * everything else falls back to `FREQUENCY_LABEL`, so there is one word to
+ * change and no risk of two spellings of the same option drifting apart.
+ *
+ * The full wording is still what appears in prose ("Spending budget ·
+ * Rs 20,000") and in accessibility labels, where there is room for it and the
+ * extra word is what makes the option self-explanatory.
+ */
+export const FREQUENCY_SHORT_LABEL: Record<SubcategoryFrequency, string> = {
+  ...FREQUENCY_LABEL,
+  /*
+   * "Ongoing" rather than "Spending budget".
+   *
+   * The picker asks how a bill is paid, and the other three options answer it
+   * ("Monthly", "One-time", "Yearly"). "Spending budget" answers a different
+   * question — what kind of line it is — so as a fourth option it read as a
+   * category error. "Ongoing" sits on the same axis as its siblings: they all
+   * describe a payment pattern, and this is the one that simply keeps
+   * happening rather than landing on a schedule.
+   */
+  unplanned: 'Ongoing',
+};
+
+/**
  * One line of help per cadence, shown under the picker. The spending-budget
  * option needs it most — it behaves differently from the other three (many
  * entries summed, never ticked "paid" as a whole) and that is not obvious
@@ -530,7 +556,7 @@ export const FREQUENCY_HINT: Record<SubcategoryFrequency, string> = {
   monthly: 'The same bill every month.',
   one_time: 'A single cost, counted in one month only.',
   yearly: 'Once a year — you can save toward it monthly.',
-  unplanned: 'A monthly budget you spend down entry by entry, like groceries.',
+  unplanned: 'Lots of small spends against a monthly budget, like groceries.',
 };
 
 /** Frequencies offered as a category's default cadence (no unplanned). */
@@ -539,6 +565,22 @@ export const CATEGORY_DEFAULT_FREQUENCIES: SubcategoryFrequency[] = [
   'one_time',
   'yearly',
 ];
+
+/**
+ * True for a line whose amount is contractually fixed.
+ *
+ * The gate for exact-amount SMS matching: a lease or loan installment is the
+ * same figure every month, so a bank alert landing on it to the cent is strong
+ * evidence, whereas a utility hitting its estimate exactly is coincidence.
+ *
+ * Derived from `loanId` alone rather than a user-set field. A line created from
+ * the loan table IS an installment by construction, which is the case this
+ * matters for; asking the user to classify every other bill was a question that
+ * did not earn its place on the form.
+ */
+export function isFixedAmount(subcategory: Pick<Subcategory, 'loanId'>): boolean {
+  return subcategory.loanId !== null;
+}
 
 /** True for frequencies that support the "save up for this" saving plan. Per
  * product rule, only yearly lines can save up toward a future due date. */

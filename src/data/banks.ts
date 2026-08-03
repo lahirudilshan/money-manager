@@ -254,14 +254,20 @@ export function resolveBrand(input: {
 /**
  * How an account reads everywhere in the app.
  *
- * A **nickname** wins outright when the user has set one, with the bank
- * demoted to the secondary line: someone holding three HNB accounts cannot tell
- * them apart from "HNB ••4150" repeated three times, and the whole point of
- * naming one "Salary" is to see that word first.
+ * The headline is always what the USER would call this account, in descending
+ * order of how much it tells them apart:
  *
- * Otherwise the *bank* is the headline ("HNB", "Sampath") and the account's own
- * name is secondary. Falls back gracefully — a hand-typed account with no bank
- * shows its name as the primary and nothing secondary.
+ *   1. the **nickname**, when set. Someone holding three HNB accounts cannot
+ *      tell them apart from "HNB ••4150" three times, and the whole point of
+ *      naming one "Salary" is to see that word first.
+ *   2. the account's own **name**, when it is shorter than the bank's official
+ *      one. Typing "BOC" for "Bank of Ceylon" is the user abbreviating on
+ *      purpose, and showing the long form back at them ignores that — it also
+ *      crowds out the figure beside it in a list row.
+ *   3. the **bank** name, for an account the user never named distinctly.
+ *
+ * Falls back gracefully — a hand-typed account with no bank at all shows its
+ * name as the primary and nothing secondary.
  */
 export function accountLabel(card: {
   bankId?: string | null;
@@ -278,11 +284,24 @@ export function accountLabel(card: {
     return { primary: nickname, secondary: bank ?? (card.name !== nickname ? card.name : null) };
   }
 
-  // With a known bank: bank is primary, the custom name is secondary (unless
-  // it's the same string). Without one: the custom name stands alone.
+  const name = card.name?.trim();
+
   if (bank) {
-    const secondary = card.name && card.name !== bank ? card.name : null;
+    /*
+     * A shorter self-chosen name beats the bank's official one.
+     *
+     * "BOC" against "Bank of Ceylon" is the user's own abbreviation, and it is
+     * the string they recognise at a glance. Compared by length rather than by
+     * a hard-coded abbreviation table, since that generalises to any bank and
+     * any shorthand the user invents.
+     */
+    if (name && name !== bank && name.length < bank.length) {
+      return { primary: name, secondary: bank };
+    }
+
+    const secondary = name && name !== bank ? name : null;
     return { primary: bank, secondary };
   }
-  return { primary: card.name, secondary: null };
+
+  return { primary: name || card.name, secondary: null };
 }

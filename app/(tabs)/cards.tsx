@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { BankCardTile } from '../../src/components/BankCardTile';
 import { BankLogo } from '../../src/components/BankLogo';
 import { Field } from '../../src/components/forms';
@@ -10,7 +10,7 @@ import { useTabBarClearance } from '../../src/components/TabBar';
 import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
 import { accountLabel, BANKS } from '../../src/data/banks';
 import { useBrand } from '../../src/hooks/useBrand';
-import { selectCardViews, useAppStore, type CardView } from '../../src/store/useAppStore';
+import { selectCardViews, selectCategoryViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import type { Card } from '../../src/db/schema';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -33,8 +33,28 @@ export default function CardsScreen() {
   const cardEntries = state.cards.filter((c) => c.isCard);
   const accountViews = views.filter((v) => !v.card.isCard);
 
+  /*
+   * `edit=<id>` opens this screen straight into that entry's form.
+   *
+   * The account detail route lives elsewhere (app/account/[id].tsx) but the
+   * form lives here, so "Edit details" from there navigates in with this param
+   * rather than the form being duplicated in two places.
+   */
+  const { edit } = useLocalSearchParams<{ edit?: string }>();
+
   // `formId` null = closed; '' = creating new; an id = editing that entry.
-  const [formId, setFormId] = useState<string | null>(null);
+  const [formId, setFormId] = useState<string | null>(edit ?? null);
+
+  /*
+   * Re-open when the param arrives on an ALREADY-MOUNTED screen.
+   *
+   * The `useState` initializer above only runs on first mount, so navigating
+   * here from the account detail — a tab the user has usually already visited —
+   * set the param but left the form closed, and "Edit" appeared to do nothing.
+   */
+  React.useEffect(() => {
+    if (edit) setFormId(edit);
+  }, [edit]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const detailCard = detailId ? state.cards.find((c) => c.id === detailId) : undefined;
 
@@ -230,6 +250,28 @@ function DetailModal({
   const [revealed, setRevealed] = useState(false);
   const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
 
+  /**
+   * The categories drawing on this account, each with what it costs a month.
+   *
+   * `view.categoryNames` carries only names, which was all the old list showed.
+   * Resolving the categories properly gives the icon, colour and total that make
+   * the section answer "how much of this account is already spoken for".
+   */
+  const funded = useMemo(
+    () =>
+      selectCategoryViews(state)
+        .filter((cv) => cv.category.cardId === card.id)
+        .map((cv) => ({
+          id: cv.category.id,
+          name: cv.category.name,
+          color: cv.category.color,
+          icon: cv.category.icon,
+          totalMinor: cv.summary.totalMinor,
+          count: cv.subcategories.length,
+        })),
+    [state, card.id],
+  );
+
   function confirmDelete() {
     Alert.alert(`Delete ${card.name}?`, 'Categories pointing at it will need a new account.', [
       { text: 'Cancel', style: 'cancel' },
@@ -252,6 +294,7 @@ function DetailModal({
       icon={card.isCard ? 'card-outline' : 'wallet-outline'}
       iconColor={brand.color}
       scroll
+      footer={<GradientButton label="Edit details" icon="create-outline" onPress={onEdit} />}
     >
           <Row gap={space.md}>
             <BankLogo brand={brand} size={48} />
@@ -275,8 +318,9 @@ function DetailModal({
                       ? revealed
                         ? card.cardNumber
                         : `•••• •••• •••• ${card.cardNumber.slice(-4)}`
-                      : '—'
+                      : 'Not set'
                   }
+                  muted={!card.cardNumber}
                   action={
                     card.cardNumber
                       ? { icon: revealed ? 'eye-off-outline' : 'eye-outline', onPress: () => setRevealed((v) => !v) }
@@ -284,19 +328,31 @@ function DetailModal({
                   }
                 />
                 <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="Expiry" value={card.expiry || '—'} />
+                <DetailRow label="Expiry" value={card.expiry || 'Not set'} muted={!card.expiry} />
                 <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="CVV" value={card.cvv ? (revealed ? card.cvv : '•••') : '—'} />
+                <DetailRow
+                  label="CVV"
+                  value={card.cvv ? (revealed ? card.cvv : '•••') : 'Not set'}
+                  muted={!card.cvv}
+                />
               </>
             ) : (
               <>
-                <DetailRow label="Account number" value={card.accountNumber || '—'} />
+                <DetailRow
+                  label="Account number"
+                  value={card.accountNumber || 'Not set'}
+                  muted={!card.accountNumber}
+                />
                 <Divider style={{ marginHorizontal: space.lg }} />
                 <DetailRow label="Bank" value={card.bankName ?? brand.name} />
                 <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="Branch" value={card.branch || '—'} />
+                <DetailRow label="Branch" value={card.branch || 'Not set'} muted={!card.branch} />
                 <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="Bank code" value={card.bankCode || '—'} />
+                <DetailRow
+                  label="Bank code"
+                  value={card.bankCode || 'Not set'}
+                  muted={!card.bankCode}
+                />
               </>
             )}
           </Surface>
@@ -304,31 +360,69 @@ function DetailModal({
           {/* Categories funded from this account — accounts only. */}
           {!card.isCard ? (
             <View style={{ gap: space.sm }}>
-              <Label>CATEGORIES USING THIS ACCOUNT</Label>
-              <Surface padded={false} style={{ paddingVertical: space.xs }}>
-                {view && view.categoryNames.length > 0 ? (
-                  view.categoryNames.map((n, i) => (
-                    <View key={n}>
+              <Label>WHAT THIS FUNDS</Label>
+              {/*
+                Each category with its own icon, colour and monthly total.
+
+                It used to be a list of bare names against one grey glyph, which
+                answered "which categories" but not the question actually being
+                asked here — how much of this account is spoken for, and by what.
+                The figure is what makes the list worth reading.
+              */}
+              {funded.length > 0 ? (
+                <Surface padded={false}>
+                  {funded.map((cat, i) => (
+                    <View key={cat.id}>
                       {i > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
-                      <Row gap={space.sm} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
-                        <Ionicons name="albums-outline" size={16} color={colors.inkMuted} />
-                        <Text variant="small">{n}</Text>
+                      <Row
+                        gap={space.md}
+                        style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
+                      >
+                        <View
+                          style={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 10,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: `${cat.color}1A`,
+                          }}
+                        >
+                          <Ionicons
+                            name={(cat.icon as never) ?? 'albums-outline'}
+                            size={16}
+                            color={cat.color}
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text variant="body" numberOfLines={1}>
+                            {cat.name}
+                          </Text>
+                          <Text variant="caption" tone="muted">
+                            {cat.count} bill{cat.count === 1 ? '' : 's'}
+                          </Text>
+                        </View>
+                        <Text variant="figure" color={cat.color}>
+                          {formatMoney(cat.totalMinor)}
+                        </Text>
                       </Row>
                     </View>
-                  ))
-                ) : (
-                  <Text variant="caption" tone="muted" style={{ padding: space.lg }}>
+                  ))}
+                </Surface>
+              ) : (
+                <Surface>
+                  <Text variant="caption" tone="muted">
                     No categories draw from this account yet.
                   </Text>
-                )}
-              </Surface>
+                </Surface>
+              )}
             </View>
           ) : null}
 
-          <Row gap={space.sm}>
-            <Button label="Edit" icon="create-outline" variant="secondary" onPress={onEdit} style={{ flex: 1 }} />
-            <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} style={{ flex: 1 }} />
-          </Row>
+          {/* Delete stays in the scroll body, deliberately. A destructive action
+              pinned under the thumb beside the primary one is how accidents
+              happen — reaching it should take a scroll. */}
+          <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} />
     </BottomSheet>
   );
 }
@@ -349,7 +443,15 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   const [name, setName] = useState(existing?.name ?? '');
   /** The user's own label for this account, shown ahead of the bank in lists. */
   const [nickname, setNickname] = useState(existing?.nickname ?? '');
-  const [last4, setLast4] = useState(existing?.last4 ?? '');
+  /*
+   * Derived only — there is no field for it any more.
+   *
+   * The last four digits are what bank SMS quote ("account:1380***4150"), so
+   * they still drive matching; they are taken from the account/card number
+   * below rather than asked for twice. Kept in state so an existing value
+   * survives an edit that does not touch the number.
+   */
+  const [last4] = useState(existing?.last4 ?? '');
   // Card fields
   const [cardNumber, setCardNumber] = useState(existing?.cardNumber ?? '');
   const [cvv, setCvv] = useState(existing?.cvv ?? '');
@@ -361,11 +463,6 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   // What was already in the account before the app started tracking it. The
   // schema has always had this and the balance calculation reads it, but nothing
   // ever set it, so every account opened at zero.
-  const [openingBalance, setOpeningBalance] = useState(
-    existing && existing.openingBalanceMinor !== 0
-      ? String(toMajor(existing.openingBalanceMinor))
-      : '',
-  );
 
   const brand = bankId ? BANKS.find((b) => b.id === bankId) : undefined;
   const canSave = Boolean(name.trim() || brand);
@@ -402,12 +499,59 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
       accountNumber: !isCard ? accountNumber.trim() || null : null,
       branch: !isCard ? branch.trim() || null : null,
       bankCode: !isCard ? bankCode.trim() || null : null,
-      openingBalanceMinor: parseAmount(openingBalance) ?? 0,
+      // Preserved, not edited here: the field was removed from this form, and
+      // writing a parsed-from-nothing 0 would silently wipe a real balance on
+      // every save.
+      openingBalanceMinor: existing?.openingBalanceMinor ?? 0,
     };
 
     if (editId) state.updateCard(editId, patch);
     else state.addCard({ ...patch, sortOrder: state.cards.length });
     onClose();
+  }
+
+  /*
+   * The bank list is a STEP inside this sheet, not a sheet of its own.
+   *
+   * Twenty brands need the full height to be scannable, but stacking a second
+   * modal on top of a form loses the sense of where you are — and dismissing it
+   * risks dismissing the form underneath. Swapping the sheet's own body, with a
+   * back button in place of the icon, keeps one presentation and one obvious way
+   * out of each step.
+   */
+  const [pickingBank, setPickingBank] = React.useState(false);
+  /*
+   * The bank search text lives HERE, not inside `BankList`.
+   *
+   * Choosing a bank swaps this component's whole returned tree for a different
+   * `BottomSheet`, so a `useState` inside the list is torn down and re-created
+   * on the very first keystroke — the field cleared itself after one letter and
+   * the filter never ran. Owning it at the level that survives the swap is what
+   * makes typing work at all.
+   */
+  const [bankQuery, setBankQuery] = React.useState('');
+
+  if (pickingBank) {
+    return (
+      <BottomSheet
+        visible
+        onClose={onClose}
+        onBack={() => setPickingBank(false)}
+        title="Choose bank"
+        scroll
+      >
+        <BankList
+          selectedId={bankId}
+          query={bankQuery}
+          onQueryChange={setBankQuery}
+          onSelect={(id) => {
+            setBankId(id);
+            setPickingBank(false);
+            setBankQuery('');
+          }}
+        />
+      </BottomSheet>
+    );
   }
 
   return (
@@ -437,28 +581,33 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             onSelect={(key) => setIsCard(key === 'card')}
           />
 
-          {/* Step 2: bank — a full grid so every option is visible at a glance. */}
-          <BankPicker selectedId={bankId} onSelect={setBankId} />
+          {/* Step 2: bank — one row that opens the list as its own step. */}
+          <BankField selectedId={bankId} onPress={() => setPickingBank(true)} />
 
-          {/* Step 3: name. */}
+          {/* The full name — what this account is, written out. */}
           <Field
-            label="Name"
+            label="Full name"
             value={name}
             onChangeText={setName}
-            placeholder={isCard ? 'e.g. HNB Visa' : 'e.g. Salary account'}
+            placeholder={isCard ? 'e.g. HNB Visa Platinum' : 'e.g. Salary account'}
           />
 
-          {/* Step 3b: the nickname. Optional, and the thing every list leads
-              with once set — which is what makes three accounts at the same
-              bank tellable apart at a glance. */}
+          {/*
+            The short name, which is what tight rows actually show.
+
+            Labelled "Short name" rather than "Nickname" because that is the job
+            it does: the dashboard and the accounts list have room for a word,
+            not a sentence, and this is the word. Optional — a full name that is
+            already short needs no second version of itself.
+          */}
           <Field
-            label="Nickname (optional)"
+            label="Short name (optional)"
             value={nickname}
             onChangeText={setNickname}
-            placeholder={isCard ? 'e.g. Everyday card' : 'e.g. Salary, Joint, Rent'}
+            placeholder={isCard ? 'e.g. Visa' : 'e.g. Salary, Joint, Rent'}
           />
           <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
-            Shown instead of the bank name in your accounts list.
+            Used in lists where there is only room for a word.
           </Text>
 
           {/* Step 4: the identifying details for each type. */}
@@ -499,43 +648,6 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
             </>
           )}
 
-          {/* The digits bank SMS quote ("account:1380***4150"). Filled in from the
-              number above when one is entered, but editable on its own — the
-              alerts only ever show the last four, so this is all that is needed
-              to recognise them, and it saves typing a full number just to get
-              SMS matching working. */}
-          <View style={{ gap: 4 }}>
-            <Field
-              label="Last 4 digits"
-              value={last4}
-              onChangeText={(text) => setLast4(text.replace(/\D/g, '').slice(-4))}
-              placeholder={
-                (isCard ? cardNumber : accountNumber).replace(/\D/g, '').slice(-4) || 'e.g. 4150'
-              }
-              keyboardType="numeric"
-            />
-            <Text variant="caption" tone="muted">
-              Used to match bank SMS to this {isCard ? 'card' : 'account'}.
-            </Text>
-          </View>
-
-          {/* What is in the account today. The balance shown on the cards screen
-              is this plus what has been funded in, minus what has been paid out,
-              so without it every account reads as starting from zero. */}
-          <View style={{ gap: 4 }}>
-            <Field
-              label={isCard ? 'Current balance' : 'Balance right now'}
-              value={openingBalance}
-              onChangeText={setOpeningBalance}
-              placeholder="0"
-              keyboardType="numeric"
-            />
-            <Text variant="caption" tone="muted">
-              {isCard
-                ? 'What this card holds today — transfers and payments adjust it from here.'
-                : `What is in the account today, in ${state.currency}. Leave blank to start from zero.`}
-            </Text>
-          </View>
     </BottomSheet>
   );
 }
@@ -614,56 +726,201 @@ function Segmented({
 }
 
 /**
- * Bank chooser as a wrapped grid — every brand visible at once (no hidden
- * horizontal scroll), each a logo + short name tile with a clear selected ring.
+ * The bank, as one row on the form — logo, name, and a chevron into the list.
+ *
+ * Replaces a permanently-expanded grid: twenty brands at four across is five
+ * rows of tiles, which pushed every other field below the fold. Picking a bank
+ * is a once-per-account decision, so the form only needs to show WHICH bank,
+ * with the alternatives one tap away.
  */
-function BankPicker({
+function BankField({
   selectedId,
-  onSelect,
+  onPress,
 }: {
   selectedId: string | null;
-  onSelect: (id: string | null) => void;
+  onPress: () => void;
 }) {
   const { colors, radius, space } = useTheme();
+  const brand = selectedId ? BANKS.find((b) => b.id === selectedId) : undefined;
 
   return (
     <View style={{ gap: space.sm }}>
       <Label>Bank</Label>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-        {BANKS.map((brand) => {
-          const selected = selectedId === brand.id;
-          return (
-            <Pressable
-              key={brand.id}
-              onPress={() => onSelect(selected ? null : brand.id)}
-              accessibilityRole="button"
-              accessibilityState={{ selected }}
-              accessibilityLabel={brand.name}
-              style={({ pressed }) => ({
-                width: '23%',
-                alignItems: 'center',
-                gap: 5,
-                paddingVertical: space.sm,
-                borderRadius: radius.md,
-                borderWidth: 1.5,
-                borderColor: selected ? brand.color : colors.hairline,
-                backgroundColor: selected ? `${brand.color}12` : colors.surface,
-                opacity: pressed ? 0.75 : 1,
-              })}
-            >
-              <BankLogo brand={brand} size={38} />
-              <Text
-                variant="caption"
-                color={selected ? colors.ink : colors.inkMuted}
-                numberOfLines={1}
-                style={{ maxWidth: 60, fontWeight: selected ? '700' : '500' }}
-              >
-                {brand.shortName}
-              </Text>
-            </Pressable>
-          );
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={brand ? `Bank: ${brand.name}. Tap to change.` : 'Choose a bank'}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: space.md,
+          paddingHorizontal: space.md,
+          paddingVertical: space.sm,
+          borderRadius: radius.md,
+          borderWidth: 1,
+          borderColor: colors.hairline,
+          backgroundColor: colors.surface,
+          opacity: pressed ? 0.75 : 1,
         })}
+      >
+        {brand ? (
+          <BankLogo brand={brand} size={32} />
+        ) : (
+          <View
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: radius.sm,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colors.surfaceSunken,
+            }}
+          >
+            <Ionicons name="business-outline" size={16} color={colors.inkMuted} />
+          </View>
+        )}
+        <Text
+          variant="body"
+          style={{ flex: 1 }}
+          tone={brand ? 'ink' : 'muted'}
+          numberOfLines={1}
+        >
+          {brand?.name ?? 'Choose a bank'}
+        </Text>
+        <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * Every bank as a full-width row: logo, name, and a tick on the current one.
+ *
+ * A list rather than a grid of tiles. Twenty brands at four across meant a
+ * 60pt-wide label under each logo, so anything longer than "Sampath" was
+ * truncated and the user was really picking by logo alone. Full-width rows show
+ * the whole name, sort scannably, and give a proper touch target.
+ *
+ * Search matches the SHORT name as well as the full one, because that is what
+ * people actually type — "BOC", "HNB", "NTB" — and a filter that only knew
+ * "Bank of Ceylon" would come back empty for the most natural query.
+ */
+function BankList({
+  selectedId,
+  query,
+  onQueryChange,
+  onSelect,
+}: {
+  selectedId: string | null;
+  /** Controlled by the form — see `bankQuery` there for why it lives outside. */
+  query: string;
+  onQueryChange: (next: string) => void;
+  onSelect: (id: string | null) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  const matches = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return BANKS;
+    return BANKS.filter(
+      (brand) =>
+        brand.name.toLowerCase().includes(q) || brand.shortName.toLowerCase().includes(q),
+    );
+  }, [query]);
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: space.sm,
+          paddingHorizontal: space.md,
+          borderRadius: radius.md,
+          borderWidth: 1,
+          borderColor: colors.hairline,
+          backgroundColor: colors.surface,
+        }}
+      >
+        <Ionicons name="search" size={16} color={colors.inkMuted} />
+        <TextInput
+          value={query}
+          onChangeText={onQueryChange}
+          placeholder="Search bank…"
+          placeholderTextColor={colors.inkMuted}
+          autoCorrect={false}
+          accessibilityLabel="Search bank"
+          style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
+        />
+        {query ? (
+          <Pressable
+            onPress={() => onQueryChange('')}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+            hitSlop={10}
+          >
+            <Ionicons name="close-circle" size={16} color={colors.inkMuted} />
+          </Pressable>
+        ) : null}
       </View>
+
+      {matches.length === 0 ? (
+        <Surface>
+          <Text variant="caption" tone="muted">
+            No bank matches “{query.trim()}”. Leave it unset and just name the account.
+          </Text>
+        </Surface>
+      ) : (
+        <Surface padded={false}>
+          {matches.map((brand, index) => {
+            const selected = selectedId === brand.id;
+            return (
+              <View key={brand.id}>
+                {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+                <Pressable
+                  // Tapping the current one clears it, so "no particular bank"
+                  // stays reachable without a separate "None" row.
+                  onPress={() => onSelect(selected ? null : brand.id)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={brand.name}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: space.md,
+                    paddingHorizontal: space.lg,
+                    paddingVertical: space.sm + 2,
+                    backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                  })}
+                >
+                  <BankLogo brand={brand} size={34} />
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      variant="body"
+                      style={{ fontWeight: selected ? '700' : '400' }}
+                      numberOfLines={1}
+                    >
+                      {brand.name}
+                    </Text>
+                    {/* The short name, shown only when it adds something. It is
+                        what the user is most likely to have typed to get here,
+                        and repeating it under an identical full name would be
+                        noise rather than confirmation. */}
+                    {brand.shortName.toLowerCase() !== brand.name.toLowerCase() ? (
+                      <Text variant="caption" tone="muted" numberOfLines={1}>
+                        {brand.shortName}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {selected ? (
+                    <Ionicons name="checkmark-circle" size={20} color={colors.accent} />
+                  ) : null}
+                </Pressable>
+              </View>
+            );
+          })}
+        </Surface>
+      )}
     </View>
   );
 }

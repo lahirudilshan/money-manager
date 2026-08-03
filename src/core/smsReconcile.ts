@@ -17,6 +17,7 @@ import { matchMerchant, type MatchConfidence, type MerchantRule } from './mercha
 import type { CatalogSuggestion } from './catalogSync';
 import type { Minor } from './money';
 
+
 /** The minimum a leaf's plan/actual and the SMS must be within to count as an
  * amount match, as a fraction — utilities vary month to month. */
 const AMOUNT_TOLERANCE = 0.15;
@@ -123,7 +124,10 @@ export interface BoardSlice {
     plannedMinor: Minor;
     categoryId: string;
     cardId: string | null;
-    /** Set when this line is a loan installment — targets loan-payment SMS. */
+    /**
+     * Set when this line is a loan installment — targets loan-payment SMS, and
+     * marks the line as a fixed commitment for exact-amount matching.
+     */
     loanId: string | null;
   }[];
   categories: readonly { id: string; name: string; cardId: string | null }[];
@@ -208,32 +212,12 @@ function amountScore(a: Minor, b: Minor): number {
  * `loanId` is definitive, and the lease/rental/instalment vocabulary covers the
  * fixed commitments the loan table does not model.
  */
-function isFixedCommitment(
-  sub: BoardSlice['subcategories'][number],
-  billText: string,
-): boolean {
-  if (sub.loanId) return true;
-  return FIXED_COMMITMENT_WORDS.some((pattern) => pattern.test(billText));
+export function isFixedCommitment(sub: BoardSlice['subcategories'][number]): boolean {
+  // A loan-linked line is an installment by construction — the same figure
+  // every month — which is exactly what makes an exact amount match evidence
+  // rather than coincidence. See `isFixedAmount` in db/schema.ts.
+  return sub.loanId !== null;
 }
-
-/**
- * Words naming a line that bills the same figure every period.
- *
- * `rent` and `insurance` are here alongside the loan vocabulary because they
- * behave identically for this purpose — a fixed sum on a schedule — and they are
- * among the most common lines a user creates by hand rather than through the
- * loan table.
- */
-const FIXED_COMMITMENT_WORDS: RegExp[] = [
-  /\bloan\b/i,
-  /\blease\b/i,
-  /\bleasing\b/i,
-  /\binstal{1,2}ment\b/i,
-  /\brent(?:al)?\b/i,
-  /\binsurance\b/i,
-  /\bpremium\b/i,
-  /\bsubscription\b/i,
-];
 
 /**
  * Whether the SMS named anything the board could reason about.
@@ -336,7 +320,7 @@ function scoreSubcategory(
    *
    * Capped below 1 so a genuine merchant match always outranks it.
    */
-  if (!messageNamesSomething(parsed, hint) && isFixedCommitment(sub, billText)) {
+  if (!messageNamesSomething(parsed, hint) && isFixedCommitment(sub)) {
     const exact = exactAmountScore(parsed.amountMinor, sub.plannedMinor);
     if (exact > 0) return Math.min(0.85, base + exact * 0.5);
   }

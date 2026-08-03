@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ALL_ICONS, CATEGORY_ICONS } from '../data/categoryIcons';
 import {
   CATEGORY_DEFAULT_FREQUENCIES,
+  FREQUENCY_SHORT_LABEL,
   FREQUENCY_HINT,
   FREQUENCY_LABEL,
   SUBCATEGORY_FREQUENCIES,
@@ -169,6 +170,15 @@ export function NameWithIconField({
 export interface SelectOption {
   key: string;
   label: string;
+  /**
+   * What a screen reader says, when the visible label is an abbreviation.
+   *
+   * A pill in a one-row selector is shortened to fit ("Budget" for "Spending
+   * budget"), and abbreviating for space is a visual compromise that should not
+   * reach someone who cannot see the layout it was made for. Defaults to
+   * `label`.
+   */
+  spokenLabel?: string;
   icon?: keyof typeof Ionicons.glyphMap;
   color?: string;
 }
@@ -179,18 +189,38 @@ export function PillSelect({
   options,
   selectedKey,
   onSelect,
+  singleRow = false,
 }: {
   label?: string;
   options: readonly SelectOption[];
   selectedKey: string | null;
   onSelect: (key: string) => void;
+  /**
+   * Keep every option on ONE line, sharing the width equally.
+   *
+   * Opt-in rather than the default because it only suits short, comparable
+   * labels. A wrapped set of pills reads as a loose bag of choices, which is
+   * right for something like an icon picker but wrong for a small fixed set
+   * that is really one decision — those read better as a single segmented row,
+   * where the options line up and can be compared at a glance.
+   *
+   * Labels are allowed to shrink and truncate rather than pushing the row wider
+   * than its container, since the hint line underneath carries the full meaning.
+   */
+  singleRow?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
 
   return (
     <View style={{ gap: space.sm }}>
       {label ? <Label>{label}</Label> : null}
-      <View style={{ flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          gap: singleRow ? 6 : space.sm,
+          flexWrap: singleRow ? 'nowrap' : 'wrap',
+        }}
+      >
         {options.map((option) => {
           const selected = selectedKey === option.key;
           const accent = option.color ?? colors.accent;
@@ -200,13 +230,18 @@ export function PillSelect({
               onPress={() => onSelect(option.key)}
               accessibilityRole="radio"
               accessibilityState={{ selected }}
-              accessibilityLabel={option.label}
+              accessibilityLabel={option.spokenLabel ?? option.label}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
+                justifyContent: singleRow ? 'center' : undefined,
                 gap: 6,
                 paddingVertical: 9,
-                paddingHorizontal: space.md,
+                // Equal shares of the row, and `minWidth: 0` so a long label
+                // truncates inside its pill instead of forcing an overflow.
+                ...(singleRow
+                  ? { flex: 1, minWidth: 0, paddingHorizontal: space.sm }
+                  : { paddingHorizontal: space.md }),
                 borderRadius: radius.pill,
                 backgroundColor: selected ? accent : colors.surface,
                 borderWidth: 1,
@@ -224,6 +259,12 @@ export function PillSelect({
                 variant="small"
                 color={selected ? colors.inkInverse : colors.inkSecondary}
                 style={{ fontWeight: selected ? '700' : '500' }}
+                // One line only in row mode, shrinking to fit before it clips —
+                // "Spending budget" beside three shorter labels would otherwise
+                // either wrap the pill to two lines or push the row too wide.
+                numberOfLines={singleRow ? 1 : undefined}
+                adjustsFontSizeToFit={singleRow || undefined}
+                minimumFontScale={singleRow ? 0.85 : undefined}
               >
                 {option.label}
               </Text>
@@ -319,7 +360,10 @@ export function AmountField({
   return (
     <View style={{ alignItems: 'center', gap: 4 }}>
       {label ? <Label>{label}</Label> : null}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+      {/* `sm` rather than `xs`: the gap sits against 42px digits here, and the
+          4px that reads as a space beside body text reads as the code touching
+          the number at this size. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
         <Text variant="title" tone="muted">
           {currency}
         </Text>
@@ -535,7 +579,10 @@ export function FrequencyPicker({
   includeUnplanned?: boolean;
 }) {
   const options = (includeUnplanned ? SUBCATEGORY_FREQUENCIES : CATEGORY_DEFAULT_FREQUENCIES).map(
-    (key) => ({ key, label: FREQUENCY_LABEL[key] }),
+    // Short labels: these sit four-across on one row, and the hint line below
+    // carries the full meaning of whichever is selected. The full wording is
+    // kept for screen readers, which have no such constraint.
+    (key) => ({ key, label: FREQUENCY_SHORT_LABEL[key], spokenLabel: FREQUENCY_LABEL[key] }),
   );
   return (
     <View style={{ gap: 6 }}>
@@ -544,6 +591,9 @@ export function FrequencyPicker({
         options={options}
         selectedKey={value}
         onSelect={(key) => onChange(key as SubcategoryFrequency)}
+        // One row: these are four alternatives to one question, and wrapping
+        // them onto two lines made the set read as two groups.
+        singleRow
       />
       {/* One line saying what the chosen cadence actually does. "Spending
           budget" especially needs it: it behaves unlike the other three (many
@@ -555,3 +605,4 @@ export function FrequencyPicker({
     </View>
   );
 }
+

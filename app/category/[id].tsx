@@ -203,52 +203,42 @@ export default function CategoryDetailScreen() {
           ) : null}
         </Surface>
 
-        {/* Bulk transfer — the salary→account move. Income categories skip it:
-            that money arrives in the account on its own. */}
-        {view.isIncomeOnly ? null : (
-        <View style={{ gap: space.sm }}>
-          <Label>BULK TRANSFER</Label>
-          <Pressable
-            onPress={() => state.toggleCategoryTransfer(category.id)}
-            accessibilityRole="button"
-            accessibilityState={{ checked: transferred }}
-            style={({ pressed }) => ({
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: space.md,
-              padding: space.lg,
-              borderRadius: 16,
-              borderWidth: 1.5,
-              borderColor: transferred ? transferStyle.fg : colors.hairline,
-              backgroundColor: transferred ? transferStyle.bg : colors.surface,
-              opacity: pressed ? 0.85 : 1,
-            })}
-          >
-            <Ionicons
-              name={transferred ? 'checkmark-circle' : 'swap-horizontal'}
-              size={26}
-              color={transferred ? transferStyle.fg : colors.inkSecondary}
-            />
-            <View style={{ flex: 1 }}>
-              <Text
-                variant="bodyStrong"
-                color={transferred ? transferStyle.fg : colors.ink}
-              >
-                {transferred ? 'Money transferred' : 'Not transferred yet'}
-              </Text>
-              <Text
-                variant="caption"
-                color={transferred ? transferStyle.fg : colors.inkMuted}
-                style={transferred ? { opacity: 0.85 } : undefined}
-              >
-                {transferred
-                  ? 'The account holds this category’s money'
-                  : 'Tap when the bulk money lands'}
-              </Text>
-            </View>
-          </Pressable>
+        {/*
+          Transfer status, READ-ONLY.
 
-        </View>
+          The action moved to the dashboard's "money to move" section, because
+          the real-world step is per ACCOUNT: one lump sum lands there for
+          everything the account funds. Marking it per category asked the user
+          to answer the same question several times for a single transfer.
+
+          The status stays visible here, though — "has this category's money
+          arrived?" is exactly what someone opening the category wants to know.
+        */}
+        {view.isIncomeOnly ? null : (
+          <View style={{ gap: space.sm }}>
+            <Label>BULK TRANSFER</Label>
+            <Surface>
+              <Row gap={space.md} align="center">
+                <Ionicons
+                  name={transferred ? 'checkmark-circle' : 'swap-horizontal'}
+                  size={26}
+                  color={transferred ? transferStyle.fg : colors.inkSecondary}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text variant="bodyStrong" color={transferred ? transferStyle.fg : colors.ink}>
+                    {transferred ? 'Money transferred' : 'Not transferred yet'}
+                  </Text>
+                  <Text variant="caption" tone="muted">
+                    {transferred
+                      ? 'The account holds this category’s money'
+                      : card
+                        ? `Mark it on ${accountLabel(card).primary} from the dashboard`
+                        : 'Mark it from the dashboard once an account is set'}
+                  </Text>
+                </View>
+              </Row>
+            </Surface>
+          </View>
         )}
 
         {/* Settings summary. */}
