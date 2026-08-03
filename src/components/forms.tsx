@@ -10,6 +10,7 @@ import {
   SUBCATEGORY_FREQUENCIES,
   type SubcategoryFrequency,
 } from '../db/schema';
+import { formatAmountInput } from '../core/money';
 import { useTheme } from '../theme/ThemeProvider';
 import { BottomSheet, Label, Text } from './ui';
 
@@ -23,6 +24,7 @@ export function Field({
   autoFocus,
   multiline,
   style,
+  error,
 }: {
   label: string;
   value: string;
@@ -32,6 +34,14 @@ export function Field({
   autoFocus?: boolean;
   multiline?: boolean;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Why the current value cannot be used, shown under the field.
+   *
+   * The caller decides WHEN to pass this — usually not while the field is still
+   * being typed into, since flagging "Enter an amount" against a half-typed
+   * value is nagging rather than helping.
+   */
+  error?: string | null;
 }) {
   const { colors, radius, space } = useTheme();
   return (
@@ -50,7 +60,9 @@ export function Field({
           backgroundColor: colors.surface,
           borderRadius: radius.md,
           borderWidth: 1,
-          borderColor: colors.hairline,
+          // The border carries the error too, so the field itself is marked
+          // rather than only the sentence beneath it.
+          borderColor: error ? colors.danger : colors.hairline,
           paddingHorizontal: space.md,
           paddingVertical: 13,
           fontSize: 16,
@@ -63,6 +75,11 @@ export function Field({
           textAlignVertical: multiline ? 'top' : 'center',
         }}
       />
+      {error ? (
+        <Text variant="caption" color={colors.danger}>
+          {error}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -234,6 +251,7 @@ export function AmountField({
   hero = true,
   autoFocus,
   placeholder = '0',
+  error,
 }: {
   value: string;
   onChangeText: (text: string) => void;
@@ -242,8 +260,22 @@ export function AmountField({
   hero?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
+  /** Why the amount cannot be saved. See `validateAmount` in core/money. */
+  error?: string | null;
 }) {
   const { colors, radius, space } = useTheme();
+
+  /*
+   * Every keystroke is reshaped before it reaches the caller, so thousands
+   * separators appear as the number grows and nothing but a valid partial
+   * number can be typed. Done HERE rather than in each screen so every money
+   * field in the app behaves identically — there are several, and they had
+   * drifted into accepting whatever the keyboard emitted.
+   *
+   * The caller therefore always holds a display-formatted string; `parseAmount`
+   * strips the separators again on save.
+   */
+  const handleChange = (next: string) => onChangeText(formatAmountInput(next));
 
   if (!hero) {
     return (
@@ -257,7 +289,7 @@ export function AmountField({
             backgroundColor: colors.surface,
             borderRadius: radius.md,
             borderWidth: 1,
-            borderColor: colors.hairline,
+            borderColor: error ? colors.danger : colors.hairline,
             paddingHorizontal: space.md,
           }}
         >
@@ -266,8 +298,8 @@ export function AmountField({
           </Text>
           <TextInput
             value={value}
-            onChangeText={onChangeText}
-            keyboardType="numeric"
+            onChangeText={handleChange}
+            keyboardType="decimal-pad"
             autoFocus={autoFocus}
             placeholder={placeholder}
             placeholderTextColor={colors.inkMuted}
@@ -275,6 +307,11 @@ export function AmountField({
             style={{ flex: 1, paddingVertical: 13, fontSize: 16, fontWeight: '400', color: colors.ink, letterSpacing: 0 }}
           />
         </View>
+        {error ? (
+          <Text variant="caption" color={colors.danger}>
+            {error}
+          </Text>
+        ) : null}
       </View>
     );
   }
@@ -288,8 +325,11 @@ export function AmountField({
         </Text>
         <TextInput
           value={value}
-          onChangeText={onChangeText}
-          keyboardType="numeric"
+          onChangeText={handleChange}
+          // `decimal-pad` rather than `numeric`: the numeric pad on iOS offers
+          // punctuation this field would only strip again, and no minus sign is
+          // wanted on an amount.
+          keyboardType="decimal-pad"
           autoFocus={autoFocus}
           placeholder={placeholder}
           placeholderTextColor={colors.inkMuted}
@@ -298,13 +338,18 @@ export function AmountField({
             fontSize: 42,
             fontWeight: '800',
             letterSpacing: -1.2,
-            color: colors.ink,
+            color: error ? colors.danger : colors.ink,
             minWidth: 110,
             textAlign: 'center',
             padding: 0,
           }}
         />
       </View>
+      {error ? (
+        <Text variant="caption" color={colors.danger}>
+          {error}
+        </Text>
+      ) : null}
     </View>
   );
 }

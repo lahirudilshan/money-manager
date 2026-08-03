@@ -184,3 +184,48 @@ export async function cancelAllReminders(): Promise<void> {
   if (!Notifications) return;
   await Notifications.cancelAllScheduledNotificationsAsync();
 }
+
+/**
+ * Tell the user that bank messages just became drafts.
+ *
+ * This is the answer to "how do I know something arrived while the app was
+ * closed". iOS suspends the app in the background, so nothing can watch the
+ * file then — but the import happens the moment the app is reopened, and this
+ * fires right after it, so returning to the app is never silent.
+ *
+ * Fires ONLY when rows were actually queued. A notification for an empty drain
+ * would train the user to ignore them, which is worse than not sending one.
+ *
+ * `null` trigger means "deliver now" rather than schedule — this reports
+ * something that has already happened.
+ *
+ * Never throws: an import must not fail because a notification could not be
+ * shown, and permission may simply have been declined.
+ */
+export async function notifyDraftsImported(count: number): Promise<void> {
+  if (count <= 0) return;
+
+  try {
+    const Notifications = await loadNotifications();
+    if (!Notifications) return;
+
+    // Silent when permission was never granted — asking here would interrupt
+    // whatever the user is doing with a prompt they did not initiate.
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: count === 1 ? 'New transaction to review' : `${count} transactions to review`,
+        body:
+          count === 1
+            ? 'A bank message was turned into a draft. Tap to confirm it.'
+            : 'Bank messages were turned into drafts. Tap to confirm them.',
+        data: { route: '/' },
+      },
+      trigger: null,
+    });
+  } catch (error) {
+    lastFailureReason = String(error);
+  }
+}

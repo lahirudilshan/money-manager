@@ -35,6 +35,87 @@ export function parseAmount(input: string): Minor | null {
   return toMinor(value);
 }
 
+/** Most digits allowed before the decimal point — 999,999,999,999.99. */
+const MAX_INTEGER_DIGITS = 12;
+
+/**
+ * Reshape a money field as the user types.
+ *
+ * Called on every keystroke, so it must accept a HALF-TYPED value: "1", "1.",
+ * and "1.5" are all legitimate intermediate states and none may be rewritten
+ * into something that fights the person entering it. The rules are therefore
+ * about removing what cannot be valid, never about completing what is unfinished:
+ *
+ *   - anything that is not a digit or a dot is dropped, which quietly handles a
+ *     pasted "LKR 1,250.75" as well as a keyboard that offers a comma;
+ *   - a second dot is ignored rather than accepted, since "1.2.3" is not a
+ *     number and silently truncating it would change the amount;
+ *   - decimals are capped at two, because minor units are cents and a third
+ *     digit would be rounded away on save without the user seeing it;
+ *   - the integer part gets thousands separators as it grows, so a large figure
+ *     is readable while being typed rather than only after it is committed.
+ *
+ * A trailing dot SURVIVES. Stripping it would delete the point the instant it
+ * was typed, making it impossible to enter a decimal at all.
+ */
+export function formatAmountInput(input: string): string {
+  if (typeof input !== 'string') return '';
+
+  /*
+   * Drop a currency prefix BEFORE looking at dots.
+   *
+   * "Rs. 9 200" pasted from a bank message otherwise reads its "Rs." dot as the
+   * decimal point and collapses to "0.92" — a hundredth of the real amount,
+   * silently. Removing leading non-digits first means only dots that sit inside
+   * the number itself are considered.
+   */
+  // A leading dot the user typed themselves is meaningful ("." starts "0.5"),
+  // so it is preserved; anything else before the first digit is a prefix.
+  const withoutPrefix = input.startsWith('.') ? input : input.replace(/^[^0-9]*/, '');
+
+  // Keep digits and dots only; separators are re-inserted below from scratch,
+  // so one the user typed never has to be reconciled with the ones this adds.
+  const cleaned = withoutPrefix.replace(/[^0-9.]/g, '');
+  if (cleaned === '') return '';
+
+  const [rawInteger, ...rest] = cleaned.split('.');
+  const hasDecimalPoint = rest.length > 0;
+
+  // Everything after the FIRST dot, with any further dots removed — typing a
+  // second point is a slip, and dropping it keeps the number the user sees.
+  const decimals = rest.join('').slice(0, 2);
+
+  // Trim leading zeros ("007" → "7") but keep one, so "0.5" survives and an
+  // empty integer part before a dot reads as "0.".
+  const integer = rawInteger.replace(/^0+(?=\d)/, '').slice(0, MAX_INTEGER_DIGITS) || '0';
+
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+
+  if (!hasDecimalPoint) return grouped;
+  return `${grouped}.${decimals}`;
+}
+
+/**
+ * Why an amount cannot be saved, or null when it is fine.
+ *
+ * Separate from `formatAmountInput` because the two run at different moments:
+ * formatting happens on every keystroke and must tolerate half-typed input,
+ * while validation is asked at the point of saving, where "1." is genuinely
+ * incomplete. Returns a sentence for the user rather than a code, since every
+ * caller shows it verbatim.
+ */
+export function validateAmount(input: string): string | null {
+  const minor = parseAmount(input);
+
+  if (minor === null) return 'Enter an amount';
+  if (minor <= 0) return 'Amount must be more than zero';
+
+  const digits = input.replace(/[^0-9]/g, '').replace(/^0+/, '');
+  if (digits.length > MAX_INTEGER_DIGITS + 2) return 'That amount is too large';
+
+  return null;
+}
+
 /**
  * The currency code every unqualified `formatMoney` call renders.
  *

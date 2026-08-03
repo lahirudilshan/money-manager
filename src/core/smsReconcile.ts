@@ -196,6 +196,83 @@ function amountScore(a: Minor, b: Minor): number {
 }
 
 /**
+ * Lines whose planned amount is a FIXED commitment, not an estimate.
+ *
+ * The distinction is what makes an exact amount match meaningful. A utility's
+ * planned figure is a guess that drifts every month, so a bill landing on it to
+ * the cent is coincidence. A loan installment or a subscription is contractually
+ * the same number every time, so the same coincidence is near-proof — the bank
+ * is debiting exactly what that line exists to pay.
+ *
+ * Read off the line's own linkage and naming rather than a user-set flag: a
+ * `loanId` is definitive, and the lease/rental/instalment vocabulary covers the
+ * fixed commitments the loan table does not model.
+ */
+function isFixedCommitment(
+  sub: BoardSlice['subcategories'][number],
+  billText: string,
+): boolean {
+  if (sub.loanId) return true;
+  return FIXED_COMMITMENT_WORDS.some((pattern) => pattern.test(billText));
+}
+
+/**
+ * Words naming a line that bills the same figure every period.
+ *
+ * `rent` and `insurance` are here alongside the loan vocabulary because they
+ * behave identically for this purpose — a fixed sum on a schedule — and they are
+ * among the most common lines a user creates by hand rather than through the
+ * loan table.
+ */
+const FIXED_COMMITMENT_WORDS: RegExp[] = [
+  /\bloan\b/i,
+  /\blease\b/i,
+  /\bleasing\b/i,
+  /\binstal{1,2}ment\b/i,
+  /\brent(?:al)?\b/i,
+  /\binsurance\b/i,
+  /\bpremium\b/i,
+  /\bsubscription\b/i,
+];
+
+/**
+ * Whether the SMS named anything the board could reason about.
+ *
+ * A message-level test, not a per-line one, and that distinction is the whole
+ * point: the exact-amount bonus must be suppressed when the message identified
+ * itself — even if it identified itself as something this particular line is
+ * not. "Debited at KEELLS" names a merchant, so a lease line has no business
+ * claiming it on amount alone, but every per-line signal against that lease line
+ * is zero, so only asking the message can tell the two situations apart.
+ *
+ * A hint counts, and so does a merchant string with real letters in it — some
+ * banks put a reference number where the merchant goes, which names nothing.
+ */
+function messageNamesSomething(parsed: ParsedSms, hint: CategoryHint | null): boolean {
+  if (hint) return true;
+  return /[a-z]{3,}/i.test(parsed.merchant);
+}
+
+/**
+ * How exactly two amounts agree, as a separate signal from `amountScore`.
+ *
+ * `amountScore` deliberately tolerates 15% because utilities move around, but
+ * that tolerance also flattens the difference between "within a rupee" and
+ * "10% out" — both score well, so an exact hit carries no extra weight. For a
+ * fixed commitment that is backwards: paying 42,350.00 against a line planned at
+ * exactly 42,350.00 is the strongest evidence available short of the merchant
+ * name, and it was being scored the same as 39,000.
+ *
+ * Returns 1 only for an exact match to the minor unit, 0.5 for a near-miss
+ * inside a rupee (rounding between the bank's figure and the user's), else 0.
+ */
+function exactAmountScore(a: Minor, b: Minor): number {
+  if (a <= 0 || b <= 0) return 0;
+  if (a === b) return 1;
+  return Math.abs(a - b) <= 100 ? 0.5 : 0;
+}
+
+/**
  * Score how well a parsed SMS matches one bill. Text similarity dominates
  * (the merchant is the strongest signal); amount agreement and the card's
  * last-4 matching the SMS account add confidence.
@@ -232,7 +309,39 @@ function scoreSubcategory(
   // A card whose last-4 appears in the SMS account is a reliable signal.
   const accountHit = card?.last4 && parsed.account.endsWith(card.last4) ? 1 : 0;
 
-  return hintHit * 0.45 + text * 0.25 + amount * 0.1 + accountHit * 0.2;
+  const base = hintHit * 0.45 + text * 0.25 + amount * 0.1 + accountHit * 0.2;
+
+  /*
+   * An exact hit on a FIXED commitment, when the message named nothing useful.
+   *
+   * A lease or loan debit routinely arrives as bare text — "LKR 42,350.00
+   * debited", no merchant, no "loan" anywhere — so `hint` is null, `textScore`
+   * is ~0 and the draft lands with no suggestion at all, even though the board
+   * holds a line planned at exactly that figure. The amount is the ONLY signal
+   * such a message carries, and against a contractually fixed line it is a
+   * strong one.
+   *
+   * Deliberately narrow, because a bonus on amount alone is exactly how a
+   * scorer starts guessing confidently and wrongly:
+   *
+   *   - only for lines that bill a fixed sum (`isFixedCommitment`) — a utility
+   *     landing on its estimate is coincidence, not evidence;
+   *   - only on an exact or within-a-rupee match, not the 15% band;
+   *   - only when THE MESSAGE ITSELF carries no usable text signal. This is the
+   *     subtle one: the test is whether the SMS named anything recognisable at
+   *     all, NOT whether it matched *this* line. Keying off `hintHit`/`text`
+   *     (both of which are per-line) let a "debited at KEELLS" message claim a
+   *     lease line, because against the LEASE line those are naturally zero —
+   *     the very check meant to prevent it was guaranteed to pass.
+   *
+   * Capped below 1 so a genuine merchant match always outranks it.
+   */
+  if (!messageNamesSomething(parsed, hint) && isFixedCommitment(sub, billText)) {
+    const exact = exactAmountScore(parsed.amountMinor, sub.plannedMinor);
+    if (exact > 0) return Math.min(0.85, base + exact * 0.5);
+  }
+
+  return base;
 }
 
 /** Below this, a guess is too weak to auto-select — the user picks instead. */

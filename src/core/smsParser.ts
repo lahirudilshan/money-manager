@@ -43,6 +43,14 @@ export type SmsKind =
   | 'transfer_in' // money received
   | 'loan_payment' // installment against a loan
   | 'utility' // an issued utility bill (due later)
+  /**
+   * A charge being undone — "A reversal for POS TXN of LKR 1,038.30 credited".
+   *
+   * Distinct from `transfer_in` because it is not new money: it cancels an
+   * earlier debit, and the pair should disappear together rather than appear as
+   * a spend plus an unrelated income. See `cancelReversals` in smsInbox.ts.
+   */
+  | 'reversal'
   | 'other';
 
 export interface ParsedSms {
@@ -288,8 +296,21 @@ function extractMerchant(text: string): string {
   const at = text.match(/\bat\s+(.+?)(?:\.\s*Avl|\.\s*Av\.|\s+Avl\b|\n|$)/i);
   if (at) return clean(at[1]);
 
-  // "as CEFTS Outward Transfer." — the transaction type stands in as payee.
-  const asType = text.match(/\bas\s+(CEFTS[^.]*Transfer|[A-Z][A-Za-z ]*Transfer)/);
+  /*
+   * "as CEFTS Outward Transfer." / "as Transfer Out." — the transaction type
+   * stands in as the payee, because these messages name no merchant at all.
+   *
+   * The clause runs to the end of the sentence rather than stopping at the word
+   * "Transfer": an earlier version anchored on Transfer as the LAST word, so
+   * "Transfer Out" and "CEFTS Transfer Charges" both fell through and produced
+   * an empty merchant — which in turn means no category match and a draft the
+   * user has to categorise by hand.
+   */
+  const asType = text.match(
+    // The words before the keyword are OPTIONAL: "as Transfer Out" puts the
+    // keyword first, so requiring a prefix silently dropped it.
+    /\bas\s+((?:[A-Z][A-Za-z]*\s+)*(?:Transfer|Charges|Payment|Withdrawal)(?:\s+[A-Z][A-Za-z]*)*)/,
+  );
   if (asType) return clean(asType[1]);
 
   // "ref: Inward SWIFT Payment." — the reference names what the money was, and
@@ -318,7 +339,41 @@ function classifyDirection(text: string): SmsDirection | null {
  * ATM receipt are recognised before the generic transfer/purchase split.
  */
 function classifyKind(text: string, direction: SmsDirection): SmsKind {
-  if (/\bloan[-\s]/i.test(text) || /Reason\s*:\s*MB:loan/i.test(text)) return 'loan_payment';
+  /*
+   * Checked FIRST, and only on a credit.
+   *
+   * "A reversal for POS TXN of LKR 1,038.30 credited to AC ..." contains
+   * "POS TXN", so any later rule would claim it as a purchase — which is how a
+   * refund ended up looking like a spend. A reversal is money coming BACK, and
+   * pairing it with the original debit is what stops both from reaching the
+   * board (see `cancelReversals`).
+   */
+  if (direction === 'credit' && /\brevers(?:al|ed)\b|\brefund(?:ed)?\b/i.test(text)) {
+    return 'reversal';
+  }
+
+  /*
+   * Loan/lease repayments, by any of the words a bank prints for them.
+   *
+   * Was `\bloan[-\s]` alone, which missed the two most common alternatives: a
+   * vehicle "lease"/"leasing" rental, and a bare "instalment" (both spellings —
+   * UK doubles the L, and Sri Lankan banks use either). Those messages fell
+   * through to 'other', so the loan prior in `scoreSubcategory` never fired and
+   * a repayment was scored against every bill on the board like an ordinary
+   * spend.
+   *
+   * "EMI" is included as the equated-monthly-instalment abbreviation, bounded so
+   * it cannot fire inside a longer word.
+   */
+  if (
+    /\bloan[-\s]/i.test(text) ||
+    /\bleas(?:e|ing)\b/i.test(text) ||
+    /\binstal{1,2}ment\b/i.test(text) ||
+    /\bEMI\b/.test(text) ||
+    /Reason\s*:\s*MB:loan/i.test(text)
+  ) {
+    return 'loan_payment';
+  }
   if (/\bATM\b|withdrawal/i.test(text)) return 'atm';
   // Inward money arrives under several names: a plain "transfer", or the
   // remittance wording a cross-border payment uses ("Inward SWIFT Payment",

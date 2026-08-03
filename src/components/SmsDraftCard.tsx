@@ -78,6 +78,10 @@ export function SmsDraftCard({
     atm: 'ATM cash',
     transfer_out: 'Transfer out',
     transfer_in: 'Transfer in',
+    // A charge being taken back. Normally cancelled against its original debit
+    // before it ever reaches the UI (see `cancelReversals`), so this label only
+    // shows for a reversal whose charge was not in the same batch.
+    reversal: 'Refund',
     loan_payment: 'Loan payment',
     utility: 'Bill due',
     other: isCredit ? 'Money in' : 'Paid out',

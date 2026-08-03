@@ -70,25 +70,114 @@ describe('two SMS separated by ---', () => {
   });
 
   /*
-   * `---` only separates when it is the WHOLE line. A message that happens to
-   * contain three dashes mid-sentence must stay one record, or a legitimate
-   * alert would be torn in half.
+   * The separator no longer has to be a whole line — see the note in
+   * smsInbox.test.ts. One or two dashes are still ordinary punctuation, which
+   * is what keeps "SHOP - BRANCH 2" intact.
    */
-  it('does not split on dashes inside a message', () => {
-    const withDashes = 'LKR 500.00 debited from AC XXXX1111 at SHOP --- BRANCH 2';
+  it('keeps one and two dashes inside a message', () => {
+    const hyphenated = 'LKR 500.00 debited from AC XXXX1111 at SHOP - BRANCH 2';
 
-    expect(parseInbox(withDashes)).toEqual([withDashes]);
-    expect(parseSms(withDashes)?.amountMinor).toBe(50000);
+    expect(parseInbox(hyphenated)).toEqual([hyphenated]);
+    expect(parseSms(hyphenated)?.amountMinor).toBe(50000);
   });
 
-  it('keeps the seed header out of the way as its own ignorable record', () => {
+  /*
+   * The exact file that lost five transactions in production.
+   *
+   * A real six-message batch where the Shortcut appended `---` to the END of
+   * each message rather than on its own line. Under the whole-line rule this
+   * parsed as ONE record and only the first amount was ever seen. Kept verbatim
+   * as the regression guard, because the failure was silent — nothing errored,
+   * the file was cleared, and five real transactions simply never appeared.
+   */
+  it('splits a real batch with the separator glued to each message', () => {
+    const batch = [
+      'HNB SMS ALERT: PURCHASE, Debit account:1380***4150,Location:BAS DIL HAULIERS & ENTERP, LK,Amount(Approx.):1597.00 LKR,Av.Bal:415782.29 LKR,Date:02.08.26,Time:12:01, Hot Line:0112462462---',
+      'LKR 122,867.00 debited from AC XXXXXXXX6796 on 01 Aug 2026 06:04 as Transfer Out. Avl Bal 5,543.06 Call 94112448888 for info---',
+      'LKR 25.00 debited from AC XXXXXXXX6796 on 30 Jul 2026 20:41 as CEFTS Transfer Charges. Avl Bal 127,672.03 Call 94112448888 for info---',
+      'A reversal for POS TXN of LKR 1,038.30 credited to AC XXXXXXXX6796 on 28 Jul 2026 20:31. Avl Bal 127,697.03 Call 94112448888 for info---',
+      'LKR 1,038.30 debited from AC XXXXXXXX6796 as POS TXN on 28 Jul 2026 20:25 at UBER 852. Avl Bal 126,658.73 Call 94112448888 for info---',
+      'LKR 9,200.00 debited from AC XXXXXXXX6796 as POS TXN on 28 Jul 2026 15:17 at STARLINK INTERNET.2DS 94. Avl Bal 127,697.03 Call 94112448888 for info---',
+    ].join('\n');
+
+    const records = planDrain(batch, 99).messages;
+    expect(records).toHaveLength(6);
+
+    const parsed = records.map(parseSms);
+    expect(parsed.map((entry) => entry?.amountMinor)).toEqual([
+      159700, 12286700, 2500, 103830, 103830, 920000,
+    ]);
+
+    // The reversal is a CREDIT — money coming back — not another spend.
+    expect(parsed.map((entry) => entry?.direction)).toEqual([
+      'debit',
+      'debit',
+      'debit',
+      'credit',
+      'debit',
+      'debit',
+    ]);
+
+    // Every message that names something has a merchant. The reversal names no
+    // payee at all, so an empty string is the honest answer there.
+    expect(parsed.map((entry) => entry?.merchant)).toEqual([
+      'BAS DIL HAULIERS & ENTERP, LK',
+      'Transfer Out',
+      'CEFTS Transfer Charges',
+      '',
+      'UBER 852',
+      'STARLINK INTERNET.2DS 94',
+    ]);
+  });
+
+  /*
+   * The header the app writes back after every drain must not contain a literal
+   * `---`.
+   *
+   * `parseInbox` splits on three-or-more dashes ANYWHERE, so an instruction line
+   * spelling the separator out would cut the header in two and leave a phantom
+   * record in the file after every single import. Caught in testing, and only
+   * because the round-trip was checked rather than assumed.
+   */
+  it('does not split the header the drain writes back', () => {
+    const header = [
+      '# money-manager SMS inbox — TEMPORARY HANDOFF FILE',
+      '#',
+      '# End each message with three dash characters (a new line is optional).',
+      '',
+    ].join('\n');
+
+    // `parseInbox` strips the `#` lines itself, so a header-only file yields no
+    // messages at all — no filtering by the caller required.
+    expect(planDrain(header, 99).messages).toHaveLength(0);
+  });
+
+  /**
+   * The header is removed outright, not merely ignored downstream.
+   *
+   * It used to survive as its own record that `parseSms` rejected, which the
+   * drain then reported to the user as "1 not a transaction" after every single
+   * import. Stripping `#` lines inside `parseInbox` means it never reaches the
+   * parser and never inflates that count.
+   */
+  it('removes the seed header entirely rather than emitting a dead record', () => {
     const withHeader = `# money-manager SMS inbox\n#\n# Separate messages with three dashes.\n---\n${WATER}\n---\n${ELECTRICITY}`;
     const records = planDrain(withHeader, 99).messages;
 
-    // Three records: the header plus both messages. The header parses to null,
-    // which the drain reports as "not a transaction" rather than queueing it.
-    expect(records).toHaveLength(3);
-    expect(parseSms(records[0])).toBeNull();
-    expect(records.slice(1).map((entry) => parseSms(entry)?.amountMinor)).toEqual([286740, 950000]);
+    expect(records).toHaveLength(2);
+    expect(records.map((entry) => parseSms(entry)?.amountMinor)).toEqual([286740, 950000]);
+  });
+
+  /**
+   * The same, for the shape that actually caused the data loss: a header that
+   * ends in prose with the first message appended straight onto it, no
+   * separator in between.
+   */
+  it('recovers the first message when it is glued to the header', () => {
+    const withHeader = `# money-manager SMS inbox\n#\n# End each message with three dash characters.\n${WATER}\n---\n${ELECTRICITY}`;
+    const records = planDrain(withHeader, 99).messages;
+
+    expect(records).toHaveLength(2);
+    expect(records.map((entry) => parseSms(entry)?.amountMinor)).toEqual([286740, 950000]);
   });
 });

@@ -69,10 +69,29 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
       /\bhutch\b/i,
       /\bairtel\b/i,
       /\bslt\b/i,
+      /\bstarlink\b/i,
       /axiata/i,
       /\breload\b/i,
       /\bpostpaid\b/i,
       /\bprepaid\b/i,
+      /*
+       * The service words, not just the provider names.
+       *
+       * These live in HINT_SELF_WORDS too, but that list only matches a BILL's
+       * own name — so a message reading "STARLINK INTERNET" matched nothing at
+       * all, because no provider pattern above knew the brand and `internet`
+       * was not a message-level keyword anywhere. Any biller the list has never
+       * heard of is still recognisable when it names the service it sells,
+       * which is what these two cover.
+       *
+       * `internet` must NOT match "internet banking", which is how a great many
+       * banks describe the CHANNEL a transfer went through — "Transfer via
+       * Internet Banking" is a transfer, and a grocery bought online is still
+       * groceries. Without the guard this keyword hijacked both, turning a
+       * broad improvement into a broad regression.
+       */
+      /\binternet\b(?!\s*banking\b)/i,
+      /\bbroadband\b/i,
     ],
   ],
   [
@@ -109,7 +128,7 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
       /\bapple\.com\b/i,
     ],
   ],
-  ['loan', [/\bloan\b/i, /\blease\b/i, /\binstal?ment\b/i, /Reason\s*:\s*MB:loan/i]],
+  ['loan', [/\bloan\b/i, /\blease\b/i, /\binstal{1,2}ment\b/i, /Reason\s*:\s*MB:loan/i]],
   ['transfer', [/\btransfer\b/i, /\bcefts\b/i, /\bslips\b/i, /\bctb\b/i]],
   ['atm', [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i]],
   ['income', [/\bsalary\b/i, /\bpayroll\b/i, /\bdividend\b/i, /\brefund\b/i]],
@@ -199,7 +218,7 @@ export function billMatchesHint(hint: CategoryHint, billText: string): boolean {
 export const SEED_MERCHANT_PATTERNS: [CategoryHint, string[]][] = [
   ['water', ['nwsdb', 'national water supply', 'water board']],
   ['electricity', ['ceb', 'leco', 'ceylon electricity']],
-  ['telecom', ['dialog', 'mobitel', 'hutch', 'airtel', 'slt']],
+  ['telecom', ['dialog', 'mobitel', 'hutch', 'airtel', 'slt', 'starlink']],
   ['groceries', ['keells', 'cargills', 'food city', 'arpico', 'glomark', 'laughs']],
   ['fuel', ['ceypetco', 'ioc', 'filling station']],
   ['subscription', ['netflix', 'spotify', 'youtube', 'anthropic', 'openai', 'icloud']],

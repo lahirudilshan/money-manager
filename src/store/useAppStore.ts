@@ -37,10 +37,16 @@ import {
   proposalForHint,
 } from '../core/hintCatalog';
 import type { CategoryHint } from '../core/smsCategoryHints';
+import { logSmsIntake } from '../core/smsIntakeLog';
 import { isCatalogConfigured, pullRules, pushObservations } from '../services/catalogApi';
 import { getDeviceId } from '../services/deviceId';
-import { onNetworkRestored } from '../services/network';
-import { EMPTY_SUMMARY, fingerprintMessage, type DrainSummary } from '../core/smsInbox';
+import { onForeground, onNetworkRestored } from '../services/network';
+import {
+  cancelReversals,
+  EMPTY_SUMMARY,
+  fingerprintMessage,
+  type DrainSummary,
+} from '../core/smsInbox';
 import {
   countWaiting,
   drainInbox,
@@ -65,7 +71,7 @@ import {
   SETTINGS_KEYS,
 } from '../db/repositories';
 import { seedSampleTemplate } from '../db/seed';
-import { cancelAllReminders } from '../services/notifications';
+import { cancelAllReminders, notifyDraftsImported } from '../services/notifications';
 import { supportsSavingPlan } from '../db/schema';
 import type {
   Card,
@@ -351,6 +357,42 @@ function nextColor(existingCount: number): string {
  */
 let draining = false;
 
+/**
+ * What the most recent drain actually did, for the diagnostics alert.
+ *
+ * The drain has several branches that all end with "file cleared, nothing on
+ * screen", and from the outside they are indistinguishable — which is why this
+ * feature has been so hard to pin down. Recording the counts plus the pending
+ * row total makes the branch that fired obvious: a message that was `queued` but
+ * left zero pending rows is a UI/publish problem, one that came back
+ * `duplicate` is a fingerprint already in the table, and one counted `ignored`
+ * is a parser gap.
+ *
+ * Module-level and overwritten each drain: it is a live debugging aid, not
+ * history.
+ */
+export let lastDrainReport: {
+  at: number;
+  messages: number;
+  queued: number;
+  duplicates: number;
+  ignored: number;
+  pendingRows: number;
+  draftsInStore: number;
+} | null = null;
+
+/**
+ * Fingerprints of messages already reported as unreadable this session.
+ *
+ * A message the parser cannot read is now LEFT IN THE FILE rather than
+ * destroyed, so it is re-encountered on every poll tick. This keeps the
+ * diagnostics panel showing it once instead of ten identical rows.
+ *
+ * Module-level and never pruned: it holds at most a handful of short strings
+ * for the life of the process, and clearing it on drain would defeat the point.
+ */
+const loggedUnreadable = new Set<string>();
+
 export const useAppStore = create<AppState>((set, get) => ({
   ready: false,
   needsOnboarding: false,
@@ -440,14 +482,12 @@ export const useAppStore = create<AppState>((set, get) => ({
      * Never unsubscribed: it lives exactly as long as the store, which lives as
      * long as the app.
      */
+    /*
+     * Catalog only. The SMS inbox has its own foreground handler inside
+     * `watchSmsInbox`, so draining here as well would import twice on every
+     * return to the app.
+     */
     onNetworkRestored(() => {
-      /*
-       * Foregrounding is also when new messages are most likely to be waiting:
-       * the user got a bank SMS, the automation appended it, and now they are
-       * opening the app to deal with it. Draining here is what makes the queue
-       * feel immediate rather than "next time you fully relaunch".
-       */
-      get().drainSmsInbox();
       void get().syncCatalog();
     });
   },
@@ -1025,9 +1065,11 @@ export const useAppStore = create<AppState>((set, get) => ({
      * after a restart used to sail through, because the previous draft had
      * evaporated with the process.
      */
+    const fingerprint = fingerprintMessage(parsed.raw);
+
     const inserted = smsInboxRepo.add({
       raw: parsed.raw,
-      fingerprint: fingerprintMessage(parsed.raw),
+      fingerprint,
       direction: parsed.direction,
       kind: parsed.kind,
       amountMinor: parsed.amountMinor,
@@ -1037,6 +1079,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       occurredOn: parsed.date,
       occurredAt: parsed.time,
     });
+
+    /*
+     * A repeat of a message the user already RESOLVED comes back for review.
+     *
+     * `add` returns false for two very different situations, and collapsing
+     * them is what made a re-sent message disappear for good: the row may still
+     * be pending (already on screen — nothing to do), or it may have been
+     * confirmed/dismissed earlier, in which case the fingerprint blocks the
+     * insert forever and the message is consumed from the file with nothing to
+     * show for it. Reopening the resolved row puts it back in the queue.
+     *
+     * This is also what makes testing possible at all: sending yourself the same
+     * alert twice used to work exactly once per install.
+     */
+    if (!inserted && !smsInboxRepo.isPending(fingerprint)) {
+      smsInboxRepo.reopen(fingerprint);
+      get().loadSmsDrafts();
+      return get().smsDrafts.find((draft) => draft.parsed.raw === parsed.raw)?.id ?? null;
+    }
 
     // 'duplicate' rather than null: the caller logs the outcome, and reporting
     // this as a parse failure made a successful deep link show an error beside
@@ -1088,10 +1149,53 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
     );
 
-    // Newest first: the queue is stored oldest-first (arrival order), but the
-    // message someone just received is the one they came into the app to deal
-    // with.
-    set({ smsDrafts: drafts.reverse(), smsInboxWaiting: 0 });
+    /*
+     * Already newest-transaction-first — see `smsInboxRepo.pending`.
+     *
+     * This used to `.reverse()`, because the query returned arrival order. It
+     * now sorts by when the money moved, so reversing here would put the OLDEST
+     * transaction on top.
+     */
+    const next = drafts;
+
+    /*
+     * Publish only when the QUEUE changed, not on every call.
+     *
+     * This runs on every foreground and after every drain tick, and each call
+     * builds a fresh array — so an unconditional `set` hands every subscriber a
+     * new reference and re-renders the board even when nothing moved. Comparing
+     * the row ids is enough: they are the `sms_inbox` primary keys, so a
+     * different set of pending rows always yields a different list.
+     */
+    const current = get().smsDrafts;
+    const unchanged =
+      current.length === next.length &&
+      current.every((draft, i) => {
+        const fresh = next[i];
+        // Ids alone are not enough: a draft is re-matched against the board on
+        // every load, so creating a bill changes what an UNCHANGED row resolves
+        // to. Comparing the match as well means a new bill shows up on a
+        // waiting draft immediately, rather than after the queue next changes.
+        return (
+          draft.id === fresh.id &&
+          draft.subcategoryId === fresh.subcategoryId &&
+          draft.confidence === fresh.confidence
+        );
+      });
+
+    /*
+     * Publishes `smsDrafts` ONLY.
+     *
+     * `smsInboxWaiting` counts what is still sitting in the FILE, which is the
+     * drain's business, not this function's. Zeroing it here used to be
+     * harmless because nothing called this after a drain had set it — now the
+     * drain does, and clearing it would erase the "left for next time" count of
+     * a capped import the instant it was recorded, so the user would be told
+     * nothing is waiting while 30 messages still were.
+     */
+    if (unchanged) return;
+
+    set({ smsDrafts: next });
   },
 
   smsInboxWaiting: 0,
@@ -1129,18 +1233,86 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     try {
       const drained = drainInbox((messages) => {
-        for (const message of messages) {
-          const result = get().ingestSmsText(message);
+        /*
+         * Cancel reversal pairs across the WHOLE batch before anything is
+         * stored.
+         *
+         * Pairing has to happen here rather than inside `ingestSmsText`, which
+         * only ever sees one message: a reversal and the charge it undoes are
+         * two separate SMS, and recognising the pair needs both in hand. Doing
+         * it before the insert also means neither row is ever written, so the
+         * user never sees a spend and a refund flicker into the queue and then
+         * have to be tidied away.
+         */
+        const parsed = messages.map((raw) => ({ raw, sms: parseSms(raw) }));
+        const movements = parsed.filter(
+          (entry): entry is { raw: string; sms: ParsedSms } => entry.sms !== null,
+        );
+
+        /*
+         * Messages the parser did not understand are counted here, since they
+         * never reach `ingestSmsText` below.
+         *
+         * Each one is also LOGGED. This path used to be completely silent: a
+         * message the parser rejected was counted, the file was cleared, and the
+         * text was gone with no record of it anywhere — which is precisely the
+         * "the file emptied but nothing showed up" report, and it was impossible
+         * to diagnose because the evidence destroyed itself. The deep-link path
+         * has always logged this; the file path never did.
+         */
+        const unreadable = parsed.filter((entry) => entry.sms === null).map((entry) => entry.raw);
+
+        /*
+         * Log each unreadable message ONCE, not on every tick.
+         *
+         * These now stay in the file (see the return below), and the watcher
+         * re-drains every couple of seconds — so an unlogged guard here would
+         * refill the ten-entry diagnostics panel with the same message and push
+         * out the very history the user needs to debug it.
+         */
+        for (const raw of unreadable) {
+          const key = fingerprintMessage(raw);
+          if (loggedUnreadable.has(key)) continue;
+          loggedUnreadable.add(key);
+          logSmsIntake('parser-rejected', raw);
+        }
+
+        ignored += unreadable.length;
+
+        const surviving = cancelReversals(movements.map((entry) => entry.sms));
+        const keep = new Set(surviving);
+
+        for (const entry of movements) {
+          // A charge cancelled by its reversal — and the reversal itself — are
+          // both dropped: no row, no draft, nothing for the user to dismiss.
+          if (!keep.has(entry.sms)) continue;
+
+          const result = get().ingestSmsText(entry.raw);
           if (result === 'duplicate') duplicates++;
-          // null means the parser did not see a money movement — an OTP, a
-          // promo, or a balance-only notice the automation's filter let through.
           else if (result === null) ignored++;
           else queued++;
         }
+
+        /*
+         * Hand back what could not be stored, so the file keeps it.
+         *
+         * Only the unreadable ones. A duplicate is already in the table and a
+         * reversal pair was cancelled deliberately — both are genuinely
+         * consumed, and returning them would make the file never empty.
+         */
+        return unreadable;
       });
 
       if (!drained.ok || drained.messages.length === 0) {
-        set({ smsInboxWaiting: 0 });
+        /*
+         * Write only on a real change.
+         *
+         * This path runs on every poll tick (see `watchInbox`), and the file is
+         * empty almost every time. An unconditional `set` would publish a new
+         * state object every couple of seconds forever, waking every subscriber
+         * to re-render an unchanged board.
+         */
+        if (get().smsInboxWaiting !== 0) set({ smsInboxWaiting: 0 });
         return { ...EMPTY_SUMMARY, deferred: drained.deferred };
       }
 
@@ -1161,6 +1333,48 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ smsInboxWaiting: drained.deferred });
 
+      // Recorded BEFORE the reload below, then updated after, so the two views
+      // of the queue can be compared — see `lastDrainReport`.
+      lastDrainReport = {
+        at: Date.now(),
+        messages: drained.messages.length,
+        queued,
+        duplicates,
+        ignored,
+        pendingRows: smsInboxRepo.pendingCount(),
+        draftsInStore: 0,
+      };
+
+      /*
+       * Republish the queue from the table before returning.
+       *
+       * `ingestSmsText` calls `loadSmsDrafts` per message, so the common path is
+       * already on screen — but only when something was INSERTED. A batch that
+       * is entirely duplicates, or whose messages all cancelled as reversal
+       * pairs, inserts nothing and would leave the dashboard showing a stale
+       * list while the file it came from has just been cleared. Loading here
+       * makes "the file emptied" and "the UI updated" the same event on every
+       * path, which is the guarantee this feature actually needs.
+       *
+       * Cheap to repeat: `loadSmsDrafts` publishes only when the queue really
+       * changed, so the usual case is a no-op comparison.
+       */
+      get().loadSmsDrafts();
+
+      // How many drafts the UI actually ended up with. A non-zero `queued` with
+      // zero here is the publish bug; matching numbers point at the renderer.
+      if (lastDrainReport) lastDrainReport.draftsInStore = get().smsDrafts.length;
+
+      /*
+       * Announce the import.
+       *
+       * Un-awaited: the drafts are already stored and on screen, and a
+       * notification must never delay that or fail the import if permission was
+       * declined. Only fires when rows were genuinely queued — see
+       * `notifyDraftsImported`.
+       */
+      void notifyDraftsImported(queued);
+
       return { queued, duplicates, ignored, deferred: drained.deferred };
     } finally {
       draining = false;
@@ -1177,12 +1391,36 @@ export const useAppStore = create<AppState>((set, get) => ({
    * Returns an unsubscribe function.
    */
   watchSmsInbox() {
-    return watchInbox(() => {
+    const stopWatching = watchInbox(() => {
       // The guard inside `drainSmsInbox` absorbs the events caused by the
       // drain's own writes to this folder.
       const summary = get().drainSmsInbox();
       if (summary.queued > 0) get().refresh();
     });
+
+    /*
+     * Drain on every return to the foreground.
+     *
+     * This is the path that actually matters, and it is separate from the
+     * watcher on purpose. Messages arrive while the app is suspended — no timer
+     * runs, no filesystem event is delivered — so foregrounding is the first
+     * instant anything can see them. Without this, a message that landed while
+     * the app sat in the switcher would wait for a full relaunch.
+     *
+     * `loadSmsDrafts` runs even when the drain imports nothing, so rows left
+     * pending from an earlier session are on screen rather than waiting for the
+     * queue to change.
+     */
+    const stopForeground = onForeground(() => {
+      const summary = get().drainSmsInbox();
+      get().loadSmsDrafts();
+      if (summary.queued > 0) get().refresh();
+    });
+
+    return () => {
+      stopWatching();
+      stopForeground();
+    };
   },
 
   confirmDraft(draftId, overrides) {

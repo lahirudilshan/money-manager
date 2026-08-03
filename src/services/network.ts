@@ -50,6 +50,23 @@ export async function isOnline(): Promise<boolean> {
  * incidental state change. Returns an unsubscribe function.
  */
 export function onNetworkRestored(onActive: () => void): () => void {
+  return onForeground(onActive);
+}
+
+/**
+ * Call `onActive` each time the app returns to the foreground.
+ *
+ * The same mechanism as `onNetworkRestored` under a name that says what it
+ * observes rather than what one caller uses it for. The SMS inbox depends on
+ * this heavily: iOS suspends the app in the background, so foregrounding is the
+ * FIRST moment anything can notice a message the Shortcuts automation appended
+ * while the app was away.
+ *
+ * 'inactive' → 'active' is included deliberately. Pulling down Control Centre,
+ * taking a call, or dismissing the app switcher all pass through 'inactive'
+ * without ever reaching 'background', and a message can land during any of them.
+ */
+export function onForeground(onActive: () => void): () => void {
   let previous: AppStateStatus = AppState.currentState;
 
   const subscription = AppState.addEventListener('change', (next) => {

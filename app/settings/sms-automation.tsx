@@ -10,10 +10,11 @@ import {
   ensureInboxExists,
   FILES_APP_LOCATION,
   INBOX_FILE_PATH,
+  inboxDiagnostics,
 } from '../../src/services/smsInboxFile';
 import { openTestAlertComposer } from '../../src/services/testAlert';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
-import { useAppStore } from '../../src/store/useAppStore';
+import { lastDrainReport, useAppStore } from '../../src/store/useAppStore';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -75,17 +76,17 @@ export default function SmsAutomationGuide() {
   }
 
   /**
-   * Offer the path to copy.
+   * Put the path on the clipboard.
    *
-   * A share sheet rather than a silent clipboard write: `expo-clipboard` throws
-   * on any build that predates it being linked, and the throw escapes a `try`
-   * because Metro hoists the import. Share needs no native module, and its
-   * first item IS Copy — so the user's actual action is one tap either way.
+   * Silent by design — the user is mid-setup and about to switch to Shortcuts,
+   * so the acknowledgement belongs on the button (below) rather than in an alert
+   * they have to dismiss first. See services/clipboard.ts for why the native
+   * module is required lazily.
    */
   async function handleCopy() {
     const ok = await copyToClipboard(INBOX_FILE_PATH);
     if (!ok) {
-      Alert.alert('Could not open', `Type it instead:\n\n${INBOX_FILE_PATH}`);
+      Alert.alert('Could not copy', `Type it instead:\n\n${INBOX_FILE_PATH}`);
       return;
     }
     // Acknowledged on the button rather than in an alert the user has to dismiss
@@ -124,9 +125,101 @@ export default function SmsAutomationGuide() {
     );
   }
 
+  /**
+   * Import, and on a no-op say WHY.
+   *
+   * "Nothing yet" alone is the least useful message this screen can show: it is
+   * identical whether the app is reading a different path than Shortcuts writes,
+   * the file is present but empty, or it holds a message the parser rejects.
+   * Those need completely different fixes, so the file's real state is reported
+   * whenever the import comes back empty.
+   */
   function handleImportNow() {
     const summary = drainSmsInbox();
-    Alert.alert(summary.queued > 0 ? 'Imported' : 'Nothing yet', describeDrain(summary));
+
+    /*
+     * Report the queue state even on success.
+     *
+     * "Imported" alone hid the failure being chased here: rows can be written
+     * and counted while the dashboard stays empty, and that reads to the user
+     * as the import not having happened at all. Showing the pending-row and
+     * draft counts separates "nothing was stored" from "it was stored but not
+     * shown", which need opposite fixes.
+     */
+    if (summary.queued > 0) {
+      const report = lastDrainReport;
+      const shown =
+        report && report.draftsInStore === 0
+          ? '\n\nStored, but the review list is empty — this is a display problem, not an import one. Please screenshot this.'
+          : '';
+
+      Alert.alert(
+        'Imported',
+        `${describeDrain(summary)}${
+          report ? `\n\nPending rows: ${report.pendingRows}\nDrafts on screen: ${report.draftsInStore}` : ''
+        }${shown}`,
+      );
+      return;
+    }
+
+    const info = inboxDiagnostics();
+
+    if (info.headerOnly) {
+      /*
+       * The stale-bookmark case, called out on its own because it is the one
+       * failure the app can neither fix nor work around.
+       *
+       * Shortcuts' "Append to Text File" resolves its File Path against a
+       * FOLDER BOOKMARK saved inside the shortcut. The app's container path
+       * (`Application/<UUID>`) is regenerated on every reinstall, so a bookmark
+       * picked before a reinstall still points at the old container — which
+       * remains on disk and writable. The automation reports success, the file
+       * is visible in Files, and this install reads its own untouched file.
+       * iOS forbids reaching another container, so re-picking the folder inside
+       * the Shortcut is the only repair.
+       */
+      Alert.alert(
+        'Shortcut is writing to an old copy',
+        'This app’s file has never been written to, so your Shortcut is appending somewhere else — usually a folder it remembered from before the app was reinstalled.\n\n' +
+          'To fix it, open your automation and re-pick the folder:\n\n' +
+          `1. Shortcuts → your automation → the Append to Text File action\n` +
+          `2. Clear the File Path field\n` +
+          `3. Tap the folder chooser and pick ${FILES_APP_LOCATION} again\n` +
+          `4. Type ${INBOX_FILE_PATH} as the file path\n\n` +
+          'Deleting the old file in Files first makes it obvious when the new one starts filling up.',
+      );
+      return;
+    }
+
+    /*
+     * The duplicate case, which looks exactly like "nothing happened".
+     *
+     * A message whose fingerprint is already in `sms_inbox` is skipped — and
+     * the existing row keeps whatever status it has. If that row was already
+     * confirmed or dismissed (including during earlier testing), the message is
+     * consumed from the file and correctly never shown again. Indistinguishable
+     * from a broken import unless it is said out loud.
+     */
+    const report = lastDrainReport;
+    if (report && report.duplicates > 0 && report.queued === 0) {
+      Alert.alert(
+        'Already imported before',
+        `${report.duplicates} message(s) were skipped because the app has seen them before — they were confirmed or dismissed earlier, so they are not shown again.\n\n` +
+          `Pending rows: ${report.pendingRows}\n\n` +
+          'To test with a fresh message, send yourself an alert with a DIFFERENT amount.',
+      );
+      return;
+    }
+
+    const details = info.error
+      ? `Could not read the file:\n${info.error}`
+      : !info.exists
+        ? `No file at:\n${info.path}\n\nTurn the switch above off and on to recreate it, then point the Shortcut at that exact path.`
+        : info.records === 0
+          ? `The file exists and holds ${info.bytes} characters, but no messages.\n\nPath:\n${info.path}`
+          : `${info.records} message(s) are in the file but none could be read as a payment.\n\nStarts with:\n${info.preview}`;
+
+    Alert.alert('Nothing imported', `${describeDrain(summary)}\n\n${details}`);
   }
 
   return (
@@ -274,24 +367,62 @@ export default function SmsAutomationGuide() {
                 color={copied ? colors.completed : colors.accent}
                 style={{ fontWeight: '700' }}
               >
-                {copied ? 'Shared' : 'Copy path'}
+                {copied ? 'Copied' : 'Copy path'}
               </Text>
             </Pressable>
 
             {/*
-              Says the file empties itself, because otherwise the healthy state
-              looks broken: the app clears this file on every import, so anyone
-              who opens it to check their setup finds it empty and concludes
-              nothing is working.
+              Two separate facts, so neither hides the other.
+                - WHERE the file is, which the user needs while setting up;
+                - that finding it EMPTY is success, not failure.
+
+              They were one muted paragraph, where the second fact was the one
+              that mattered and the one nobody read. The empty-file point is the
+              single most likely reason someone concludes this feature is broken:
+              the app clears the file on every import, so the healthy state and
+              a dead automation look identical from the Files app.
             */}
-            <Row gap={6}>
-              <Ionicons name="eye-outline" size={13} color={colors.inkSecondary} />
-              <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-                You can open this file any time in Files → <B>{FILES_APP_LOCATION}</B>. It is only a
-                hand-off — the app moves each message into its own storage and empties the file, so
-                finding it empty means everything has been imported.
-              </Text>
-            </Row>
+            <View
+              style={{
+                gap: space.sm,
+                padding: space.md,
+                borderRadius: radius.md,
+                backgroundColor: colors.surfaceSunken,
+              }}
+            >
+              {/* Both rows top-align: their text wraps, and a centred icon
+                  drifts to the middle of a two-line paragraph. */}
+              <Row gap={space.sm} align="flex-start">
+                <Ionicons
+                  name="folder-outline"
+                  size={15}
+                  color={colors.inkSecondary}
+                  style={{ marginTop: 1 }}
+                />
+                <Text variant="caption" tone="secondary" style={{ flex: 1, lineHeight: 18 }}>
+                  Find it in Files under{' '}
+                  <Text variant="caption" color={colors.ink} style={{ fontWeight: '700' }}>
+                    {FILES_APP_LOCATION}
+                  </Text>
+                </Text>
+              </Row>
+
+              <Row gap={space.sm} align="flex-start">
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={15}
+                  color={colors.completed}
+                  style={{ marginTop: 1 }}
+                />
+                <Text variant="caption" tone="secondary" style={{ flex: 1, lineHeight: 18 }}>
+                  <Text variant="caption" color={colors.ink} style={{ fontWeight: '700' }}>
+                    Empty is normal.
+                  </Text>{' '}
+                  Each message is moved into the app and the file is cleared, so an empty file means
+                  everything has been imported.
+                </Text>
+              </Row>
+            </View>
           </Surface>
 
           <PartHeader tag="Shortcuts app" title="Set it up once" />
@@ -330,20 +461,24 @@ export default function SmsAutomationGuide() {
             </Step>
             {/*
               The separator earns a step of its own, and a warning rather than a
-              note, because getting it wrong fails SILENTLY: two messages with
+              note, because getting it wrong fails SILENTLY: messages with
               nothing between them are read as one, and only the first amount is
               ever seen. Nothing errors, so the user's evidence is a transaction
               that simply never appeared.
+
+              No longer insists on "its own line" — the parser accepts the
+              separator anywhere, and the earlier wording sent people looking for
+              a newline they did not need.
             */}
             <Step
               n={7}
               last
               code={RECORD_SEPARATOR}
-              warn="Without this line, two alerts arriving together are read as one — and the second transaction is lost with no error."
+              warn="Without it, alerts arriving together are read as one — and every message after the first is lost with no error."
             >
-              Still in <Tap>Text</Tap>, press return after the{' '}
-              <Chip>Shortcut Input</Chip> chip and type three dashes on their own line. This is what
-              marks the end of each message.
+              Still in <Tap>Text</Tap>, type three dashes straight after the{' '}
+              <Chip>Shortcut Input</Chip> chip. That marks the end of each message — a new line is
+              fine too, but not required.
             </Step>
           </Surface>
 
@@ -631,15 +766,6 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
 
 /** An inline pill styling a phrase the user taps in the Shortcuts UI. */
 function Tap({ children }: { children: React.ReactNode }) {
-  const { colors } = useTheme();
-  return (
-    <Text variant="body" color={colors.ink} style={{ fontWeight: '700' }}>
-      {children}
-    </Text>
-  );
-}
-
-function B({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
   return (
     <Text variant="body" color={colors.ink} style={{ fontWeight: '700' }}>

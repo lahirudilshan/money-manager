@@ -634,13 +634,77 @@ export const smsInboxRepo = {
     return changes > 0;
   },
 
-  /** Messages still awaiting the user, oldest first — the review queue order. */
+  /**
+   * Whether a fingerprint is already queued and still awaiting the user.
+   *
+   * Distinguishes the two cases `add` returning false collapses together: a row
+   * that is still `pending` (genuinely a repeat delivery of something already on
+   * screen) from one the user already confirmed or dismissed. Only the first is
+   * a real duplicate; treating both alike is what made a re-sent test message
+   * vanish with no trace.
+   */
+  isPending(fingerprint: string): boolean {
+    const row = db
+      .select({ id: smsInbox.id })
+      .from(smsInbox)
+      .where(and(eq(smsInbox.fingerprint, fingerprint), eq(smsInbox.status, 'pending')))
+      .get();
+
+    return row !== undefined;
+  },
+
+  /**
+   * Put a resolved row back in the queue, keeping its id and fingerprint.
+   *
+   * The queue is fingerprint-unique so the same message can never occupy two
+   * rows — which means a message the user acted on months ago is permanently
+   * unimportable, even when the bank genuinely sends that exact text again.
+   * Reopening is the escape hatch: the row returns to `pending` with its
+   * resolution cleared, so it appears for review instead of being swallowed.
+   *
+   * Used only when a message arrives whose fingerprint maps to an ALREADY
+   * RESOLVED row. A still-pending row is left alone — it is on screen already.
+   */
+  reopen(fingerprint: string): boolean {
+    const changes = db
+      .update(smsInbox)
+      .set({ status: 'pending', resolvedAt: null, receivedAt: new Date(), updatedAt: now() })
+      .where(eq(smsInbox.fingerprint, fingerprint))
+      .run().changes;
+
+    return changes > 0;
+  },
+
+  /**
+   * Messages still awaiting the user, NEWEST TRANSACTION FIRST.
+   *
+   * Ordered by when the money actually moved (`occurred_on` + `occurred_at`),
+   * not by when the app happened to import the row. Those differ constantly: a
+   * batch drained in one go shares a single `received_at`, so ordering by it
+   * left messages from the same import in arbitrary order — a 15:21 purchase
+   * could sit above a 15:20 one. Worse, a backlog imported after a week offline
+   * would order by import time and interleave old and new transactions at
+   * random.
+   *
+   * Rows with no parsed date sort last rather than first: an unknown date is
+   * not evidence of being recent, and putting them at the top would push the
+   * messages the user actually recognises off the screen.
+   *
+   * COALESCE supplies a low sentinel for the missing case, and the time falls
+   * back to midnight so a dateless-but-timed row still sorts sensibly within its
+   * day. `received_at` breaks any remaining tie so the order is stable across
+   * reloads rather than shifting under the user.
+   */
   pending(): SmsInboxRow[] {
     return db
       .select()
       .from(smsInbox)
       .where(eq(smsInbox.status, 'pending'))
-      .orderBy(asc(smsInbox.receivedAt))
+      .orderBy(
+        sql`COALESCE(${smsInbox.occurredOn}, '0000-00-00') DESC`,
+        sql`COALESCE(${smsInbox.occurredAt}, '00:00') DESC`,
+        desc(smsInbox.receivedAt),
+      )
       .all();
   },
 

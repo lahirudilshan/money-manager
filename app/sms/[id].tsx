@@ -3,11 +3,17 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
-import { Field } from '../../src/components/forms';
+import { AmountField, Field } from '../../src/components/forms';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { to12Hour } from '../../src/core/dates';
-import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
+import {
+  formatAmountInput,
+  formatMoney,
+  parseAmount,
+  toMajor,
+  validateAmount,
+} from '../../src/core/money';
 import { HINT_META, type CategoryHint } from '../../src/core/smsCategoryHints';
 import type { CatalogSuggestion } from '../../src/core/catalogSync';
 import {
@@ -90,9 +96,17 @@ export default function SmsDraftModal() {
   }, [destinations, state.categories]);
 
   const [subcategoryId, setSubcategoryId] = useState(draft?.subcategoryId ?? '');
-  const [amountText, setAmountText] = useState(
-    draft ? toMajor(draft.amountMinor).toFixed(2) : '0',
-  );
+
+  /*
+   * Pre-filled with the SMS amount, already display-formatted.
+   *
+   * Kept alongside the editable state so the screen can tell an untouched field
+   * from an edited one — see `amountError` below. Formatting it here rather
+   * than raw means a large figure reads as "122,867.00" the moment the sheet
+   * opens, not only after the first keystroke.
+   */
+  const initialAmountText = draft ? formatAmountInput(toMajor(draft.amountMinor).toFixed(2)) : '0';
+  const [amountText, setAmountText] = useState(initialAmountText);
   // The picker starts collapsed only when there is a real suggestion to
   // confirm; with nothing detected there is nothing to hide behind.
   const [picking, setPicking] = useState(
@@ -121,7 +135,16 @@ export default function SmsDraftModal() {
   const hintMeta = hint ? HINT_META[hint] : null;
   const isCredit = parsed.direction === 'credit';
   const amountMinor = parseAmount(amountText) ?? draft.amountMinor;
-  const canLog = subcategoryId !== '' && amountMinor > 0;
+
+  /*
+   * Only complain once the field differs from what the SMS said.
+   *
+   * The amount arrives pre-filled and correct, so flagging an untouched field
+   * would greet the user with an error they did not cause. Clearing it to type
+   * a new figure is the moment feedback becomes useful.
+   */
+  const amountError = amountText === initialAmountText ? null : validateAmount(amountText);
+  const canLog = subcategoryId !== '' && amountMinor > 0 && !amountError;
 
   // Shared with the draft card, so a matched account is named identically on the
   // row the user tapped and the screen it opened.
@@ -132,6 +155,9 @@ export default function SmsDraftModal() {
     atm: 'ATM cash',
     transfer_out: 'Transfer out',
     transfer_in: 'Transfer in',
+    // See the matching note in SmsDraftCard: a reversal usually cancels its
+    // original charge before reaching the UI at all.
+    reversal: 'Refund',
     loan_payment: 'Loan payment',
     utility: 'Bill due',
     other: isCredit ? 'Money in' : 'Paid out',
@@ -302,12 +328,15 @@ export default function SmsDraftModal() {
           </Text>
         </Surface>
 
-        <Field
+        {/* The shared money input, so this field formats and validates exactly
+            like every other amount in the app. */}
+        <AmountField
           label="Amount"
+          hero={false}
+          currency={state.currency}
           value={amountText}
           onChangeText={setAmountText}
-          keyboardType="decimal-pad"
-          placeholder="0"
+          error={amountError}
         />
 
         {/* What the system detected, and how sure it is. Shown instead of the

@@ -90,17 +90,14 @@ export function migrateLegacyInbox(): void {
         /*
          * Carry only real messages.
          *
-         * The seed header is itself a record as far as `planDrain` is concerned
-         * (that is deliberate — the SMS parser ignores it later), so counting
-         * records would treat an enabled-but-never-used inbox as having content
-         * and copy the header into a file that already has one. Records made up
-         * entirely of `#` comment lines are therefore dropped here.
+         * `parseInbox` strips `#` comment lines and drops records left empty, so
+         * a legacy file holding nothing but its seed header yields no messages
+         * and nothing is copied — an enabled-but-never-used inbox does not
+         * append a second header to the current file.
          */
-        const carried = planDrain(legacyFile.textSync(), Number.MAX_SAFE_INTEGER)
-          .messages.filter((record) =>
-            record.split('\n').some((line) => !line.trim().startsWith('#')),
-          )
-          .join(`\n${RECORD_SEPARATOR}\n`);
+        const carried = planDrain(legacyFile.textSync(), Number.MAX_SAFE_INTEGER).messages.join(
+          `\n${RECORD_SEPARATOR}\n`,
+        );
 
         if (carried.length > 0) {
           const target = inboxFile();
@@ -110,6 +107,16 @@ export function migrateLegacyInbox(): void {
           );
         }
 
+        /*
+         * These deletes are the exception to "never delete the inbox", and they
+         * are safe because they target ABANDONED paths, not the live one.
+         *
+         * A file at an old path is one nothing writes to any more: its messages
+         * have just been copied across, and leaving it would show the user two
+         * inbox files and invite them to point Shortcuts at the dead one. The
+         * live file at the current path is only ever truncated (see
+         * `drainInbox`), so no bookmark that still matters is invalidated here.
+         */
         legacyFile.delete();
       }
 
@@ -158,34 +165,43 @@ export const FILES_APP_LOCATION = 'On My iPhone → money-manager';
 export const INBOX_FILE_PATH = INBOX_RELATIVE_PATH;
 
 /**
+ * The header a drained inbox is left holding.
+ *
+ * Defined once because two places write it — creation and the post-drain
+ * truncate — and a drain that wrote different text would leave the user with a
+ * file whose instructions drift from the one the setup guide describes.
+ *
+ * `parseInbox` treats it as an ordinary record that the SMS parser then ignores,
+ * so it costs nothing to keep at the top of the file forever.
+ */
+const SEED_HEADER = [
+  '# money-manager SMS inbox — TEMPORARY HANDOFF FILE',
+  '#',
+  '# Your Shortcuts automation appends bank messages here. The app moves',
+  '# each one into its database and clears them from this file, so seeing',
+  '# only these lines means everything has been imported.',
+  '#',
+  // The separator is DESCRIBED, never written literally: `parseInbox` splits on
+  // three-or-more dashes anywhere, so spelling it out here would cut the header
+  // in half and leave a phantom record in the file after every single drain.
+  '# End each message with three dash characters (a new line is optional).',
+  '',
+].join('\n');
+
+/**
  * Create the inbox file if it does not exist.
  *
  * Called when the user turns the feature on. The file must EXIST before
  * Shortcuts can be pointed at it — an automation targeting a missing file
  * fails with an error the user cannot diagnose — and an empty file is also what
  * makes the folder appear in the Files app, since iOS hides an empty container.
- *
- * The seed comment doubles as a header the user sees if they open the file, and
- * `parseInbox` treats it as an ordinary record that the SMS parser then ignores,
- * so it costs nothing.
  */
 export function ensureInboxExists(): { ok: boolean; path: string; error?: string } {
   try {
     const file = inboxFile();
     if (!file.exists) {
       file.create();
-      file.write(
-        [
-          '# money-manager SMS inbox — TEMPORARY HANDOFF FILE',
-          '#',
-          '# Your Shortcuts automation appends bank messages here. The app moves',
-          '# each one into its database and empties this file, so seeing it empty',
-          '# means everything has been imported — nothing is stored here.',
-          '#',
-          '# Separate messages with a line containing only three dashes.',
-          '',
-        ].join('\n'),
-      );
+      file.write(SEED_HEADER);
     }
 
     return { ok: true, path: inboxPath() };
@@ -220,6 +236,79 @@ export function countWaiting(): number {
   }
 }
 
+/** What the app actually sees at the inbox path, for the diagnostics panel. */
+export interface InboxDiagnostics {
+  /** The absolute path the app reads. Compare against what Shortcuts writes. */
+  path: string;
+  exists: boolean;
+  /** Raw byte length. Zero on a file that exists but was never written. */
+  bytes: number;
+  /** Records `parseInbox` finds — after comment stripping. */
+  records: number;
+  /** First 200 characters, so the header/message shape is visible. */
+  preview: string;
+  /**
+   * The file holds the seed header and NOTHING else.
+   *
+   * The single most diagnostic state this feature has. It means the app's own
+   * file is untouched since creation while the user can see their message in
+   * the Files app — so Shortcuts is appending to a different file, almost
+   * always a stale folder bookmark pointing at a previous install's container
+   * (the `Application/<UUID>` path changes on every reinstall). Nothing the app
+   * can read will ever contain those messages: iOS forbids reaching another
+   * container. Only re-picking the folder inside the Shortcut fixes it.
+   */
+  headerOnly: boolean;
+  /** Set when reading threw, e.g. a sandbox permission problem. */
+  error?: string;
+}
+
+/**
+ * Report the inbox file's real state.
+ *
+ * Exists because every failure in this feature looks identical from the UI —
+ * "the file emptied and nothing appeared" — and the difference between "the app
+ * reads a different path than Shortcuts writes", "the file is there but empty",
+ * and "it has content the parser rejects" is invisible without looking. Each
+ * needs a completely different fix, so guessing between them costs a rebuild
+ * cycle every time.
+ *
+ * Deliberately reads the file rather than trusting cached state: the whole point
+ * is to see what is on disk right now.
+ */
+export function inboxDiagnostics(): InboxDiagnostics {
+  const base: InboxDiagnostics = {
+    path: '',
+    exists: false,
+    bytes: 0,
+    records: 0,
+    preview: '',
+    headerOnly: false,
+  };
+
+  try {
+    const file = inboxFile();
+    const path = inboxPath();
+
+    if (!file.exists) return { ...base, path };
+
+    const text = file.textSync();
+
+    return {
+      path,
+      exists: true,
+      bytes: text.length,
+      records: planDrain(text, Number.MAX_SAFE_INTEGER).messages.length,
+      preview: text.slice(0, 200),
+      // Compared against the constant rather than by length, so an edited or
+      // partially-written file is not mistaken for a pristine one.
+      headerOnly: text.trim() === SEED_HEADER.trim(),
+    };
+  } catch (error) {
+    return { ...base, error: String(error) };
+  }
+}
+
 /**
  * Take the waiting messages, leaving anything above the cap in place.
  *
@@ -237,8 +326,19 @@ export function countWaiting(): number {
  *
  * If `commit` throws, the file is left completely untouched and `ok` is false —
  * the batch is retried whole rather than half-consumed.
+ *
+ * THE FILE IS NEVER DELETED, only rewritten. It used to be removed once empty,
+ * which broke the very thing it exists for: iOS grants Shortcuts a
+ * security-scoped bookmark to a specific file, and deleting that file
+ * invalidates the bookmark — so the automation asks for folder permission again
+ * on the next run, over and over. Recreating it a moment later does not help,
+ * because the new file is a different inode. Truncating in place keeps one
+ * stable identity for the bookmark's lifetime, and closes the window where the
+ * file does not exist and an appending Shortcut would fail.
  */
-export function drainInbox(commit: (messages: string[]) => void): DrainPlan & { ok: boolean } {
+export function drainInbox(
+  commit: (messages: string[]) => string[] | void,
+): DrainPlan & { ok: boolean } {
   const empty = { messages: [], remainder: '', deferred: 0, ok: false };
 
   try {
@@ -249,16 +349,31 @@ export function drainInbox(commit: (messages: string[]) => void): DrainPlan & { 
     if (plan.messages.length === 0) return { ...empty, ok: true };
 
     // Durably stored first — see above. A throw here leaves the file intact.
-    commit(plan.messages);
+    const unconsumed = commit(plan.messages) ?? [];
 
-    if (plan.remainder) {
-      file.write(plan.remainder);
-    } else {
-      // Deleted rather than emptied, so a user browsing Files sees the queue is
-      // clear. `ensureInboxExists` recreates it on the next enable, and the
-      // Shortcuts "Append to File" action recreates it on the next message.
-      file.delete();
-    }
+    /*
+     * Rewrite in place: the header, anything the cap deferred, and anything
+     * `commit` could not consume.
+     *
+     * That last group is the reason this returns a value at all. A message the
+     * parser does not recognise stores NO row, so clearing it destroyed the
+     * only copy — the user watched their SMS disappear from the Files app with
+     * nothing arriving in the app and no way to recover the text. Keeping it
+     * means a parser gap is a message still sitting in the file, which is
+     * visible, reportable, and fixed retroactively the moment the parser learns
+     * that format.
+     *
+     * The header goes back every time so the file is never zero bytes — an
+     * empty file reads as "something went wrong" to anyone who opens it, and
+     * these lines are what explain that an empty queue is the healthy state.
+     */
+    const kept = [...unconsumed, plan.remainder].filter((part) => part.length > 0);
+
+    file.write(
+      kept.length > 0
+        ? `${SEED_HEADER}${RECORD_SEPARATOR}\n${kept.join(`\n${RECORD_SEPARATOR}\n`)}\n`
+        : SEED_HEADER,
+    );
 
     return { ...plan, ok: true };
   } catch {
@@ -292,19 +407,53 @@ export function drainInbox(commit: (messages: string[]) => void): DrainPlan & { 
  * this degrades to "not live" rather than breaking.
  */
 export function watchInbox(onChange: () => void): () => void {
+  const stops: (() => void)[] = [];
+
   try {
     const subscription = inboxDir().watch(() => onChange());
-    return () => {
+    stops.push(() => {
       try {
         subscription.remove();
       } catch {
         // Already torn down by the platform; nothing to release.
       }
-    };
+    });
   } catch {
-    return () => {};
+    // No watcher on this platform or build — the poll below still delivers.
   }
+
+  /*
+   * A poll alongside the watcher, because the watcher alone is not dependable.
+   *
+   * `DispatchSource` events are delivered to a RUNNING app. Messages arrive
+   * while the app is backgrounded or the phone is locked — precisely when iOS
+   * has suspended it — and an event that fires against a suspended process is
+   * not queued for later. Observed directly: a file written while the app was
+   * launched-but-not-foreground was never drained until a relaunch.
+   *
+   * `AppState` foregrounding covers the common case, but not "app is open on
+   * screen and a message lands", which is the one the user experiences as
+   * real-time. A cheap timer covers exactly that gap: it only reads a file that
+   * is almost always empty, and the drain's own re-entrancy guard absorbs the
+   * overlap when both the watcher and the tick fire for the same write.
+   */
+  const timer = setInterval(onChange, POLL_INTERVAL_MS);
+  stops.push(() => clearInterval(timer));
+
+  return () => {
+    for (const stop of stops) stop();
+  };
 }
+
+/**
+ * How often to check the inbox while the app is open.
+ *
+ * Two seconds is under the threshold where a person notices a delay, and the
+ * check itself is a stat plus a short read of a file that is usually empty —
+ * far cheaper than the render it would trigger. iOS suspends timers in the
+ * background, so this costs nothing while the app is not in use.
+ */
+const POLL_INTERVAL_MS = 2000;
 
 /**
  * Whether the Files app can actually see the inbox on THIS build.

@@ -4490,6 +4490,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"expo-clipboard@npm:~57.0.1":
+  version: 57.0.1
+  resolution: "expo-clipboard@npm:57.0.1"
+  peerDependencies:
+    expo: "*"
+    react: "*"
+    react-native: "*"
+  checksum: 10c0/b76cb6c8b6503e0d0e5c4bf6935f42fe0eb26716e56bb45fbed1bb4dca9c5ad1b805993ca981d5f8afab5e8333008b1e58878bfa794c1225470b0627f653675a
+  languageName: node
+  linkType: hard
+
 "expo-constants@npm:~57.0.5, expo-constants@npm:~57.0.6":
   version: 57.0.6
   resolution: "expo-constants@npm:57.0.6"
@@ -6114,6 +6125,7 @@ __metadata:
     drizzle-kit: "npm:^0.31.10"
     drizzle-orm: "npm:^0.45.2"
     expo: "npm:~57.0.7"
+    expo-clipboard: "npm:~57.0.1"
     expo-constants: "npm:~57.0.6"
     expo-crypto: "npm:~57.0.1"
     expo-dev-client: "npm:~57.0.7"

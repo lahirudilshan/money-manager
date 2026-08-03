@@ -56,11 +56,34 @@ describe('parseInbox', () => {
     expect(parseInbox(`${multiline}\n${RECORD_SEPARATOR}\n${FUEL}`)).toEqual([multiline, FUEL]);
   });
 
-  it('does not split on a dash line that has other text', () => {
-    // Only a line that is ONLY dashes separates records; "--- END ---" inside a
-    // promotional message must not break it in half.
-    const withDashes = `${WATER}\n--- END ---\nmore text`;
-    expect(parseInbox(withDashes)).toEqual([withDashes]);
+  /*
+   * This used to assert the opposite — that only a line of ONLY dashes could
+   * separate records, so "--- END ---" stayed inside one message.
+   *
+   * That guarantee was traded away deliberately. Requiring a whole line meant a
+   * user whose Shortcut appends "<message>---" (the obvious way to build it)
+   * produced `...Hot Line:0112462462---`, which matched nothing: six real bank
+   * messages parsed as one record and five transactions were lost with no error.
+   *
+   * Splitting on three-or-more dashes anywhere fixes that, at the cost of the
+   * case below. It is the right trade: a trailing separator is what users
+   * actually write, while a bank alert containing "---" mid-sentence is not
+   * something these messages do.
+   */
+  it('splits on three or more dashes wherever they appear', () => {
+    expect(parseInbox(`${WATER}\n--- END ---\nmore text`)).toEqual([WATER, 'END', 'more text']);
+
+    // The case that motivated the change: separator glued to the message.
+    expect(parseInbox(`${WATER}---\n${FUEL}---`)).toEqual([WATER, FUEL]);
+
+    // A padded separator is the same gesture and must not glue records together.
+    expect(parseInbox(`${WATER}\n-----\n${FUEL}`)).toEqual([WATER, FUEL]);
+  });
+
+  it('keeps a single or double dash inside a message', () => {
+    // Only three-or-more dashes separate, so ordinary punctuation is safe.
+    const hyphenated = 'LKR 500.00 debited at SHOP - BRANCH 2 -- CITY';
+    expect(parseInbox(hyphenated)).toEqual([hyphenated]);
   });
 
   it('returns nothing for empty or whitespace-only input', () => {

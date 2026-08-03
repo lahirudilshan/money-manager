@@ -72,7 +72,21 @@ export const MAX_MESSAGES_PER_DRAIN = 50;
  *   - a leading or trailing separator, from an automation that writes one
  *     before every message rather than between them;
  *   - blank records, from a double separator or a stray newline;
- *   - surrounding whitespace on each message.
+ *   - surrounding whitespace on each message;
+ *   - the separator GLUED to the end of a message rather than on its own line.
+ *
+ * That last one is the important one, and it was a real bug. Requiring `---` to
+ * occupy a whole line looked reasonable, but the natural way to build the
+ * Shortcut — appending "<message>---" in one Text action — produces
+ * `...Hot Line:0112462462---` and matched nothing. Six messages then parsed as
+ * ONE record and five real transactions vanished with no error anywhere, which
+ * is the worst possible failure for an intake path the user cannot inspect.
+ *
+ * So the separator is now any run of three-or-more dashes wherever it appears,
+ * as long as it is not inside a word. A bank message can contain a dash, and
+ * even " - " between clauses, but three consecutive dashes mid-sentence is not
+ * something these alerts do — whereas a trailing `---` is something users do
+ * constantly.
  *
  * Returns messages in file order, which is arrival order.
  */
@@ -81,10 +95,54 @@ export function parseInbox(contents: string): string[] {
 
   return contents
     .replace(/\r\n/g, '\n')
-    .split(/^---\s*$/m)
-    .map((record) => record.trim())
+    .split(SEPARATOR_PATTERN)
+    .map(stripComments)
     .filter((record) => record.length > 0);
 }
+
+/**
+ * Drop `#` comment lines from a record, then trim it.
+ *
+ * This is what keeps the seed header from eating the first real message, and it
+ * was a total-loss bug: the header ends with prose, not a separator, so a
+ * Shortcut appending `<message>---` produces
+ *
+ *   # ...header lines...
+ *   # End each message with three dash characters...
+ *   LKR 1,038.30 debited from AC 6796---
+ *
+ * whose FIRST record is the whole header glued to the first message. `parseSms`
+ * sees a block starting in `#`, rejects it, and the drain counts it as "not a
+ * transaction" — then clears the file. The message is gone, no error anywhere,
+ * and the user watches the text disappear from the Files app with nothing
+ * arriving in the app. Messages 2..N were unaffected, which is why this looked
+ * intermittent rather than systematic.
+ *
+ * Stripping the comment lines rather than the whole record is what makes the
+ * message survive: the header contributes only `#` lines, so removing them
+ * leaves exactly the bank text behind. A record that was ONLY header collapses
+ * to an empty string and is filtered out by the caller, which is how a drained
+ * file with just the header still reads as empty.
+ *
+ * Applies to any `#` line, not only the seed header, so a user who annotates
+ * their own inbox does not corrupt the message next to the note.
+ */
+function stripComments(record: string): string {
+  return record
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n')
+    .trim();
+}
+
+/**
+ * Three-or-more dashes, treated as a record boundary wherever they occur.
+ *
+ * Three-or-more rather than exactly three, because an automation that pads the
+ * separator (`-----`) is making the same gesture and should not silently glue
+ * every message together. Global so `split` finds every occurrence.
+ */
+const SEPARATOR_PATTERN = /-{3,}/g;
 
 /**
  * A stable fingerprint of a message, used as the queue's dedupe key.
@@ -116,6 +174,74 @@ export function fingerprintMessage(message: string): string {
   }
 
   return `${hash.toString(36)}-${normalised.length.toString(36)}`;
+}
+
+/** The minimum a record needs for reversal pairing. Matches `ParsedSms`. */
+export interface CancellableEntry {
+  kind: string;
+  direction: string;
+  amountMinor: number;
+  account: string;
+}
+
+/**
+ * Drop each reversal together with the ONE charge it undoes.
+ *
+ * A reversal is not income — it is a charge being taken back, and a bank sends
+ * both messages. Left alone the user sees a spend AND a credit for the same
+ * money, and confirming either one puts a wrong figure on the board.
+ *
+ * The rule is one-for-one, deliberately. A card that is charged, reversed, then
+ * charged again produces three messages, and only the LAST charge is real:
+ *
+ *   debit 1,038.30   ─┐ cancelled as a pair
+ *   reversal 1,038.30 ┘
+ *   debit 1,038.30    → survives
+ *
+ * So each reversal consumes a single matching debit rather than every debit of
+ * that amount. Matching runs newest-first over the entries preceding the
+ * reversal, because a reversal undoes the charge that came before it.
+ *
+ * A reversal with no matching debit is KEPT. That is money genuinely arriving —
+ * a refund for something bought before the app was installed, or in a batch the
+ * user has already reviewed — and dropping it would hide a real credit.
+ *
+ * Entries must be in arrival order (oldest first), which is how the inbox file
+ * and the queue both store them.
+ */
+export function cancelReversals<T extends CancellableEntry>(entries: readonly T[]): T[] {
+  const dropped = new Set<number>();
+
+  entries.forEach((entry, index) => {
+    if (entry.kind !== 'reversal') return;
+
+    /*
+     * Search BACKWARDS from just before the reversal.
+     *
+     * The charge a reversal undoes always precedes it, and scanning newest-first
+     * means the most recent identical charge is consumed — which is what makes
+     * the charge/reverse/charge sequence above leave the final charge standing.
+     */
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (dropped.has(i)) continue;
+
+      const candidate = entries[i];
+      const matches =
+        candidate.direction === 'debit' &&
+        candidate.amountMinor === entry.amountMinor &&
+        // Same account, when both messages name one. Some banks omit it on the
+        // reversal, and an amount match alone is strong enough to pair on.
+        (!candidate.account || !entry.account || candidate.account === entry.account);
+
+      if (matches) {
+        dropped.add(i);
+        dropped.add(index);
+        break;
+      }
+    }
+  });
+
+  return entries.filter((_, index) => !dropped.has(index));
 }
 
 /** The outcome of draining the inbox, for the UI to report. */
