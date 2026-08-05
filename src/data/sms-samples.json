@@ -6,7 +6,7 @@
     "raw": "the SMS text as received (newlines allowed)",
     "expect": "what the parser must extract, or null if it must be ignored",
     "expect.direction": "debit | credit | bill",
-    "expect.kind": "purchase | atm | transfer_out | transfer_in | loan_payment | utility | other",
+    "expect.kind": "purchase | atm | transfer_out | transfer_in | loan_payment | utility | reversal | bank_charge | other",
     "expect.account": "identifying digits/mask the message referenced — used to match your cards",
     "expect.merchant": "payee / description",
     "expect.date": "ISO YYYY-MM-DD or null"
@@ -166,6 +166,50 @@
       "id": "ignore-balance-only",
       "source": "Any bank",
       "raw": "Your available balance in AC XXXXXXXX6796 is LKR 84,300.15 as at 24 Jul 2026.",
+      "expect": null
+    },
+    {
+      "id": "ndb-cefts-transfer-charge",
+      "source": "NDB",
+      "raw": "LKR 25.00 debited from AC XXXXXXXX6796 on 04 Aug 2026 12:02 as CEFTS Transfer Charges. Avl Bal 8,747.20 Call 94112448888 for info",
+      "expect": {
+        "direction": "debit",
+        "kind": "bank_charge",
+        "amountMinor": 2500,
+        "merchant": "CEFTS Transfer Charges",
+        "account": "6796",
+        "date": "2026-08-04"
+      }
+    },
+    {
+      "id": "hnb-mobile-banking-transfer",
+      "source": "HNB",
+      "raw": "LKR 10,025.00 debited to Ac No:13802XXXXX50 on 04/08/26 11:57:03 Reason:MB:ref Bal:LKR 405,757.29 Protect from scams *DO NOT SHARE ACCOUNT DETAILS /OTP* Hotline 0112462462",
+      "expect": {
+        "direction": "debit",
+        "kind": "transfer_out",
+        "amountMinor": 1002500,
+        "merchant": "",
+        "account": "50",
+        "date": "2026-08-04"
+      }
+    },
+    {
+      "id": "ignore-otp-trailing-code",
+      "source": "NDB",
+      "raw": "Your one-time password for transaction LKR 2500.00 at CEB is 681854. Call 0112448888 if unauthorized.",
+      "expect": null
+    },
+    {
+      "id": "ignore-promo-dining-offer",
+      "source": "Amex/NTB",
+      "raw": "Enjoy 30% savings at Cinnamon Lakeside - Long Feng during lunch and 20% at ITC Ratnadipa during lunch & dinner #WithAmex. Valid till 31st Aug. Max savings LKR 10,000. T&C Apply. For details, visit bit.ly/Amex-Dining\n\n*StopAd? SMS BL NTBAmexPrmo to 9010*",
+      "expect": null
+    },
+    {
+      "id": "ignore-p2p-no-account",
+      "source": "wallet",
+      "raw": "You received LKR 10,000 from DILSHAN M N L\nDo not share OTP & sensitive information with anyone.",
       "expect": null
     }
   ]

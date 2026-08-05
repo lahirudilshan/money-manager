@@ -21,7 +21,9 @@ export interface DraftLine {
   type: 'income' | 'expense';
   plannedMinor: Minor;
   dueDay: number;
-  frequency: 'monthly' | 'one_time' | 'yearly';
+  /** Includes `unplanned` — a house line accumulates its bills. See the
+   *  `houses` category in data/categoryCatalog.ts. */
+  frequency: 'monthly' | 'one_time' | 'yearly' | 'unplanned';
   /** Account this line is funded from; null means "use the category default". */
   cardId: string | null;
   /**

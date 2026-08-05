@@ -24,7 +24,15 @@ export type CategoryHint =
   | 'loan'
   | 'transfer'
   | 'atm'
-  | 'income';
+  | 'income'
+  /**
+   * A fee the bank charged — CEFTS transfer charges, stamp duty, ATM fees.
+   *
+   * Its own tag rather than folded into `transfer`, because "CEFTS Transfer
+   * Charges" contains the word Transfer and would otherwise be proposed against
+   * the user's real transfer lines. Every fee belongs on one shared line.
+   */
+  | 'bank_charge';
 
 /** Human label + icon for each hint, for chips and the filter UI. */
 export const HINT_META: Record<CategoryHint, { label: string; icon: string }> = {
@@ -38,6 +46,7 @@ export const HINT_META: Record<CategoryHint, { label: string; icon: string }> = 
   transfer: { label: 'Transfer', icon: 'swap-horizontal-outline' },
   atm: { label: 'ATM cash', icon: 'cash-outline' },
   income: { label: 'Income', icon: 'arrow-down-circle-outline' },
+  bank_charge: { label: 'Bank charge', icon: 'receipt-outline' },
 };
 
 /**
@@ -129,8 +138,34 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
     ],
   ],
   ['loan', [/\bloan\b/i, /\blease\b/i, /\binstal{1,2}ment\b/i, /Reason\s*:\s*MB:loan/i]],
-  ['transfer', [/\btransfer\b/i, /\bcefts\b/i, /\bslips\b/i, /\bctb\b/i]],
+  /*
+   * ATM before fees, mirroring `classifyKind` in smsParser.ts.
+   *
+   * An ATM e-receipt itemises its own "Txn Fee: 30.00LKR", so testing for fee
+   * wording first tagged every cash withdrawal as a bank charge. The fee is a
+   * line item inside the receipt; the transaction is the withdrawal.
+   */
   ['atm', [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i]],
+  /*
+   * Bank fees, AFTER `atm` but BEFORE `transfer` — both placements matter.
+   *
+   * "CEFTS Transfer Charges" matches the transfer rule too, and whichever tag
+   * wins decides which line the app proposes; a 25-rupee fee must never be
+   * offered against the user's real transfer lines, so the more specific rule
+   * is tried first. It sits after `atm` because an ATM e-receipt itemises its
+   * own "Txn Fee: 30.00LKR" — the fee is a line item inside the receipt, and
+   * the transaction is the withdrawal.
+   */
+  [
+    'bank_charge',
+    [
+      /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:charge|charges|fee|fees)\b/i,
+      /\bstamp\s+duty\b/i,
+      /\bcommission\b/i,
+      /\bcharges?\s*(?:applied|debited)\b/i,
+    ],
+  ],
+  ['transfer', [/\btransfer\b/i, /\bcefts\b/i, /\bslips\b/i, /\bctb\b/i]],
   ['income', [/\bsalary\b/i, /\bpayroll\b/i, /\bdividend\b/i, /\brefund\b/i]],
 ];
 
@@ -184,6 +219,7 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
   transfer: [/\btransfer(?:s)?\b/i, /\bcash\b/i],
   atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i],
   income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
+  bank_charge: [/\bbank\b/i, /\bcharge(?:s)?\b/i, /\bfee(?:s)?\b/i, /\bduty\b/i],
 };
 
 /**

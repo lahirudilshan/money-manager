@@ -10,7 +10,7 @@
  * testable and the store can call it after any refresh.
  */
 
-import type { ParsedSms } from './smsParser';
+import { isMatchableAccount, type ParsedSms } from './smsParser';
 import { resolveCardId } from './planning';
 import { billMatchesHint, inferCategoryHint, type CategoryHint } from './smsCategoryHints';
 import { matchMerchant, type MatchConfidence, type MerchantRule } from './merchantRules';
@@ -139,7 +139,10 @@ export function cardForAccount(
   account: string,
   cards: BoardSlice['cards'],
 ): BoardSlice['cards'][number] | undefined {
-  if (!account) return undefined;
+  // A fragment shorter than a last-4 cannot identify a card — "50" from HNB's
+  // "Ac No:13802XXXXX50" would `endsWith`-match any account ending in 50. See
+  // `isMatchableAccount`.
+  if (!isMatchableAccount(account)) return undefined;
   return cards.find((card) => card.last4 && account.endsWith(card.last4));
 }
 
@@ -165,6 +168,19 @@ export function accountLabelFor(account: string, cards: BoardSlice['cards']): st
       : '';
 
   return [bank, card.name, card.last4 ? `••${card.last4}` : ''].filter(Boolean).join(' ');
+}
+
+/**
+ * Whether a budget line is the one bank fees belong on.
+ *
+ * Matched on NAME rather than a stored id so the user's own "Bank Charges" or
+ * "Bank fees" line is adopted instead of a duplicate appearing beside it, and
+ * so renaming ours does not orphan every future fee.
+ */
+export function isBankChargeLine(billText: string): boolean {
+  return /\bbank\b[^.]{0,20}\b(?:charge|charges|fee|fees)\b|\b(?:charge|charges|fee|fees)\b[^.]{0,20}\bbank\b/i.test(
+    billText,
+  );
 }
 
 /** Lowercase, strip punctuation, collapse spaces — for fuzzy text comparison. */
@@ -272,6 +288,34 @@ function scoreSubcategory(
   const card = board.cards.find((c) => c.id === cardId);
   const billText = `${sub.name} ${category?.name ?? ''}`;
 
+  /*
+   * A bank fee belongs on the bank-charges line and nowhere else.
+   *
+   * Scored here rather than pre-selected in the store, because the store
+   * rebuilds every draft from the table on each load — a category chosen there
+   * is silently overwritten on the next refresh. Deciding it in the reconciler
+   * means the answer survives, and is recomputed the same way every time.
+   *
+   * "CEFTS Transfer Charges" would otherwise fuzzy-match any line with
+   * "transfer" in its name, so an explicit rule is what stops a 25-rupee fee
+   * being scored against the user's real transfers.
+   */
+  if (parsed.kind === 'bank_charge') {
+    /*
+     * Matched on the LINE'S OWN NAME, not on the hint.
+     *
+     * The hint says what the message is about; this asks whether this
+     * particular line is the one fees belong on. Returning 0 for everything
+     * else is what stops "CEFTS Transfer Charges" being scored against the
+     * user's real transfer lines, which its wording otherwise invites.
+     *
+     * When no charges line exists yet the whole match list comes back empty,
+     * and the draft falls through to `createLineForDraft` — which proposes
+     * "Bank & fees → Bank charges" and creates it only if the user confirms.
+     */
+    return isBankChargeLine(billText) ? 1 : 0;
+  }
+
   // A loan-payment SMS should settle a loan-linked line and nothing else, so
   // loan lines get a strong prior and other lines a penalty for this kind.
   if (parsed.kind === 'loan_payment') {
@@ -290,8 +334,13 @@ function scoreSubcategory(
 
   const amount = amountScore(parsed.amountMinor, sub.plannedMinor);
 
-  // A card whose last-4 appears in the SMS account is a reliable signal.
-  const accountHit = card?.last4 && parsed.account.endsWith(card.last4) ? 1 : 0;
+  // A card whose last-4 appears in the SMS account is a reliable signal — but
+  // only when the message revealed enough digits to be sure (see
+  // `isMatchableAccount`).
+  const accountHit =
+    card?.last4 && isMatchableAccount(parsed.account) && parsed.account.endsWith(card.last4)
+      ? 1
+      : 0;
 
   const base = hintHit * 0.45 + text * 0.25 + amount * 0.1 + accountHit * 0.2;
 

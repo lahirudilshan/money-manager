@@ -1,0 +1,195 @@
+/**
+ * Turn three onboarding answers into a starting plan.
+ *
+ * ## The design constraint
+ *
+ * Onboarding must not feel like a form. Every question has to visibly change
+ * what the user gets, or it is not worth asking — so this file exists to make
+ * three answers do the work of a twenty-field questionnaire, by INFERRING
+ * everything else rather than asking for it.
+ *
+ * What is asked:
+ *   1. Who you look after — the single biggest driver of what a plan contains.
+ *   2. Whether you drive — decides a whole category (fuel, service, insurance,
+ *      licence) that is pure noise for someone who does not.
+ *   3. Birth year — one number, from which life stage is derived.
+ *
+ * What is NOT asked, and why:
+ *   - income amount: step 3 already collects amounts, and asking twice is the
+ *     definition of a boring form;
+ *   - rent vs own: inferable enough from age to be a reasonable default the
+ *     user can change, and wrong far less often than an extra question costs;
+ *   - marital status, job, city: none of them change which categories a
+ *     household needs.
+ *
+ * Pure functions over plain answers, so the whole mapping is testable without
+ * running onboarding.
+ */
+
+/** Who the user financially supports. The strongest single signal. */
+export type Household =
+  /** One income, one person. */
+  | 'just_me'
+  /** Two adults, shared costs. */
+  | 'partner'
+  /** Dependent children — school, childcare, and a bigger grocery line. */
+  | 'kids'
+  /** Supporting parents, often in another house. See core/houses.ts. */
+  | 'parents';
+
+/** Whether a vehicle category is worth creating at all. */
+export type Transport = 'car' | 'bike' | 'none';
+
+/** The three answers, exactly as onboarding collects them. */
+export interface PersonaAnswers {
+  /** Multi-select: someone can support both kids and parents. */
+  household: Household[];
+  transport: Transport;
+  /** Four-digit year. Null when the user skipped it — nothing depends on it. */
+  birthYear: number | null;
+}
+
+/**
+ * Life stage, derived from age.
+ *
+ * Used to bias DEFAULTS, never to gate anything: a 22-year-old can have a
+ * housing loan and a 60-year-old can be paying school fees. It shifts which
+ * lines are pre-ticked, which is a nudge the user overrides in one tap.
+ *
+ * The bands are deliberately coarse — precise ages would imply a confidence
+ * this has no basis for.
+ */
+export type LifeStage = 'student' | 'early_career' | 'established' | 'pre_retirement' | 'unknown';
+
+/** Age in whole years, or null when no birth year was given. */
+export function ageFrom(birthYear: number | null, now = new Date()): number | null {
+  if (birthYear === null || !Number.isFinite(birthYear)) return null;
+
+  const age = now.getFullYear() - birthYear;
+
+  // Anything outside this is a typo (a 4-digit year entered as 2 digits, a
+  // future year), and a wrong age silently skewing the plan is worse than
+  // simply not using it.
+  return age >= 13 && age <= 110 ? age : null;
+}
+
+export function lifeStageFrom(age: number | null): LifeStage {
+  if (age === null) return 'unknown';
+  if (age < 24) return 'student';
+  if (age < 35) return 'early_career';
+  if (age < 50) return 'established';
+  return 'pre_retirement';
+}
+
+/**
+ * The catalog lines a set of answers should pre-tick.
+ *
+ * Returns catalog subcategory ids (see data/categoryCatalog.ts), so onboarding
+ * step 2 opens with a sensible plan already selected and the user edits rather
+ * than builds. Everything remains togglable — this is a starting point, not a
+ * decision made for them.
+ */
+export function suggestedLines(answers: PersonaAnswers): string[] {
+  const lines = new Set<string>([
+    // True for everyone, regardless of every answer.
+    'salary',
+    'groceries',
+    'electricity',
+    'water',
+    'mobile',
+    'emergency',
+  ]);
+
+  const age = ageFrom(answers.birthYear);
+  const stage = lifeStageFrom(age);
+
+  /*
+   * Housing. Renting is assumed early and ownership later — the single place
+   * age is allowed to pick between two mutually exclusive defaults, because
+   * offering both pre-ticked would double-count the biggest line on the board.
+   */
+  lines.add('rent');
+  if (stage === 'established' || stage === 'pre_retirement') lines.add('housing-loan');
+
+  if (answers.household.includes('partner')) {
+    lines.add('internet');
+    lines.add('dining');
+  }
+
+  if (answers.household.includes('kids')) {
+    lines.add('school-fees');
+    lines.add('tuition');
+    lines.add('childcare');
+    lines.add('kids-extras');
+    lines.add('health-insurance');
+  }
+
+  if (answers.household.includes('parents')) {
+    // The line a second household's costs actually land on — and the reason
+    // the houses dimension exists. See core/houses.ts.
+    lines.add('parents');
+    lines.add('medicine');
+  }
+
+  if (answers.transport === 'car') {
+    lines.add('fuel');
+    lines.add('vehicle-service');
+    lines.add('vehicle-insurance');
+    lines.add('license');
+  } else if (answers.transport === 'bike') {
+    lines.add('fuel');
+    lines.add('vehicle-service');
+  } else {
+    lines.add('public-transport');
+  }
+
+  /*
+   * Age-led additions, kept to the ones that genuinely track life stage rather
+   * than taste.
+   */
+  if (stage === 'student' || stage === 'early_career') {
+    lines.add('streaming');
+  }
+  if (stage === 'established' || stage === 'pre_retirement') {
+    lines.add('investments');
+    lines.add('health-insurance');
+  }
+  if (stage === 'pre_retirement') {
+    lines.add('retirement');
+  }
+
+  return [...lines];
+}
+
+/**
+ * How many houses the answers imply.
+ *
+ * Supporting parents usually means a SECOND property whose bills the user
+ * pays — which is exactly the case the houses dimension was built for, and the
+ * threshold at which its picker becomes visible (see `shouldAskForHouse`).
+ * Everyone else starts with one.
+ */
+export function suggestedHouseCount(answers: PersonaAnswers): number {
+  return answers.household.includes('parents') ? 2 : 1;
+}
+
+/**
+ * A short, human summary of what the answers produced.
+ *
+ * Shown immediately after the questions so the user sees their answers had an
+ * effect — which is what makes three questions feel worthwhile rather than
+ * like a form they filled in for nothing.
+ */
+export function describePersona(answers: PersonaAnswers): string {
+  const parts: string[] = [];
+
+  if (answers.household.includes('kids')) parts.push('family with children');
+  else if (answers.household.includes('partner')) parts.push('two-adult household');
+  else parts.push('single household');
+
+  if (answers.household.includes('parents')) parts.push('supporting parents');
+  if (answers.transport === 'car') parts.push('with a car');
+  else if (answers.transport === 'bike') parts.push('with a bike');
+
+  return parts.join(', ');
+}

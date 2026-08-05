@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   merchantKey,
   type MerchantRule,
@@ -12,6 +12,7 @@ import {
   categories,
   categoryStates,
   fundings,
+  houses,
   incomes,
   loans,
   merchantRules,
@@ -20,13 +21,19 @@ import {
   subcategories,
   subcategoryStates,
   transactions,
+  fuelEntries,
+  vehicles,
+  vehicleServices,
+  serviceItems,
   type Card,
   type Category,
   type CategoryFundingStatus,
   type CategoryState,
   type Funding,
+  type House,
   type Income,
   type Loan,
+  type NewHouse,
   type MerchantRuleRow,
   type NewCard,
   type NewCategory,
@@ -42,6 +49,14 @@ import {
   type SubcategoryState,
   type SubcategoryStatus,
   type Transaction,
+  type FuelEntry,
+  type NewFuelEntry,
+  type NewVehicle,
+  type NewVehicleService,
+  type Vehicle,
+  type VehicleService,
+  type ServiceItem,
+  type NewServiceItem,
 } from './schema';
 
 /**
@@ -94,6 +109,83 @@ export const cardRepo = {
   },
   remove(id: string): void {
     db.delete(cards).where(eq(cards.id, id)).run();
+  },
+};
+
+/**
+ * Properties whose bills the user pays — see `houses` in schema.ts.
+ *
+ * The only non-obvious rule lives in `setPrimary`: exactly one house may be the
+ * user's own home, and it is enforced here rather than in the DDL because
+ * SQLite cannot express "at most one row with is_primary = 1" as a constraint
+ * that survives this codebase's `CREATE TABLE IF NOT EXISTS` approach.
+ */
+export const houseRepo = {
+  all(): House[] {
+    return db
+      .select()
+      .from(houses)
+      .where(isNull(houses.archivedAt))
+      .orderBy(asc(houses.sortOrder))
+      .all();
+  },
+  byId(id: string): House | undefined {
+    return db.select().from(houses).where(eq(houses.id, id)).get();
+  },
+  /** The user's own home, or undefined when none is marked. */
+  primary(): House | undefined {
+    return db
+      .select()
+      .from(houses)
+      .where(and(eq(houses.isPrimary, true), isNull(houses.archivedAt)))
+      .get();
+  },
+  create(input: Omit<NewHouse, 'id'> & { id?: string }): House {
+    const created = db
+      .insert(houses)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+
+    // Creating a house AS primary must demote the incumbent, or two homes end
+    // up flagged and every "which house by default" read becomes a coin toss.
+    if (created.isPrimary) houseRepo.setPrimary(created.id);
+    return created;
+  },
+  update(id: string, patch: Partial<NewHouse>): House | undefined {
+    const updated = db
+      .update(houses)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(houses.id, id))
+      .returning()
+      .get();
+
+    if (patch.isPrimary) houseRepo.setPrimary(id);
+    return updated;
+  },
+  /** Make `id` the one and only primary house. */
+  setPrimary(id: string): void {
+    db.update(houses)
+      .set({ isPrimary: false, updatedAt: now() })
+      .where(eq(houses.isPrimary, true))
+      .run();
+    db.update(houses).set({ isPrimary: true, updatedAt: now() }).where(eq(houses.id, id)).run();
+  },
+  /**
+   * Remove a house. Payments that referenced it keep their history — the
+   * `house_id` foreign keys are `set null`, so the money is never deleted along
+   * with the label, which would silently change a month's totals.
+   */
+  remove(id: string): void {
+    db.delete(houses).where(eq(houses.id, id)).run();
+  },
+  reorder(orderedIds: readonly string[]): void {
+    orderedIds.forEach((id, index) => {
+      db.update(houses)
+        .set({ sortOrder: index, updatedAt: now() })
+        .where(eq(houses.id, id))
+        .run();
+    });
   },
 };
 
@@ -315,6 +407,8 @@ export const stateRepo = {
       actualMinor?: number | null;
       note?: string | null;
       imageUri?: string | null;
+      /** Which property this month's payment was for — see `houses`. */
+      houseId?: string | null;
     },
   ): void {
     const statusTimestamps = { completedAt: input.status === 'paid' ? now() : null };
@@ -327,6 +421,7 @@ export const stateRepo = {
     if (input.actualMinor !== undefined) patch.actualMinor = input.actualMinor;
     if (input.note !== undefined) patch.note = input.note;
     if (input.imageUri !== undefined) patch.imageUri = input.imageUri;
+    if (input.houseId !== undefined) patch.houseId = input.houseId;
 
     db.insert(subcategoryStates)
       .values({
@@ -338,6 +433,7 @@ export const stateRepo = {
         actualMinor: input.actualMinor ?? null,
         note: input.note ?? null,
         imageUri: input.imageUri ?? null,
+        houseId: input.houseId ?? null,
       })
       .onConflictDoUpdate({
         target: [subcategoryStates.subcategoryId, subcategoryStates.period],
@@ -665,6 +761,27 @@ export const smsInboxRepo = {
    * Used only when a message arrives whose fingerprint maps to an ALREADY
    * RESOLVED row. A still-pending row is left alone — it is on screen already.
    */
+  /**
+   * Rewrite a row's PARSED columns from a fresh parse of its `raw` text.
+   *
+   * The columns are a snapshot from whichever parser drained the message, and
+   * nothing else updates them — so a row queued before a parser improvement
+   * keeps its old verdict forever. Only the parse is touched: `status`,
+   * `fingerprint` and the timestamps are untouched, so this can never resurrect
+   * a resolved row or duplicate one.
+   */
+  updateParse(
+    id: string,
+    parse: Partial<Pick<NewSmsInboxRow,
+      'direction' | 'kind' | 'amountMinor' | 'currency' | 'merchant' | 'account' | 'occurredOn' | 'occurredAt'
+    >>,
+  ): void {
+    db.update(smsInbox)
+      .set({ ...parse, updatedAt: now() })
+      .where(eq(smsInbox.id, id))
+      .run();
+  },
+
   reopen(fingerprint: string): boolean {
     const changes = db
       .update(smsInbox)
@@ -731,6 +848,155 @@ export const smsInboxRepo = {
   },
 };
 
+/** Vehicles for the fuel mini-app. Empty on a device that never enables it. */
+export const vehicleRepo = {
+  all(): Vehicle[] {
+    return db
+      .select()
+      .from(vehicles)
+      .orderBy(asc(vehicles.sortOrder), asc(vehicles.createdAt))
+      .all();
+  },
+
+  create(input: Omit<NewVehicle, 'id'> & { id?: string }): Vehicle {
+    return db
+      .insert(vehicles)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+  },
+
+  update(id: string, patch: Partial<NewVehicle>): void {
+    db.update(vehicles)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(vehicles.id, id))
+      .run();
+  },
+
+  /** Cascades to the vehicle's fill-ups and services — see the schema. */
+  remove(id: string): void {
+    db.delete(vehicles).where(eq(vehicles.id, id)).run();
+  },
+};
+
+export const fuelEntryRepo = {
+  /**
+   * A vehicle's fill-ups, ordered by ODOMETER.
+   *
+   * That is the order consumption is measured in: a receipt entered late has a
+   * truthful reading and a misleading timestamp. See core/fuel.ts.
+   */
+  byVehicle(vehicleId: string): FuelEntry[] {
+    return db
+      .select()
+      .from(fuelEntries)
+      .where(eq(fuelEntries.vehicleId, vehicleId))
+      .orderBy(asc(fuelEntries.odometer), asc(fuelEntries.filledAt))
+      .all();
+  },
+
+  create(input: Omit<NewFuelEntry, 'id'> & { id?: string }): FuelEntry {
+    return db
+      .insert(fuelEntries)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+  },
+
+  update(id: string, patch: Partial<NewFuelEntry>): void {
+    db.update(fuelEntries)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(fuelEntries.id, id))
+      .run();
+  },
+
+  remove(id: string): void {
+    db.delete(fuelEntries).where(eq(fuelEntries.id, id)).run();
+  },
+};
+
+export const vehicleServiceRepo = {
+  /** Newest first — a service log is read as history, not as a route. */
+  byVehicle(vehicleId: string): VehicleService[] {
+    return db
+      .select()
+      .from(vehicleServices)
+      .where(eq(vehicleServices.vehicleId, vehicleId))
+      .orderBy(desc(vehicleServices.servicedAt))
+      .all();
+  },
+
+  create(input: Omit<NewVehicleService, 'id'> & { id?: string }): VehicleService {
+    return db
+      .insert(vehicleServices)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+  },
+
+  update(id: string, patch: Partial<NewVehicleService>): void {
+    db.update(vehicleServices)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(vehicleServices.id, id))
+      .run();
+  },
+
+  remove(id: string): void {
+    db.delete(vehicleServices).where(eq(vehicleServices.id, id)).run();
+  },
+};
+
+/**
+ * The parts, fluids and labour on one service bill.
+ *
+ * Kept apart from `vehicleServices.costMinor`, which stays the authoritative
+ * total: a real invoice carries tax and discounts the lines do not sum to, so
+ * the two are allowed to differ and the UI says so rather than silently
+ * overwriting what the user typed.
+ */
+export const serviceItemRepo = {
+  byService(serviceId: string): ServiceItem[] {
+    return db
+      .select()
+      .from(serviceItems)
+      .where(eq(serviceItems.serviceId, serviceId))
+      .orderBy(asc(serviceItems.sortOrder), asc(serviceItems.createdAt))
+      .all();
+  },
+
+  /** Every item for a set of services, grouped — one query for a whole list. */
+  byServices(serviceIds: readonly string[]): Map<string, ServiceItem[]> {
+    if (serviceIds.length === 0) return new Map();
+
+    const rows = db
+      .select()
+      .from(serviceItems)
+      .where(inArray(serviceItems.serviceId, [...serviceIds]))
+      .orderBy(asc(serviceItems.sortOrder), asc(serviceItems.createdAt))
+      .all();
+
+    const grouped = new Map<string, ServiceItem[]>();
+    for (const row of rows) {
+      const list = grouped.get(row.serviceId) ?? [];
+      list.push(row);
+      grouped.set(row.serviceId, list);
+    }
+    return grouped;
+  },
+
+  create(input: Omit<NewServiceItem, 'id'> & { id?: string }): ServiceItem {
+    return db
+      .insert(serviceItems)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+  },
+
+  remove(id: string): void {
+    db.delete(serviceItems).where(eq(serviceItems.id, id)).run();
+  },
+};
+
 export const settingsRepo = {
   get(key: string): string | undefined {
     return db.select().from(settings).where(eq(settings.key, key)).get()?.value;
@@ -773,4 +1039,16 @@ export const SETTINGS_KEYS = {
   catalogCursor: 'catalog_cursor',
   /** When the catalog last synced, for the Settings status line. */
   catalogSyncedAt: 'catalog_synced_at',
+  /** Comma-separated ids of enabled mini apps — see core/miniApps.ts. */
+  miniApps: 'mini_apps',
+  /**
+   * ISO timestamp of the last successful Drive upload.
+   *
+   * Stored rather than read back from Drive so the "last backed up" line
+   * renders instantly and offline — asking Drive would make the screen depend
+   * on a network round trip to say something it already knows.
+   */
+  lastCloudBackupAt: 'last_cloud_backup_at',
+  /** ISO timestamp of the last local backup file written. */
+  lastLocalBackupAt: 'last_local_backup_at',
 } as const;

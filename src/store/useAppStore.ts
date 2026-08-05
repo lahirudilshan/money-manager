@@ -27,7 +27,7 @@ import {
 } from '../core/planning';
 import { suggestCategoryIcon } from '../data/categoryIcons';
 import { groupColors } from '../theme';
-import { parseSms, type ParsedSms } from '../core/smsParser';
+import { isRejectedAsNoise, parseSms, type ParsedSms } from '../core/smsParser';
 import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
 import { merchantKey, planRuleUpsert, type MerchantRule } from '../core/merchantRules';
 import { observationsFrom, planCatalogMerge } from '../core/catalogSync';
@@ -42,7 +42,10 @@ import { isCatalogConfigured, pullRules, pushObservations } from '../services/ca
 import { getDeviceId } from '../services/deviceId';
 import { onForeground, onNetworkRestored } from '../services/network';
 import {
+  cancelInternalTransfers,
   cancelReversals,
+  inferOwnAccounts,
+  splitMergedMessages,
   EMPTY_SUMMARY,
   fingerprintMessage,
   type DrainSummary,
@@ -58,6 +61,7 @@ import { DEBT_CATEGORY_ID, initialiseDatabase, resetDatabase } from '../db/clien
 import {
   cardRepo,
   categoryRepo,
+  houseRepo,
   categoryStateRepo,
   fundingRepo,
   incomeRepo,
@@ -67,18 +71,24 @@ import {
   smsInboxRepo,
   stateRepo,
   subcategoryRepo,
+  vehicleRepo,
   transactionRepo,
   SETTINGS_KEYS,
 } from '../db/repositories';
 import { seedSampleTemplate } from '../db/seed';
+import { seedFuelSample } from '../db/seedFuel';
 import {
   cancelAllReminders,
   notifyDraftsImported,
 } from '../services/notifications';
-import { isUnplanned, supportsSavingPlan } from '../db/schema';
+import { isUnplanned, supportsSavingPlan, type NewVehicle, type Vehicle } from '../db/schema';
+import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '../core/houses';
+import { toggleMiniApp, type MiniAppId } from '../core/miniApps';
 import type {
   Card,
   Category,
+  House,
+  NewHouse,
   CategoryFundingStatus,
   CategoryState,
   Income,
@@ -105,6 +115,14 @@ export interface AppState {
   needsOnboarding: boolean;
   period: string;
   cards: Card[];
+  /**
+   * Properties whose bills the user pays — see `houses` in db/schema.ts.
+   *
+   * Empty on a setup that has never used the feature, and length 1 for the
+   * overwhelmingly common single-home case; the UI keys off the count to stay
+   * invisible until a second house exists (see core/houses.ts).
+   */
+  houses: House[];
   categories: Category[];
   subcategories: Subcategory[];
   states: Map<string, SubcategoryState>;
@@ -162,6 +180,22 @@ export interface AppState {
   /** True while a sync is in flight, so a second cannot start alongside it. */
   catalogSyncing: boolean;
 
+  /**
+   * Enabled mini-app ids, exactly as stored — see core/miniApps.ts.
+   *
+   * Kept as the raw string rather than a parsed set so the store holds one
+   * primitive: every reader goes through `enabledMiniApps`, which validates
+   * against the registry on the way out.
+   */
+  miniApps: string;
+  setMiniAppEnabled: (id: MiniAppId, on: boolean) => void;
+
+  /** Vehicles for the fuel mini-app. Empty unless it has been used. */
+  vehicles: Vehicle[];
+  addVehicle: (input: Omit<NewVehicle, 'id'>) => Vehicle;
+  updateVehicle: (id: string, patch: Partial<NewVehicle>) => void;
+  deleteVehicle: (id: string) => void;
+
   initialise: () => Promise<void>;
   refresh: () => void;
   setPeriod: (period: string) => void;
@@ -203,6 +237,8 @@ export interface AppState {
       imageUri?: string | null;
       /** When it happened. Decides the month; defaults to the viewed period. */
       date?: Date;
+      /** Which property this payment was for — see core/houses.ts. */
+      houseId?: string | null;
     },
   ) => void;
   /** Mark every bill in a category paid or pending at once. */
@@ -247,6 +283,10 @@ export interface AppState {
     planTargetMinor?: Minor | null;
     planDueDate?: Date | null;
     planStartDate?: Date | null;
+    /** Whether payments on this line are attributed to a house. */
+    houseScoped?: boolean;
+    /** Default house for this line's payments — see core/houses.ts. */
+    houseId?: string | null;
   }) => Subcategory;
   updateSubcategory: (id: string, patch: Partial<Subcategory>) => void;
   deleteSubcategory: (id: string) => void;
@@ -261,6 +301,8 @@ export interface AppState {
     date: Date;
     note?: string | null;
     imageUri?: string | null;
+    /** Which property this spend was for — see core/houses.ts. */
+    houseId?: string | null;
   }) => void;
   updateTransaction: (id: string, patch: Partial<NewTransaction>) => void;
   deleteTransaction: (id: string) => void;
@@ -298,6 +340,11 @@ export interface AppState {
    */
   loadSmsDrafts: () => void;
   /**
+   * Retroactively apply the intake rules (noise rejection, own-account transfer
+   * pairing) to rows already queued. Returns how many were retired.
+   */
+  pruneSmsQueue: () => number;
+  /**
    * Watch the inbox folder and drain as messages land, for updates while the
    * app is open. Returns an unsubscribe function. Does not replace the
    * launch/foreground drains — iOS fires no events while the app is suspended.
@@ -315,10 +362,27 @@ export interface AppState {
    */
   confirmDraft: (
     draftId: string,
-    overrides?: { subcategoryId?: string; amountMinor?: Minor; note?: string | null },
+    overrides?: {
+      subcategoryId?: string;
+      amountMinor?: Minor;
+      note?: string | null;
+      /** Which property this payment was for — see core/houses.ts. */
+      houseId?: string | null;
+    },
   ) => void;
   /** Discard a queued draft without logging it. */
   dismissDraft: (draftId: string) => void;
+
+  /** Add a property whose bills are tracked separately. See core/houses.ts. */
+  addHouse: (input: Omit<NewHouse, 'id'>) => House;
+  updateHouse: (id: string, patch: Partial<NewHouse>) => void;
+  /** Mark one house as the user's own home — demotes any previous holder. */
+  setPrimaryHouse: (id: string) => void;
+  /**
+   * Remove a house. Payments that referenced it keep their amounts and simply
+   * become unattributed, so deleting a label never changes a month's total.
+   */
+  deleteHouse: (id: string) => void;
 }
 
 /**
@@ -330,6 +394,7 @@ export interface AppState {
  * the icon is the first thing the eye lands on.
  */
 const PLACEHOLDER_ICONS = new Set(['basket-outline', 'repeat-outline', 'albums-outline']);
+
 
 /**
  * Re-suggest icons for categories still sitting on a placeholder.
@@ -348,6 +413,32 @@ function repairGenericCategoryIcons(): void {
       categoryRepo.update(category.id, { icon: suggested });
     }
   }
+}
+
+/**
+ * Give tied categories a stable order.
+ *
+ * `sort_order` defaults to 0 in the DDL, so every category created without an
+ * explicit one shares position 0 and their relative order is left to whatever
+ * SQLite returns — which can change between launches, making the board appear
+ * to reshuffle itself. On the user's device Income, Debt and an auto-created
+ * "Bank & fees" were all at 0, so a category holding a 25-rupee bank fee could
+ * sort above their salary.
+ *
+ * Only ties are touched, and existing relative order is preserved (the query is
+ * already ordered), so a board the user has deliberately arranged is renumbered
+ * to exactly the order it is already displaying. Idempotent: once every
+ * category has a distinct index there is nothing left to change.
+ */
+function repairCategorySortOrder(): void {
+  const categories = categoryRepo.all();
+
+  const hasTie = categories.some(
+    (category, index) => index > 0 && category.sortOrder === categories[index - 1].sortOrder,
+  );
+  if (!hasTie) return;
+
+  categoryRepo.reorder(categories.map((category) => category.id));
 }
 
 /** Round-robin tint so every new item stays visually distinct with zero picker. */
@@ -406,6 +497,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   needsOnboarding: false,
   period: periodKey(new Date()),
   cards: [],
+  houses: [],
   categories: [],
   subcategories: [],
   states: new Map(),
@@ -426,6 +518,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   catalogSyncEnabled: true,
   catalogSyncedAt: null,
   catalogSyncing: false,
+  miniApps: '',
+  vehicles: [],
 
   async initialise() {
     initialiseDatabase();
@@ -433,6 +527,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // fresh install already recognises the common chains.
     merchantRuleRepo.seed();
     repairGenericCategoryIcons();
+    repairCategorySortOrder();
     get().refresh();
     set({
       ready: true,
@@ -453,7 +548,34 @@ export const useAppStore = create<AppState>((set, get) => ({
      * milliseconds, and it is the reason someone opened the app — seeing their
      * transactions waiting is the whole feature.
      */
+    /*
+     * Put the placeholder houses on a board that has none.
+     *
+     * Houses were introduced as an onboarding step, which silently excluded
+     * everybody who had already finished onboarding: they end up with zero
+     * houses, so the picker can never appear and the feature is invisible.
+     * Seeding here gives an existing install a working set immediately, and the
+     * names are placeholders the user renames (or replaces at re-onboarding).
+     *
+     * Guarded on the table being EMPTY, so it runs at most once and can never
+     * re-add a house the user deliberately deleted.
+     */
+    if (houseRepo.all().length === 0) {
+      for (const house of PLACEHOLDER_HOUSES) get().addHouse(house);
+    }
+
     get().drainSmsInbox();
+
+    /*
+     * Retire queued rows the CURRENT rules would never have queued.
+     *
+     * Runs after the drain so this launch's arrivals are pruned alongside
+     * whatever was already waiting — the two halves of a transfer are commonly
+     * split across sessions, and pairing needs both in the same pass.
+     *
+     * Idempotent, so the usual case is a no-op scan of a short list.
+     */
+    get().pruneSmsQueue();
 
     /*
      * Show anything still awaiting review from previous sessions.
@@ -510,6 +632,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({
       cards: cardRepo.all(),
+      houses: houseRepo.all(),
       categories: categoryRepo.all(),
       subcategories: subcategoryRepo.all(),
       states: stateRepo.byPeriod(period),
@@ -531,11 +654,48 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Opt-out, so an absent key means on — the opposite default to app lock.
       catalogSyncEnabled: settingsRepo.get(SETTINGS_KEYS.catalogSync) !== 'false',
       catalogSyncedAt: settingsRepo.get(SETTINGS_KEYS.catalogSyncedAt) ?? null,
+      miniApps: settingsRepo.get(SETTINGS_KEYS.miniApps) ?? '',
+      vehicles: vehicleRepo.all(),
     });
   },
 
   setPeriod(period) {
     set({ period });
+    get().refresh();
+  },
+
+  setMiniAppEnabled(id, on) {
+    const next = toggleMiniApp(get().miniApps, id, on);
+    settingsRepo.set(SETTINGS_KEYS.miniApps, next);
+
+    /*
+     * Seed a sample history the first time the fuel app is switched on.
+     *
+     * Tank-to-tank consumption needs two full tanks before it can report
+     * anything, so an empty tracker shows "—" everywhere and reads as broken
+     * rather than as new. `seedFuelSample` is a no-op once any vehicle exists,
+     * so this cannot duplicate on a re-toggle.
+     */
+    if (on && id === 'fuel') seedFuelSample();
+
+    set({ miniApps: next });
+    get().refresh();
+  },
+
+  addVehicle(input) {
+    const created = vehicleRepo.create({ ...input, sortOrder: get().vehicles.length });
+    get().refresh();
+    return created;
+  },
+
+  updateVehicle(id, patch) {
+    vehicleRepo.update(id, patch);
+    get().refresh();
+  },
+
+  /** Cascades to the vehicle's fill-ups and services — see the schema. */
+  deleteVehicle(id) {
+    vehicleRepo.remove(id);
     get().refresh();
   },
 
@@ -751,6 +911,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       frequency: proposal.subcategory.frequency ?? 'monthly',
       dueDay: proposal.subcategory.dueDay ?? null,
       icon: proposal.subcategory.icon,
+      /*
+       * A line created from an SMS inherits the same house scoping an
+       * onboarding-created one gets, so a CEB bill that first arrives by
+       * message behaves identically to one the user picked from the catalog.
+       * Without this, the house picker would appear on some electricity lines
+       * and not others depending purely on how they came into existence.
+       */
+      houseScoped: isHouseScopedHint(draft.hint),
+      houseId: get().houses.find((house) => house.isPrimary)?.id ?? null,
     });
 
     get().confirmDraft(draftId, {
@@ -923,7 +1092,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addCategory(input) {
-    const created = categoryRepo.create({ ...input, color: nextColor(get().categories.length) });
+    const created = categoryRepo.create({
+      ...input,
+      color: nextColor(get().categories.length),
+      /*
+       * Default to the END of the board, not the top.
+       *
+       * `sort_order` has no DB default beyond 0, so any caller that omits it —
+       * the SMS auto-file path and the learned-category path both do — lands a
+       * new category at position 0, tied with Income and Debt. That is how a
+       * "Bank & fees" category created for a 25-rupee charge ended up sitting
+       * above the user's salary, which reads as though the app decided bank
+       * fees were the most important thing on their board.
+       *
+       * An explicit `sortOrder` from the caller (onboarding passes one) still
+       * wins, so deliberate ordering is untouched.
+       */
+      sortOrder: input.sortOrder ?? get().categories.length,
+    });
     get().refresh();
     return created;
   },
@@ -977,6 +1163,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       planTargetMinor: input.planTargetMinor ?? null,
       planDueDate: input.planDueDate ?? null,
       planStartDate: input.planStartDate ?? null,
+      houseScoped: input.houseScoped ?? false,
+      // Only meaningful on a house-scoped line; stored regardless so turning
+      // scoping on later does not lose a default the caller already knew.
+      houseId: input.houseId ?? null,
       sortOrder: siblings.length,
     });
     get().refresh();
@@ -1016,6 +1206,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       date: input.date,
       note: input.note ?? null,
       imageUri: input.imageUri ?? null,
+      houseId: input.houseId ?? null,
     });
     get().refresh();
   },
@@ -1169,6 +1360,168 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   /**
+   * Re-apply the intake rules to rows ALREADY sitting in the queue.
+   *
+   * The drain applies noise rejection and pair-cancellation to one batch, at
+   * the moment messages leave the file. That leaves a gap the user hit
+   * directly: rows queued by an earlier build stay exactly as that build
+   * classified them, so improving the parser or adding a cancellation rule does
+   * nothing for the eight messages already on their dashboard. Their Smart
+   * Detect showed both halves of two internal transfers plus a row whose
+   * merchant was their own bank balance, none of which any later drain would
+   * ever revisit.
+   *
+   * So this is the retroactive pass. It re-parses each pending row from `raw`
+   * (the fixed parser, not the snapshot that was stored) and dismisses:
+   *
+   *   - rows the current parser now recognises as noise — an OTP or promo that
+   *     an older, more permissive parser let through;
+   *   - both halves of every own-account transfer pair.
+   *
+   * Dismissed rather than deleted, exactly as `dismissDraft` does, so each
+   * fingerprint still blocks a re-import. Idempotent: a second run finds
+   * nothing left to dismiss, which is what makes it safe to call on every
+   * launch.
+   *
+   * Returns how many rows it retired, for the caller to report or log.
+   */
+  pruneSmsQueue() {
+    const rows = smsInboxRepo.pending();
+    if (rows.length === 0) return 0;
+
+    /*
+     * Repair rows holding MORE THAN ONE message before anything else.
+     *
+     * A Shortcut that appended without a separator stored two alerts as one
+     * row, and the amount was read out of the wrong one — the user's device had
+     * LKR 10,000.00 recorded for a LKR 50.00 Dialog purchase, 200x too high.
+     * Re-parsing alone cannot fix that: the row's `raw` genuinely contains both
+     * messages, so any parser reading it will keep picking one message's amount
+     * and another's merchant.
+     *
+     * So the row is split into its constituent messages, each re-ingested as
+     * its own row (the fingerprint index makes an already-present piece a
+     * no-op), and the merged original dismissed. Done first so the pruning
+     * below sees the recovered pieces — one of them may be half of a transfer
+     * pair, which it could never be while buried in a blob.
+     */
+    let splitRows = 0;
+    for (const row of rows) {
+      const pieces = splitMergedMessages(row.raw);
+      if (pieces.length < 2) continue;
+
+      // Only act when the split genuinely yields readable transactions;
+      // otherwise leave the row alone rather than shredding it on a guess.
+      const readable = pieces.filter((piece) => parseSms(piece) !== null);
+      if (readable.length === 0) continue;
+
+      for (const piece of readable) get().ingestSmsText(piece);
+      smsInboxRepo.resolve(row.id, 'dismissed');
+      splitRows += 1;
+    }
+
+    /*
+     * Refresh the STORED parse of every pending row.
+     *
+     * The columns are a snapshot taken by whichever parser was current when the
+     * message was drained, and nothing ever rewrote them. So a row queued
+     * before `bank_charge` existed still reads `kind = 'transfer_out'`, and any
+     * code reading the column — rather than re-parsing `raw` — keeps acting on
+     * the old verdict. That is why the user's 25.00 CEFTS charge was filed by
+     * name-matching rather than recognised as a fee.
+     *
+     * Confirmed and dismissed rows are deliberately NOT touched: reopening a
+     * row whose money is already on the board would double-count it, and
+     * rewriting history to match a newer parser buys nothing.
+     */
+    for (const row of smsInboxRepo.pending()) {
+      const fresh = parseSms(row.raw);
+      if (!fresh) continue;
+      if (fresh.kind === row.kind && fresh.merchant === row.merchant) continue;
+
+      smsInboxRepo.updateParse(row.id, {
+        direction: fresh.direction,
+        kind: fresh.kind,
+        amountMinor: fresh.amountMinor,
+        currency: fresh.currency,
+        merchant: fresh.merchant,
+        account: fresh.account,
+        occurredOn: fresh.date,
+        occurredAt: fresh.time,
+      });
+    }
+
+    // Re-read: the split above may have added rows and retired others.
+    const current = smsInboxRepo.pending();
+    const parsed = current.map((row) => ({ row, sms: parseSms(row.raw) }));
+
+    /*
+     * A row the CURRENT parser rejects as noise.
+     *
+     * Deliberately not "anything that fails to parse": a row the parser simply
+     * cannot read is a parser gap, and dismissing it would destroy the evidence
+     * — the same distinction the drain draws. See `isRejectedAsNoise`.
+     */
+    const doomed = new Set(
+      parsed.filter((entry) => isRejectedAsNoise(entry.row.raw)).map((entry) => entry.row.id),
+    );
+
+    // Pair-cancellation over everything still standing, in time order, so the
+    // two halves of a transfer find each other even when they were drained in
+    // separate batches — which is exactly how they arrived.
+    const movements = parsed.filter(
+      (entry): entry is { row: (typeof current)[number]; sms: ParsedSms } =>
+        entry.sms !== null && !doomed.has(entry.row.id),
+    );
+
+    /*
+     * Own accounts, learned from the messages as well as from the cards.
+     *
+     * Cards usually carry no `last4` — onboarding picks banks from brand tiles
+     * and never asks for account numbers — so relying on them alone left
+     * `ownAccounts` empty and pairing did nothing at all. See
+     * `inferOwnAccounts`.
+     */
+    const ownAccounts = inferOwnAccounts(
+      parsed.map((entry) => entry.sms?.account ?? ''),
+      get().cards.map((card) => card.last4 ?? ''),
+    );
+
+    /*
+     * Oldest first, so pairing sees the queue in the order the money moved.
+     *
+     * `receivedAt` breaks ties rather than leaving equal timestamps to the
+     * sort's discretion: several of these alerts share a minute (the user has
+     * two at 12:02), and an unstable order there would make which half of a
+     * pair gets consumed vary between launches — so the same queue could prune
+     * differently each time the app opened.
+     */
+    const ordered = [...movements].sort((a, b) => {
+      const byWhen = `${a.sms.date ?? ''}${a.sms.time ?? ''}`.localeCompare(
+        `${b.sms.date ?? ''}${b.sms.time ?? ''}`,
+      );
+      return byWhen !== 0 ? byWhen : a.row.receivedAt.getTime() - b.row.receivedAt.getTime();
+    });
+
+    const survivors = new Set(cancelInternalTransfers(ordered.map((entry) => entry.sms), ownAccounts));
+    for (const entry of ordered) {
+      if (!survivors.has(entry.sms)) doomed.add(entry.row.id);
+    }
+
+    for (const id of doomed) smsInboxRepo.resolve(id, 'dismissed');
+
+    /*
+     * Rows retired by the split are counted too, so the caller's number matches
+     * what the user sees disappear. A split row is genuinely gone from the
+     * queue even though its pieces took its place.
+     */
+    const retired = doomed.size + splitRows;
+
+    if (retired > 0) get().loadSmsDrafts();
+    return retired;
+  },
+
+  /**
    * Rebuild `smsDrafts` from the `sms_inbox` table.
    *
    * Matching runs here rather than at insert time because it depends on the
@@ -1180,9 +1533,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadSmsDrafts() {
     const { subcategories, categories, cards, merchantRules, currency, usdRate } = get();
 
-    const drafts = smsInboxRepo.pending().map((row) =>
-      reconcileSms(
-        {
+    /*
+     * RE-PARSE from `raw`, falling back to the stored columns.
+     *
+     * The stored fields are a snapshot taken by whichever parser was current
+     * when the message was drained, and reading them back meant a parser fix
+     * never reached a row already in the queue. Observed directly on the user's
+     * device: rows sat there with `kind:'other'` and `merchant:'Bal:LKR
+     * 395,732'` — the old extractor's output — while the fixed parser read the
+     * same `raw` text correctly. They would have stayed wrong forever, because
+     * nothing re-visits a pending row.
+     *
+     * This is what `raw` was kept for (see `smsInbox` in db/schema.ts: "for a
+     * future parser to re-read"). The fallback matters for a row whose text the
+     * CURRENT parser rejects outright — better to show the stale snapshot than
+     * to blank the row — and `pruneQueue` below is what clears those out when
+     * they are genuinely noise.
+     */
+    const drafts = smsInboxRepo.pending().map((row) => {
+      const reparsed = parseSms(row.raw);
+
+      return reconcileSms(
+        reparsed ?? {
           direction: (row.direction ?? 'debit') as ParsedSms['direction'],
           kind: (row.kind ?? 'other') as ParsedSms['kind'],
           amountMinor: row.amountMinor ?? 0,
@@ -1202,8 +1574,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         // entirely in one currency, so an unconverted figure would match nothing
         // and record a salary as pocket change.
         { currency, usdRate },
-      ),
-    );
+      );
+    });
 
     /*
      * Already newest-transaction-first — see `smsInboxRepo.pending`.
@@ -1275,6 +1647,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     let queued = 0;
     let duplicates = 0;
     let ignored = 0;
+    /** Halves of own-account transfers dropped as not-income-and-not-spend. */
+    let internalTransfers = 0;
+    /** Bank fees logged straight to the charges line without review. */
+    let autoFiled = 0;
 
     /*
      * Re-entrancy guard.
@@ -1316,7 +1692,20 @@ export const useAppStore = create<AppState>((set, get) => ({
          * to diagnose because the evidence destroyed itself. The deep-link path
          * has always logged this; the file path never did.
          */
-        const unreadable = parsed.filter((entry) => entry.sms === null).map((entry) => entry.raw);
+        /*
+         * Split the rejects into NOISE and genuinely-unreadable text.
+         *
+         * Both fail to parse, but they must be treated oppositely. Noise (an
+         * OTP, a promo blast, a message with no money wording at all) is
+         * recognised and thrown away — retaining it is what let the user's
+         * handoff file silently fill with marketing SMS quoting LKR amounts.
+         * Text the parser simply does not understand is kept in the file, so a
+         * parser gap stays visible and is fixed retroactively rather than
+         * destroying a real transaction. See `isRejectedAsNoise`.
+         */
+        const rejected = parsed.filter((entry) => entry.sms === null).map((entry) => entry.raw);
+        const noise = rejected.filter((raw) => isRejectedAsNoise(raw));
+        const unreadable = rejected.filter((raw) => !isRejectedAsNoise(raw));
 
         /*
          * Log each unreadable message ONCE, not on every tick.
@@ -1333,10 +1722,55 @@ export const useAppStore = create<AppState>((set, get) => ({
           logSmsIntake('parser-rejected', raw);
         }
 
-        ignored += unreadable.length;
+        /*
+         * Noise is logged too, but it is consumed rather than retained.
+         *
+         * Recorded so "why did my promo SMS vanish" has an answer in the
+         * diagnostics panel, and so a message wrongly classified as noise —
+         * the one dangerous failure mode of the self-cleaning rule — leaves a
+         * trace instead of disappearing without evidence.
+         */
+        for (const raw of noise) {
+          const key = fingerprintMessage(raw);
+          if (loggedUnreadable.has(key)) continue;
+          loggedUnreadable.add(key);
+          logSmsIntake('noise-discarded', raw);
+        }
 
-        const surviving = cancelReversals(movements.map((entry) => entry.sms));
+        ignored += rejected.length;
+
+        /*
+         * Cancel reversal pairs, then own-account transfer pairs.
+         *
+         * Order matters only in that both run over the whole batch before
+         * anything is stored, so neither a refunded charge nor an internal
+         * transfer ever flickers into the queue for the user to tidy away.
+         *
+         * The transfer pass needs to know which accounts are the USER'S — that
+         * is the entire safety mechanism (see `cancelInternalTransfers`). A
+         * batch containing a genuine 10,000 payment to a third party and an
+         * internal 10,000 top-up is separable only by whether a matching credit
+         * landed on another account of theirs.
+         */
+        /*
+         * Own accounts, learned from this batch as well as from the cards —
+         * see `inferOwnAccounts`. Without the inference this list is empty on
+         * a normal setup and no transfer is ever cancelled.
+         */
+        const ownAccounts = inferOwnAccounts(
+          movements.map((entry) => entry.sms.account),
+          get().cards.map((card) => card.last4 ?? ''),
+        );
+
+        const afterReversals = cancelReversals(movements.map((entry) => entry.sms));
+        const surviving = cancelInternalTransfers(afterReversals, ownAccounts);
         const keep = new Set(surviving);
+
+        // Both halves of an internal transfer are dropped silently — no row, no
+        // draft. They are not income and not spend, so there is nothing for the
+        // user to decide, and surfacing them would re-create the noise the
+        // feature exists to remove.
+        internalTransfers += afterReversals.length - surviving.length;
 
         for (const entry of movements) {
           // A charge cancelled by its reversal — and the reversal itself — are
@@ -1346,15 +1780,35 @@ export const useAppStore = create<AppState>((set, get) => ({
           const result = get().ingestSmsText(entry.raw);
           if (result === 'duplicate') duplicates++;
           else if (result === null) ignored++;
-          else queued++;
+          else {
+            /*
+             * Bank fees queue like everything else. NOTHING is created here.
+             *
+             * Two earlier versions both wrote to the board before the user had
+             * agreed to anything: the first confirmed the fee outright (so it
+             * vanished from Smart Detect and the user went hunting for a
+             * transaction the app had decided not to mention), the second still
+             * created the "Bank & fees" category and its line during the drain.
+             * Both meant an incoming SMS could add a category to someone's
+             * board unprompted.
+             *
+             * The draft is simply queued. `reconcileSms` proposes the charges
+             * line when one already exists, and `confirmDraft` creates it on
+             * demand if it does not — so the category appears at the moment the
+             * user confirms, and never before.
+             */
+            queued++;
+          }
         }
 
         /*
-         * Hand back what could not be stored, so the file keeps it.
+         * Hand back only what could not be UNDERSTOOD, so the file keeps it.
          *
-         * Only the unreadable ones. A duplicate is already in the table and a
-         * reversal pair was cancelled deliberately — both are genuinely
-         * consumed, and returning them would make the file never empty.
+         * Everything else is genuinely consumed: a duplicate is already in the
+         * table, a cancelled pair was dropped deliberately, and recognised noise
+         * is meant to disappear. Returning any of those would make the file
+         * never empty — which is both alarming to a user browsing Files and the
+         * reason the inbox previously accumulated junk indefinitely.
          */
         return unreadable;
       });
@@ -1431,7 +1885,14 @@ export const useAppStore = create<AppState>((set, get) => ({
        */
       void notifyDraftsImported(queued);
 
-      return { queued, duplicates, ignored, deferred: drained.deferred };
+      return {
+        queued,
+        duplicates,
+        ignored,
+        deferred: drained.deferred,
+        internalTransfers,
+        autoFiled,
+      };
     } finally {
       draining = false;
     }
@@ -1469,6 +1930,10 @@ export const useAppStore = create<AppState>((set, get) => ({
      */
     const stopForeground = onForeground(() => {
       const summary = get().drainSmsInbox();
+      // The halves of one transfer routinely arrive in DIFFERENT batches (the
+      // sending and receiving banks alert independently), so pairing has to run
+      // over the whole queue after each import, not only within a batch.
+      get().pruneSmsQueue();
       get().loadSmsDrafts();
       if (summary.queued > 0) get().refresh();
     });
@@ -1502,12 +1967,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         amountMinor,
         date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
         note: overrides?.note ?? draft.parsed.raw,
+        houseId: overrides?.houseId ?? null,
       });
     } else {
       stateRepo.logTransaction(subcategoryId, period, {
         status: 'paid',
         actualMinor: amountMinor,
         note: overrides?.note ?? `From SMS: ${draft.parsed.raw}`,
+        houseId: overrides?.houseId ?? null,
       });
     }
 
@@ -1547,6 +2014,85 @@ export const useAppStore = create<AppState>((set, get) => ({
     smsInboxRepo.resolve(draftId, 'dismissed');
     set({ smsDrafts: get().smsDrafts.filter((d) => d.id !== draftId) });
   },
+
+  addHouse(input) {
+    const created = houseRepo.create({
+      ...input,
+      // First house is the user's own home unless they said otherwise: with one
+      // house every payment belongs to it, and having no primary would leave
+      // `defaultHouseId` with nothing to fall back on.
+      isPrimary: input.isPrimary ?? get().houses.length === 0,
+      sortOrder: input.sortOrder ?? get().houses.length,
+    });
+
+    /*
+     * Mark existing per-property lines as house-scoped, once a SECOND house
+     * makes the distinction meaningful.
+     *
+     * A board created before this feature has every line at `house_scoped = 0`,
+     * because scoping is set at creation from a catalog id or an SMS hint that
+     * older lines never had. Without this, a user could add their parents'
+     * house, go to tag the electricity bill, and find no picker anywhere — the
+     * feature would look broken while working exactly as written.
+     *
+     * Runs on the second house rather than the first because that is the moment
+     * the question becomes answerable, and only touches lines still at the
+     * default — a line the user has deliberately unscoped stays unscoped.
+     */
+    const houses = houseRepo.all();
+    /*
+     * Backfill once the SECOND house exists — the moment "which house?" becomes
+     * a real question. `>= 2` rather than `=== 2` because houses can also be
+     * seeded in a batch (see `ensureHousesSeeded`), where the count jumps past
+     * two and an equality check would silently skip the backfill entirely.
+     */
+    if (houses.length >= 2) {
+      for (const sub of get().subcategories) {
+        if (sub.houseScoped) continue;
+
+        const category = get().categories.find((c) => c.id === sub.categoryId);
+        if (!isHouseScopedName(`${sub.name} ${category?.name ?? ''}`)) continue;
+
+        subcategoryRepo.update(sub.id, {
+          houseScoped: true,
+          // Default to the user's own home; the picker is what changes it.
+          houseId: houses.find((house) => house.isPrimary)?.id ?? null,
+        });
+      }
+    }
+
+    get().refresh();
+    return created;
+  },
+
+  updateHouse(id, patch) {
+    houseRepo.update(id, patch);
+    get().refresh();
+  },
+
+  setPrimaryHouse(id) {
+    houseRepo.setPrimary(id);
+    get().refresh();
+  },
+
+  deleteHouse(id) {
+    houseRepo.remove(id);
+
+    /*
+     * Promote another house when the primary one is removed.
+     *
+     * Without this, deleting the home leaves every house unflagged and
+     * `defaultHouseId` falls through to null — so new payments silently stop
+     * being attributed to anything on a setup that still has houses in it.
+     */
+    const remaining = houseRepo.all();
+    if (remaining.length > 0 && !remaining.some((house) => house.isPrimary)) {
+      houseRepo.setPrimary(remaining[0].id);
+    }
+
+    get().refresh();
+  },
+
 }));
 
 // ------------------------------------------------------------- selectors

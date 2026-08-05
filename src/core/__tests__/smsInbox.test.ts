@@ -154,8 +154,40 @@ describe('describeDrain', () => {
 
   it('reports every outcome that happened', () => {
     expect(
-      describeDrain({ queued: 2, duplicates: 1, ignored: 3, deferred: 5 }),
+      describeDrain({
+        ...EMPTY_SUMMARY,
+        queued: 2,
+        duplicates: 1,
+        ignored: 3,
+        deferred: 5,
+      }),
     ).toBe('2 transactions to review · 1 already added · 3 not a transaction · 5 left for next time');
+  });
+
+  it('reports own-account transfers that were skipped', () => {
+    // A drain of nothing but internal transfers must not read "No new
+    // messages" while the file visibly emptied — that looks like a broken
+    // intake. See `cancelInternalTransfers`.
+    expect(describeDrain({ ...EMPTY_SUMMARY, internalTransfers: 4 })).toBe(
+      '4 own transfers skipped',
+    );
+    expect(describeDrain({ ...EMPTY_SUMMARY, internalTransfers: 1 })).toBe(
+      '1 own transfer skipped',
+    );
+  });
+
+  it('says nothing about bank charges, which now queue like anything else', () => {
+    /*
+     * Fees used to be filed away silently and reported as "2 bank charges
+     * filed". They now appear in the review queue with their category already
+     * chosen, so they are counted in `queued` and need no line of their own —
+     * announcing them separately would imply they had gone somewhere else,
+     * which is exactly the confusion the old behaviour caused.
+     */
+    expect(describeDrain({ ...EMPTY_SUMMARY, autoFiled: 2 })).toBe('No new messages.');
+    expect(describeDrain({ ...EMPTY_SUMMARY, queued: 2, autoFiled: 2 })).toBe(
+      '2 transactions to review',
+    );
   });
 
   it('says something useful when nothing arrived', () => {

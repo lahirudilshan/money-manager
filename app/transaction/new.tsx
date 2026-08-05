@@ -5,6 +5,7 @@ import { Pressable, TextInput, View } from 'react-native';
 import { AccountField } from '../../src/components/AccountPicker';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
 import { DatePickerField } from '../../src/components/DatePickerField';
+import { HousePicker } from '../../src/components/HousePicker';
 import { ImageUploader } from '../../src/components/ImageUploader';
 import { ManagePlanSheet } from '../../src/components/ManagePlanSheet';
 import { StatusToggle } from '../../src/components/StatusToggle';
@@ -12,6 +13,7 @@ import { AmountField } from '../../src/components/forms';
 import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { formatMoney, parseAmount } from '../../src/core/money';
+import { defaultHouseId } from '../../src/core/houses';
 import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
 import { isUnplanned } from '../../src/db/schema';
 import { resolveBrand } from '../../src/data/banks';
@@ -53,6 +55,12 @@ export default function NewTransactionScreen() {
   );
   const [cardId, setCardId] = useState<string | null>(null);
   const [status, setStatus] = useState<SubcategoryStatus>('paid');
+  /**
+   * Which house this spend was for. Null means "use the default", which is
+   * resolved below rather than stored, so changing line keeps the picker in
+   * step with the newly-chosen line's own default.
+   */
+  const [houseId, setHouseId] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
 
@@ -106,9 +114,16 @@ export default function NewTransactionScreen() {
   const effectiveCardId =
     cardId ?? resolveCardId(selected?.line.cardId, selected?.category.cardId);
 
+  // Only lines that opt in ask which property they were for — see core/houses.ts.
+  const houseScoped = selected?.line.houseScoped ?? false;
+  const effectiveHouseId =
+    houseId ?? defaultHouseId(state.houses, selected?.line.houseId ?? null);
+
   function selectLine(id: string) {
     setSubcategoryId(id);
     setCardId(null);
+    // Drop any manual house choice so the new line's own default applies.
+    setHouseId(null);
     if (id !== '__new__') {
       const line = destinations.find((d) => d.line.id === id)?.line;
       // Prefill the plan so logging an as-expected bill is one tap.
@@ -152,6 +167,9 @@ export default function NewTransactionScreen() {
         date,
         note: note.trim() || null,
         imageUri,
+        // Only recorded on a house-scoped line; elsewhere the question was
+        // never asked and an attribution would be invented.
+        houseId: houseScoped ? effectiveHouseId : null,
       });
     } else {
       state.logTransaction(targetId, {
@@ -160,6 +178,7 @@ export default function NewTransactionScreen() {
         note: note.trim() || null,
         imageUri,
         date,
+        houseId: houseScoped ? effectiveHouseId : null,
       });
     }
 
@@ -322,6 +341,13 @@ export default function NewTransactionScreen() {
         cards={state.cards}
         selectedId={effectiveCardId}
         onSelect={setCardId}
+      />
+
+      <HousePicker
+        houses={state.houses}
+        houseScoped={houseScoped}
+        selectedHouseId={effectiveHouseId}
+        onSelect={setHouseId}
       />
 
       <StatusToggle value={status} onChange={setStatus} />

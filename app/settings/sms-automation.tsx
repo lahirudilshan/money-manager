@@ -4,7 +4,7 @@ import { Alert, Pressable, Switch, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SMART_DETECT_NAME, SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { BottomSheet, Label, Row, Surface, Text } from '../../src/components/ui';
-import { describeDrain, RECORD_SEPARATOR } from '../../src/core/smsInbox';
+import { describeDrain } from '../../src/core/smsInbox';
 import { copyToClipboard } from '../../src/services/clipboard';
 import {
   ensureInboxExists,
@@ -456,8 +456,11 @@ export default function SmsAutomationGuide() {
               n={6}
               warn="Insert the chip, don’t type it — tap and hold Text, then pick Shortcut Input."
             >
-              Tap and hold <Tap>Text</Tap> → <Chip>Shortcut Input</Chip>. Then under{' '}
-              <Tap>File Path</Tap>, paste the path you copied above.
+              In <Tap>Text</Tap>, type <Code>{'{'}</Code>, then tap and hold and pick{' '}
+              <Chip>Shortcut Input</Chip>, then type <Code>{'}'}</Code> — so the box reads{' '}
+              <Code>{'{'}</Code>
+              <Chip>Shortcut Input</Chip>
+              <Code>{'}'}</Code>. Then under <Tap>File Path</Tap>, paste the path you copied above.
             </Step>
             {/*
               The separator earns a step of its own, and a warning rather than a
@@ -473,12 +476,12 @@ export default function SmsAutomationGuide() {
             <Step
               n={7}
               last
-              code={RECORD_SEPARATOR}
-              warn="Without it, alerts arriving together are read as one — and every message after the first is lost with no error."
+              code={'{message}'}
+              warn="Both braces matter. They mark where each message starts AND ends, so two alerts arriving together can never be read as one wrong amount."
             >
-              Still in <Tap>Text</Tap>, type three dashes straight after the{' '}
-              <Chip>Shortcut Input</Chip> chip. That marks the end of each message — a new line is
-              fine too, but not required.
+              That is the whole format: every message wrapped in <Code>{'{'}</Code> and{' '}
+              <Code>{'}'}</Code>. Spaces and new lines around them are fine. If your Shortcut
+              already ends messages with three dashes, that still works.
             </Step>
           </Surface>
 
@@ -770,6 +773,31 @@ function Tap({ children }: { children: React.ReactNode }) {
   return (
     <Text variant="body" color={colors.ink} style={{ fontWeight: '700' }}>
       {children}
+    </Text>
+  );
+}
+
+/**
+ * A literal character the user must TYPE, inline in prose.
+ *
+ * Distinct from `Chip` (a Shortcuts variable they insert) and `Tap` (a control
+ * they press), because the brace format only works if those three are not
+ * confused: a typed `{`, an inserted Shortcut Input, and a typed `}` are three
+ * different gestures in the same text box.
+ */
+function Code({ children }: { children: React.ReactNode }) {
+  const { colors, radius } = useTheme();
+  return (
+    <Text
+      variant="small"
+      color={colors.ink}
+      style={{
+        fontWeight: '700',
+        backgroundColor: colors.canvas,
+        borderRadius: radius.sm,
+      }}
+    >
+      {` ${children} `}
     </Text>
   );
 }

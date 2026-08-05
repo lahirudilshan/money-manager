@@ -8,6 +8,7 @@ import { DayPicker } from '../../src/components/DayPicker';
 import { DragList } from '../../src/components/DragList';
 import { FrequencyPicker } from '../../src/components/forms';
 import { BottomSheet, Divider, GradientButton, Label, PinnedFooter, Row, Surface, Text } from '../../src/components/ui';
+import { isHouseCatalogId, isHouseScopedCatalogId } from '../../src/core/houses';
 import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
 import { CATEGORY_CATALOG } from '../../src/data/categoryCatalog';
@@ -61,6 +62,37 @@ export default function OnboardingPlanScreen() {
    * reads.
    */
   function handleFinish() {
+    /*
+     * Create a HOUSE for every picked line under the Houses category, before
+     * any bill line is written.
+     *
+     * A line under Houses is not an ordinary budget line — it names a property,
+     * and the `houses` row it creates is what makes the house picker appear on
+     * electricity, water, rent and transfers. Ordering matters: the bill lines
+     * below default to the primary house, which cannot resolve until the houses
+     * themselves exist.
+     *
+     * Existing houses (placeholders seeded on launch, or a previous pass
+     * through this step) are matched by name so stepping back and forth never
+     * duplicates a property.
+     */
+    for (const line of lines.filter((candidate) => isHouseCatalogId(candidate.id))) {
+      const name = line.name.trim();
+      if (!name) continue;
+
+      const already = state.houses.find(
+        (house) => house.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (already) continue;
+
+      // The user's own home is the natural primary; otherwise the first house
+      // created takes it, which `addHouse` handles.
+      state.addHouse({ name, isPrimary: line.id === 'house-own' });
+    }
+
+    // Resolved AFTER the houses above exist — see the comment there.
+    const primaryHouseId = state.houses.find((house) => house.isPrimary)?.id ?? null;
+
     const byCategory = new Map<string, DraftLine[]>();
     for (const line of lines) {
       const bucket = byCategory.get(line.categoryId) ?? [];
@@ -95,6 +127,15 @@ export default function OnboardingPlanScreen() {
           icon: line.icon,
           dueDay: line.dueDay,
           cardId: line.cardId,
+          /*
+           * Per-property bills are marked at creation, from the catalog id the
+           * draft line still carries. Doing it here rather than asking the user
+           * keeps the houses step to naming places — nobody wants to answer
+           * "is electricity per-house?" for every line they picked.
+           */
+          houseScoped: isHouseScopedCatalogId(line.id),
+          // Whichever house is the user's own, so the common case needs no tap.
+          houseId: primaryHouseId,
         });
 
         if (line.type === 'income' && line.plannedMinor > 0) {
@@ -132,7 +173,7 @@ export default function OnboardingPlanScreen() {
       showsVerticalScrollIndicator={false}
     >
       <View style={{ gap: 2 }}>
-        <Label>STEP 3 OF 4</Label>
+        <Label>STEP 4 OF 5</Label>
         <Text variant="title">Set up your plan</Text>
         <Text variant="small" tone="muted">
           Tap a line to set its amount, day and account. Hold and drag to

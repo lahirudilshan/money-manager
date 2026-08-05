@@ -181,10 +181,20 @@ const SEED_HEADER = [
   '# each one into its database and clears them from this file, so seeing',
   '# only these lines means everything has been imported.',
   '#',
-  // The separator is DESCRIBED, never written literally: `parseInbox` splits on
-  // three-or-more dashes anywhere, so spelling it out here would cut the header
-  // in half and leave a phantom record in the file after every single drain.
-  '# End each message with three dash characters (a new line is optional).',
+  // The braces ARE written literally, unlike the old dash separator: they only
+  // delimit a record when they enclose text, so an empty pair in a comment
+  // costs nothing, and showing the exact shape is what makes the instruction
+  // followable. The dash separator is still described rather than printed —
+  // `parseInbox` splits on three-or-more dashes anywhere, so spelling it out
+  // would cut the header in half and leave a phantom record after every drain.
+  '# Wrap EACH message in curly braces, like this:',
+  '#',
+  '#   {the whole message text}',
+  '#   {the next message}',
+  '#',
+  '# The braces mark where each message starts AND ends, so two messages can',
+  '# never run together and be read as one wrong amount. Older shortcuts that',
+  '# end each message with three dashes still work.',
   '',
 ].join('\n');
 

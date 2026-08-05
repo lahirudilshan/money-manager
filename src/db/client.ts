@@ -258,11 +258,94 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+  // Fuel mini-app — see core/miniApps.ts. Opt-in, so these stay empty on a
+  // device that never enables it.
+  `CREATE TABLE IF NOT EXISTS vehicles (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    registration TEXT,
+    kind TEXT NOT NULL DEFAULT 'car',
+    fuel_type TEXT NOT NULL DEFAULT 'petrol',
+    tank_litres REAL,
+    odometer_unit TEXT NOT NULL DEFAULT 'km',
+    color TEXT NOT NULL DEFAULT '#0E9F6E',
+    icon TEXT NOT NULL DEFAULT 'car-sport-outline',
+    image_uri TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE TABLE IF NOT EXISTS fuel_entries (
+    id TEXT PRIMARY KEY NOT NULL,
+    vehicle_id TEXT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    filled_at INTEGER NOT NULL,
+    odometer REAL NOT NULL,
+    litres REAL NOT NULL,
+    is_full_tank INTEGER NOT NULL DEFAULT 1,
+    missed_previous INTEGER NOT NULL DEFAULT 0,
+    price_per_litre_minor INTEGER,
+    total_minor INTEGER,
+    transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+    station TEXT,
+    note TEXT,
+    image_uri TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS fuel_entries_vehicle_idx ON fuel_entries(vehicle_id)`,
+  `CREATE INDEX IF NOT EXISTS fuel_entries_odometer_idx ON fuel_entries(vehicle_id, odometer)`,
+  `CREATE TABLE IF NOT EXISTS vehicle_services (
+    id TEXT PRIMARY KEY NOT NULL,
+    vehicle_id TEXT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    serviced_at INTEGER NOT NULL,
+    odometer REAL,
+    kind TEXT NOT NULL DEFAULT 'service',
+    title TEXT NOT NULL,
+    cost_minor INTEGER,
+    transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+    next_due_odometer REAL,
+    next_due_date INTEGER,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS vehicle_services_vehicle_idx ON vehicle_services(vehicle_id)`,
+  `CREATE TABLE IF NOT EXISTS service_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    service_id TEXT NOT NULL REFERENCES vehicle_services(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 1,
+    unit_price_minor INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'part',
+    note TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS service_items_service_idx ON service_items(service_id)`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+  // Properties whose bills the user pays — see `houses` in schema.ts.
+  `CREATE TABLE IF NOT EXISTS houses (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    color TEXT NOT NULL DEFAULT '#0F6FDE',
+    icon TEXT NOT NULL DEFAULT 'home-outline',
+    note TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    archived_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  // NOTE: the house_id indexes are NOT created here. On an upgraded device the
+  // column is added by `ensureAdditiveColumns`, which runs after this DDL — so
+  // indexing it here would fail on exactly the devices that need the migration.
+  // They are created alongside the column instead.
   // Learned merchant -> line associations; see `merchantRules` in schema.ts.
   `CREATE TABLE IF NOT EXISTS merchant_rules (
     id TEXT PRIMARY KEY NOT NULL,
@@ -718,13 +801,50 @@ function ensureAdditiveColumns(): void {
     // Which month a one-time cost belongs to — see `subcategories` in schema.ts.
     ensureColumn('subcategories', 'once_in_period', 'once_in_period TEXT');
 
+    // Per-property attribution — see `houses` in schema.ts.
+    ensureColumn('subcategories', 'house_scoped', 'house_scoped INTEGER NOT NULL DEFAULT 0');
+    ensureColumn('subcategories', 'house_id', 'house_id TEXT REFERENCES houses(id)');
   }
+
+  /*
+   * `house_id` on the two tables that record an actual payment, plus the
+   * indexes that make per-house totals cheap.
+   *
+   * The index creation sits HERE rather than in the DDL list because on an
+   * upgraded device the column does not exist until the line above runs, and
+   * `CREATE INDEX` on a missing column is a hard error — it would break launch
+   * for every existing install while working perfectly on a fresh one.
+   */
+  const hasTransactions = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'`,
+  );
+  if (hasTransactions) {
+    ensureColumn('transactions', 'house_id', 'house_id TEXT REFERENCES houses(id)');
+    expoDb.execSync(
+      `CREATE INDEX IF NOT EXISTS transactions_house_idx ON transactions(house_id, period)`,
+    );
+  }
+
+  const hasVehicles = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='vehicles'`,
+  );
+  if (hasVehicles) ensureColumn('vehicles', 'image_uri', 'image_uri TEXT');
+
+  const hasFuelEntries = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='fuel_entries'`,
+  );
+  if (hasFuelEntries) ensureColumn('fuel_entries', 'image_uri', 'image_uri TEXT');
 
   const hasSubcategoryStates = expoDb.getFirstSync(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='subcategory_states'`,
   );
   if (hasSubcategoryStates) {
     ensureColumn('subcategory_states', 'image_uri', 'image_uri TEXT');
+    // Which house this month's payment was for — see `houses` in schema.ts.
+    ensureColumn('subcategory_states', 'house_id', 'house_id TEXT REFERENCES houses(id)');
+    expoDb.execSync(
+      `CREATE INDEX IF NOT EXISTS subcategory_states_house_idx ON subcategory_states(house_id, period)`,
+    );
   }
 }
 

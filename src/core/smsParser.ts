@@ -19,6 +19,7 @@
  * transaction into existence.
  */
 
+import { classifySms, isDiscardableNoise } from './smsClassifier';
 import { toMinor, type Minor } from './money';
 
 /** Which way money moved, as read from the SMS wording. */
@@ -51,6 +52,17 @@ export type SmsKind =
    * a spend plus an unrelated income. See `cancelReversals` in smsInbox.ts.
    */
   | 'reversal'
+  /**
+   * A fee the bank charged for doing something — "CEFTS Transfer Charges",
+   * stamp duty, an ATM fee, a monthly service charge.
+   *
+   * Split out from `transfer_out` because a fee is not a transfer: it is real
+   * money genuinely leaving (so it must NOT be cancelled as half of an internal
+   * transfer pair, which its wording and timing would otherwise invite), but it
+   * is also never worth the user's attention individually. These all belong on
+   * one "Bank charges" line, which is what `isBankCharge` drives.
+   */
+  | 'bank_charge'
   | 'other';
 
 export interface ParsedSms {
@@ -90,13 +102,78 @@ export interface ParsedSms {
 const OTP_DELIVERY_PATTERNS: RegExp[] = [
   /\b\d{4,8}\b\s+is\s+your\s+(?:one[-\s]?time\s+password|otp)/i,
   /\byour\s+(?:otp|one[-\s]?time\s+password)\s+is\b/i,
+  /*
+   * The shape that actually reached the device: the OTP is announced FIRST and
+   * the code arrives at the end, with the transaction's amount in between.
+   *
+   *   "Your one-time password for transaction LKR 2500.00 at CEB is 681854."
+   *
+   * Every earlier pattern anchored on "<code> is your OTP" or "your OTP is
+   * <code>", and this says neither — so it fell through to the amount
+   * extractor, which happily found "LKR 2500.00" and drafted a CEB purchase
+   * that never happened. Worse, the real POS alert for the same payment also
+   * arrives, so the user saw the electricity bill twice.
+   *
+   * Anchored on the PURPOSE clause ("password for transaction/payment"), which
+   * is what makes this an authorisation request rather than a receipt. A
+   * genuine debit alert never describes itself as a password for something.
+   */
+  /\b(?:one[-\s]?time\s+password|otp|password)\b[^.]{0,60}?\bfor\s+(?:your\s+)?(?:transaction|payment|purchase|txn)\b/i,
+  /*
+   * "... is 681854" / "... is: 681854" trailing a message that called itself an
+   * OTP anywhere. Kept separate and deliberately narrow — it requires BOTH the
+   * OTP vocabulary and a bare 4-8 digit code as the final token — so a real
+   * alert ending in a hotline number cannot trip it.
+   */
+  /\b(?:otp|one[-\s]?time\s+password|verification\s+code)\b[\s\S]{0,80}?\bis\s*:?\s*\d{4,8}\b/i,
 ];
 
+/**
+ * Marketing blasts. These are the messages that made the inbox file "full of
+ * promo junk containing LKR": a dining-offer blast quotes "Max savings LKR
+ * 10,000", which is a currency amount in a message about no transaction at all.
+ *
+ * The list leads with the structural giveaways rather than the word "offer",
+ * because banks send legitimate alerts that mention offers. What a marketing
+ * SMS has and a transaction alert never does:
+ *   - an opt-out footer ("StopAd", "SMS BL ... to 9010", "to unsubscribe")
+ *   - a shortened marketing URL / "visit ..." call to action
+ *   - "valid till", "T&C apply", "% off"/"% savings"
+ */
 const PROMO_PATTERNS: RegExp[] = [
   /\bcashback\b/i,
   /\bspecial offer\b/i,
-  /\bpromo(?:tion)?\b/i,
+  /\bpromo(?:tion|tional)?\b/i,
   /T&C\s+apply/i,
+  // Opt-out footers — the single most reliable marketing marker.
+  /\bstop\s?ad\b/i,
+  /\bto\s+(?:stop|unsubscribe|opt[-\s]?out)\b/i,
+  /\bSMS\s+[A-Z]{2,}\s+[A-Za-z0-9]+\s+to\s+\d{3,6}\b/,
+  // Calls to action / campaign links.
+  /\bbit\.ly\b/i,
+  /\bvisit\s+(?:https?:\/\/|www\.|bit\.ly)/i,
+  // Time-boxed discount language.
+  /\bvalid\s+till\b/i,
+  /\b\d{1,3}\s*%\s*(?:off|savings|discount)\b/i,
+  /\benjoy\b[^.]{0,40}\b(?:savings|discount|off)\b/i,
+  /\bmax(?:imum)?\s+savings\b/i,
+];
+
+/**
+ * Wording that describes money arriving/leaving WITHOUT naming an account the
+ * app can tie it to — a peer-to-peer notification rather than a bank statement
+ * line. "You received LKR 10,000 from DILSHAN M N L" is the real example: it is
+ * a genuine event, but the SAME money also arrives as a proper CEFTS credit
+ * alert on the account, so drafting both double-counts the income.
+ *
+ * Only rejected when the message names no account at all — see `parseSms`,
+ * which applies this together with an empty `extractAccount`. A bank alert that
+ * says "credited to AC XXXX6796" is unaffected.
+ */
+const ACCOUNTLESS_NOTIFICATION_PATTERNS: RegExp[] = [
+  /\byou\s+(?:have\s+)?received\b/i,
+  /\bmoney\s+received\b/i,
+  /\bhas\s+sent\s+you\b/i,
 ];
 
 /** A message that only reports a balance is informational, not a movement. */
@@ -116,6 +193,22 @@ const DEBIT_PATTERNS: RegExp[] = [
   /\bpurchase\b/i,
   /\bPOS TXN\b/i,
   /\bspent\b/i,
+];
+
+/**
+ * Wording that marks a debit as a bank fee rather than a payment the user made.
+ *
+ * Kept tight: it must name a CHARGE/FEE/DUTY/COMMISSION, not merely mention
+ * one. "Transfer Charges", "Txn Fee", "Stamp Duty", "Service Charge" all
+ * qualify; a purchase at a shop called "Charges Ltd" does not, because the
+ * words must appear as the transaction's own type.
+ */
+const BANK_CHARGE_PATTERNS: RegExp[] = [
+  /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:charge|charges|fee|fees)\b/i,
+  /\bcharges?\s*(?:applied|debited)\b/i,
+  /\bstamp\s+duty\b/i,
+  /\bcommission\b/i,
+  /\bas\s+(?:[A-Za-z]+\s+)*(?:charges|fees)\b/i,
 ];
 
 /**
@@ -274,6 +367,26 @@ function extractAccount(text: string): string {
   return '';
 }
 
+/**
+ * How many trailing digits of an account number a message actually revealed.
+ *
+ * `extractAccount` returns the visible tail, but the tail's LENGTH decides what
+ * it may be used for, and conflating the two caused a real bug. HNB prints
+ * "Ac No:13802XXXXX50", whose tail is a mere "50" — matching that against a
+ * card's last-4 with `endsWith` is meaningless (every account ending in 50
+ * matches), yet it is still a perfectly good signal that two HNB messages came
+ * from the SAME account, which is what internal-transfer pairing needs.
+ *
+ * So the tail is kept and callers ask this before trusting it as a card key.
+ * Four digits is the threshold: that is what a card's `last4` holds.
+ */
+export const MIN_MATCHABLE_ACCOUNT_DIGITS = 4;
+
+/** Whether an account fragment is specific enough to identify a card. */
+export function isMatchableAccount(account: string): boolean {
+  return account.length >= MIN_MATCHABLE_ACCOUNT_DIGITS;
+}
+
 function clean(value: string): string {
   return value.trim().replace(/\s+$/g, '').replace(/[.,]\s*$/, '').replace(/\s+/g, ' ');
 }
@@ -313,11 +426,32 @@ function extractMerchant(text: string): string {
   );
   if (asType) return clean(asType[1]);
 
-  // "ref: Inward SWIFT Payment." — the reference names what the money was, and
-  // is the only description a SWIFT/remittance credit carries. Stops at the
-  // next sentence so the trailing balance and hotline are not swept in.
-  const ref = text.match(/\bref\s*[:.]?\s*([^.\n]+)/i);
-  if (ref) return clean(ref[1]);
+  /*
+   * "ref: Inward SWIFT Payment." — the reference names what the money was, and
+   * is the only description a SWIFT/remittance credit carries.
+   *
+   * Stopping at the next full stop is NOT enough, which HNB proved:
+   *
+   *   "...Reason:MB:ref Bal:LKR 405,757.29 Protect from scams..."
+   *
+   * Here "ref" is a bare marker with no reference after it, so the match ran on
+   * into the balance and the merchant came out as "Bal:LKR 405,757" — which is
+   * not a payee, defeats every category match, and shows the user a bill named
+   * after their own bank balance.
+   *
+   * So the capture now stops at a balance/scam-warning/hotline label as well as
+   * at a sentence end, and a reference that is empty or has no letters in it is
+   * rejected outright rather than returned as junk.
+   */
+  const ref = text.match(
+    /\bref\s*[:.]?\s*([^.\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|$)|[.\n])/i,
+  );
+  if (ref) {
+    const value = clean(ref[1]);
+    // Must contain real words — a bare "ref" marker, a reference number, or a
+    // stray currency fragment names nothing and is worse than no merchant.
+    if (/[a-z]{3,}/i.test(value) && !/^\s*(?:LKR|Rs\.?)\b/i.test(value)) return value;
+  }
 
   return '';
 }
@@ -374,7 +508,31 @@ function classifyKind(text: string, direction: SmsDirection): SmsKind {
   ) {
     return 'loan_payment';
   }
+  /*
+   * ATM withdrawals outrank the fee rule below.
+   *
+   * An ATM e-receipt itemises its own charge ("Txn Fee: 30.00LKR"), so testing
+   * for fee vocabulary first reclassified every cash withdrawal as a bank
+   * charge. The fee is a LINE ITEM inside the receipt; the transaction is the
+   * withdrawal, and `extractAmount` already skips the fee clause when reading
+   * the amount.
+   */
   if (/\bATM\b|withdrawal/i.test(text)) return 'atm';
+
+  /*
+   * Bank fees, checked before the transfer rules.
+   *
+   * "LKR 25.00 debited ... as CEFTS Transfer Charges" contains the word
+   * "Transfer", so the transfer rule below claimed it — which put a 25-rupee fee
+   * in front of the user as a transfer to categorise, and worse, made it
+   * eligible for internal-transfer cancellation. Fees are their own thing: real
+   * spend, always trivial, always the same category.
+   *
+   * Requires a debit, so a credited "charges reversal" is not swept in here.
+   */
+  if (direction === 'debit' && BANK_CHARGE_PATTERNS.some((p) => p.test(text))) {
+    return 'bank_charge';
+  }
   // Inward money arrives under several names: a plain "transfer", or the
   // remittance wording a cross-border payment uses ("Inward SWIFT Payment",
   // "remittance"). All are the same thing to the board — money landing.
@@ -382,9 +540,67 @@ function classifyKind(text: string, direction: SmsDirection): SmsKind {
     return 'transfer_in';
   }
   if (direction === 'debit' && /transfer|outward/i.test(text)) return 'transfer_out';
+
+  /*
+   * A mobile-banking debit that names no merchant is a transfer.
+   *
+   * HNB's outward transfers carry NO transfer vocabulary at all — the entire
+   * description is "Reason:MB:ref", where "MB" is the mobile-banking channel and
+   * "ref" is an empty reference marker. Both halves of the user's real HNB→NDB
+   * transfers land here, and while they were classified 'other' they could never
+   * pair with the NDB credit, so every top-up counted as spend AND income.
+   *
+   * Narrow on purpose: a `MB:` channel marker, a debit, and no merchant text
+   * recovered. A mobile-banking payment that DOES name a payee keeps flowing to
+   * the merchant rules below, where it belongs.
+   */
+  if (direction === 'debit' && /\bMB\s*:/i.test(text) && !extractMerchant(text)) {
+    return 'transfer_out';
+  }
   if (/\bPOS TXN\b|purchase/i.test(text)) return 'purchase';
   if (/\bbill\b[^.]*\bdue\b|due (?:on|by)/i.test(text)) return 'utility';
   return 'other';
+}
+
+/**
+ * Whether a message was DELIBERATELY rejected as noise, rather than merely not
+ * understood.
+ *
+ * The distinction decides what happens to the text in the inbox file. A message
+ * the parser does not recognise is retained, so a parser gap is visible and
+ * fixable rather than silently destroying a real transaction. But that same
+ * retention rule applied to junk means every OTP, promo blast and delivery
+ * notification the user ever receives accumulates in the file forever — which
+ * is exactly what happened: the file filled with marketing SMS quoting LKR
+ * amounts, and the user had to clear it by hand.
+ *
+ * So: noise is CONSUMED (recognised, discarded, gone), and only genuinely
+ * unparseable text is kept for inspection. This function is what tells the two
+ * apart, and it is deliberately the same set of checks `parseSms` runs first.
+ */
+export function isRejectedAsNoise(input: string): boolean {
+  if (typeof input !== 'string') return false;
+  const text = input.trim();
+  if (text.length === 0) return false;
+
+  /*
+   * The classifier owns this decision now — see `isDiscardableNoise`, which
+   * distinguishes "recognised as junk" (drop it) from "looks like a
+   * transaction but could not be read" (keep it, that is a parser gap and the
+   * text is the only evidence).
+   */
+  if (isDiscardableNoise(text)) return true;
+
+  // Retained as a second line of defence; each encodes a real message that
+  // once slipped through.
+  if (firstMatch(OTP_DELIVERY_PATTERNS, text)) return true;
+  if (firstMatch(PROMO_PATTERNS, text)) return true;
+  if (firstMatch(BALANCE_ONLY_PATTERNS, text)) return true;
+
+  // A "you received X" with no account named — see the pattern list.
+  if (!extractAccount(text) && firstMatch(ACCOUNTLESS_NOTIFICATION_PATTERNS, text)) return true;
+
+  return false;
 }
 
 /**
@@ -397,12 +613,36 @@ export function parseSms(input: string): ParsedSms | null {
   const text = input.trim();
   if (text.length === 0) return null;
 
+  /*
+   * The classifier decides IF this is a transaction; the code below only reads
+   * WHAT it says.
+   *
+   * Splitting the two is the point. This function used to do both, via a
+   * blocklist of OTP and promo patterns — so anything unanticipated defaulted
+   * to "transaction" and became a wrong amount on the board. `classifySms`
+   * inverts that: it requires positive evidence of a bank alert, so an unseen
+   * marketing format is ignored rather than invented as spend.
+   *
+   * The old pattern lists are retained below as a second line of defence —
+   * they cost nothing and each encodes a real message that once slipped
+   * through — but the classifier is what actually holds the line.
+   */
+  if (!classifySms(text).isTransaction) return null;
+
   if (firstMatch(OTP_DELIVERY_PATTERNS, text)) return null;
   if (firstMatch(PROMO_PATTERNS, text)) return null;
   if (firstMatch(BALANCE_ONLY_PATTERNS, text)) return null;
 
   const direction = classifyDirection(text);
   if (!direction) return null;
+
+  const account = extractAccount(text);
+
+  /*
+   * A "you received X from <person>" with no account named is a wallet/app
+   * notification duplicating a real bank alert — see the pattern list.
+   */
+  if (!account && firstMatch(ACCOUNTLESS_NOTIFICATION_PATTERNS, text)) return null;
 
   const amount = extractAmount(text);
   if (amount === null || amount.amountMinor <= 0) return null;
@@ -413,7 +653,7 @@ export function parseSms(input: string): ParsedSms | null {
     amountMinor: amount.amountMinor,
     currency: amount.currency,
     merchant: extractMerchant(text),
-    account: extractAccount(text),
+    account,
     date: extractDate(text),
     time: extractTime(text),
     raw: text,

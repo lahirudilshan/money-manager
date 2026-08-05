@@ -17,7 +17,12 @@ export interface CatalogSubcategory {
   type?: 'income' | 'expense';
   /** Default day of month; step 3 lets the user change it. */
   dueDay?: number;
-  frequency?: 'monthly' | 'one_time' | 'yearly';
+  /**
+   * `unplanned` is allowed because a HOUSE's cost is not a single figure paid
+   * once a month — it is the sum of whatever its bills came to. See the
+   * `houses` category below and `subcategories.frequency` in db/schema.ts.
+   */
+  frequency?: 'monthly' | 'one_time' | 'yearly' | 'unplanned';
   /** Preselected when its parent category is chosen — the common cases. */
   common?: boolean;
 }
@@ -61,6 +66,32 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
       { id: 'maintenance', name: 'Repairs & maintenance', icon: 'construct-outline' },
       { id: 'domestic-help', name: 'Domestic help', icon: 'people-outline', dueDay: 1 },
       { id: 'garbage', name: 'Garbage / municipal', icon: 'trash-outline' },
+    ],
+  },
+  /*
+   * Houses — one line per property the user pays for.
+   *
+   * This category is a DIMENSION made visible, not a replacement for the bills
+   * under Housing. The user's electricity still lives on the Electricity line;
+   * what these lines carry is the per-property BUDGET ("Weligama costs me about
+   * 10,000 a month"), against which the house-tagged payments accumulate.
+   *
+   * `unplanned` on every line, because a house's cost is the sum of whatever
+   * its bills came to — not a single figure paid once a month. See
+   * `HOUSE_SCOPED_CATALOG_IDS` in core/houses.ts for which BILLS ask which
+   * house they belong to; this category is where the answers add up.
+   */
+  {
+    id: 'houses',
+    name: 'Houses',
+    icon: 'home-outline',
+    color: '#0F6FDE',
+    blurb: 'Properties whose bills you pay',
+    subcategories: [
+      { id: 'house-own', name: 'My home', icon: 'home-outline', frequency: 'unplanned', common: true },
+      { id: 'house-parents', name: "Parents' home", icon: 'home-outline', frequency: 'unplanned' },
+      { id: 'house-second', name: 'Second home', icon: 'business-outline', frequency: 'unplanned' },
+      { id: 'house-rented-out', name: 'Rented out', icon: 'key-outline', frequency: 'unplanned' },
     ],
   },
   {
@@ -146,6 +177,35 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
       { id: 'cloud', name: 'Cloud storage', icon: 'cloud-outline', dueDay: 1 },
       { id: 'software', name: 'Software / apps', icon: 'apps-outline', dueDay: 1 },
       { id: 'news', name: 'News / memberships', icon: 'newspaper-outline', dueDay: 1 },
+    ],
+  },
+  /*
+   * Bank fees — one line for every kind of charge.
+   *
+   * Splitting them by type (transfer fees, stamp duty, ATM fees) would produce
+   * a handful of lines each holding a few rupees, which tells the user nothing.
+   * The useful question is "what did my bank cost me this month", and that is a
+   * single total.
+   *
+   * `unplanned` because fees accumulate — several arrive in a month and a
+   * monthly line would hold only ONE actual, so the second charge would
+   * overwrite the first instead of adding to it. Nobody budgets for them
+   * either, so the total reads honestly as unplanned spend.
+   */
+  {
+    id: 'bank-fees',
+    name: 'Bank & fees',
+    icon: 'business-outline',
+    color: '#5B6472',
+    blurb: 'What your bank charges you',
+    subcategories: [
+      {
+        id: 'bank-charges',
+        name: 'Bank charges',
+        icon: 'receipt-outline',
+        frequency: 'unplanned',
+        common: true,
+      },
     ],
   },
   {

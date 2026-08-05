@@ -13,6 +13,7 @@ import { Divider, Empty, GradientCard, Label, Row, Stat, Surface, Text } from '.
 import { formatMoney } from '../../src/core/money';
 import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
 import { canUse } from '../../src/core/plans';
+import { enabledMiniApps } from '../../src/core/miniApps';
 import { HEALTH_VISUALS, shadeHex } from '../../src/theme';
 import { accountLabel, resolveBrand } from '../../src/data/banks';
 import {
@@ -62,6 +63,7 @@ export default function DashboardScreen() {
   const accounts = useMemo(() => selectAccountTransfers(state), [state]);
   const reminders = useMemo(() => selectReminders(state), [state]);
   const loanViews = useMemo(() => selectLoanViews(state), [state]);
+  const miniApps = useMemo(() => enabledMiniApps(state.miniApps), [state.miniApps]);
 
   /** Whether the current plan includes Smart Detect. */
   const smartDetect = canUse(state.plan, 'smartDetect');
@@ -272,6 +274,58 @@ export default function DashboardScreen() {
           onPress={() => router.push('/category/new')}
         />
       </Row>
+
+      {/*
+        Add-on features the user has switched on — see core/miniApps.ts.
+
+        Renders nothing at all when none are enabled, so the dashboard is
+        byte-for-byte what it was for anyone who never opens that section.
+      */}
+      {miniApps.length > 0 ? (
+        <View style={{ gap: space.sm }}>
+          <Label>ADD-ONS</Label>
+          <Surface padded={false}>
+            {miniApps.map((app, index) => (
+              <View key={app.id}>
+                {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+                <Pressable
+                  onPress={() => router.push(app.route as never)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${app.name}`}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: space.md,
+                    paddingHorizontal: space.lg,
+                    paddingVertical: space.md,
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <View
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 12,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: `${app.color}1A`,
+                    }}
+                  >
+                    <Ionicons name={app.icon} size={19} color={app.color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text variant="bodyStrong">{app.name}</Text>
+                    <Text variant="caption" tone="muted" numberOfLines={1}>
+                      {app.description}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
+                </Pressable>
+              </View>
+            ))}
+          </Surface>
+        </View>
+      ) : null}
 
       {/* Drafts parsed from incoming SMS, awaiting Yes/Edit/No. Surfaced high
           because they are the one thing the user must act on before the board

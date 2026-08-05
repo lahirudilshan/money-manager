@@ -51,6 +51,7 @@ const HINT_TARGET: Record<CategoryHint, readonly [string, string]> = {
   atm: ['living', 'household'],
   transfer: ['living', 'household'],
   income: ['income', 'salary'],
+  bank_charge: ['bank-fees', 'bank-charges'],
 };
 
 /** A concrete proposal: the group and line a hint would create. */

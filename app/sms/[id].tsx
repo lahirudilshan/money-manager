@@ -3,10 +3,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
+import { HousePicker } from '../../src/components/HousePicker';
 import { AmountField, Field } from '../../src/components/forms';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { to12Hour } from '../../src/core/dates';
+import { defaultHouseId } from '../../src/core/houses';
 import {
   formatAmountInput,
   formatMoney,
@@ -112,6 +114,14 @@ export default function SmsDraftModal() {
   const [picking, setPicking] = useState(
     !draft?.subcategoryId || draft.confidence === 'unknown',
   );
+  /**
+   * An explicit house override, or null to use the line's default.
+   *
+   * Stored as an override rather than a resolved id so switching the target
+   * line re-derives its own default instead of carrying the previous line's
+   * house across — see `effectiveHouseId`.
+   */
+  const [houseChoice, setHouseChoice] = useState<string | null>(null);
 
   // The draft may have been resolved on another screen; close cleanly if gone.
   if (!draft) {
@@ -159,25 +169,51 @@ export default function SmsDraftModal() {
     // original charge before reaching the UI at all.
     reversal: 'Refund',
     loan_payment: 'Loan payment',
+    // Filed automatically onto the shared charges line, so this label is only
+    // seen on a fee the user opened from history.
+    bank_charge: 'Bank charge',
     utility: 'Bill due',
     other: isCredit ? 'Money in' : 'Paid out',
   }[parsed.kind];
 
   // The suggested line, when the reconciler produced one worth confirming.
   const suggested = subcategories.find((s) => s.id === draft.subcategoryId) ?? null;
+
+  /*
+   * Which house this payment was for.
+   *
+   * Resolved against whichever line is actually going to be logged — the one
+   * the user picked, else the suggestion — so accepting a suggestion and
+   * picking manually both attribute to the same place. `houseChoice` holds only
+   * an explicit override, so changing the target line re-derives the default
+   * rather than carrying the previous line's house across.
+   */
+  const targetLine =
+    subcategories.find((s) => s.id === subcategoryId) ?? suggested ?? null;
+  const houseScoped = targetLine?.houseScoped ?? false;
+  const effectiveHouseId =
+    houseChoice ?? defaultHouseId(state.houses, targetLine?.houseId ?? null);
   const showConfirmCard = !picking && suggested !== null;
 
   // Arrow consts (not hoisted declarations) so TS keeps the non-null narrowing
   // of `draft` from the early return above.
   const logIt = () => {
-    state.confirmDraft(draft.id, { subcategoryId, amountMinor });
+    state.confirmDraft(draft.id, {
+      subcategoryId,
+      amountMinor,
+      houseId: houseScoped ? effectiveHouseId : null,
+    });
     closeModal();
   };
 
   /** "Yes, that's right" — accept the suggestion and let the store learn it. */
   const acceptSuggestion = () => {
     if (!suggested) return;
-    state.confirmDraft(draft.id, { subcategoryId: suggested.id, amountMinor });
+    state.confirmDraft(draft.id, {
+      subcategoryId: suggested.id,
+      amountMinor,
+      houseId: houseScoped ? effectiveHouseId : null,
+    });
     closeModal();
   };
 
@@ -436,6 +472,16 @@ export default function SmsDraftModal() {
           )}
         </View>
         ) : null}
+
+        {/* Which property this bill was for. Renders nothing unless the user
+            keeps more than one house AND this line is house-scoped, so the
+            single-home case never sees it — see components/HousePicker. */}
+        <HousePicker
+          houses={state.houses}
+          houseScoped={houseScoped}
+          selectedHouseId={effectiveHouseId}
+          onSelect={setHouseChoice}
+        />
 
         {/* The only escape here: deleting is offered by the × on the dashboard
             card, so repeating it in this modal would be two controls for one

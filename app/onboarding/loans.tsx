@@ -68,7 +68,7 @@ export default function OnboardingLoansScreen() {
           showsVerticalScrollIndicator={false}
         >
           <View style={{ gap: 2 }}>
-            <Label>STEP 4 OF 4</Label>
+            <Label>STEP 5 OF 5</Label>
             <Text variant="title">Any loans or leases?</Text>
             <Text variant="small" tone="muted">
               Add what you're repaying so the plan knows your commitments. Skip

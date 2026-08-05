@@ -50,7 +50,7 @@ export default function OnboardingCategoriesScreen() {
       showsVerticalScrollIndicator={false}
     >
       <View style={{ gap: 2 }}>
-        <Label>STEP 2 OF 4</Label>
+        <Label>STEP 3 OF 5</Label>
         <Text variant="title">What do you spend on?</Text>
         <Text variant="small" tone="muted">
           Tap a category to open it, then pick the lines you actually have.

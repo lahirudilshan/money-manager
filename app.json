@@ -21,7 +21,14 @@
       "infoPlist": {
         "NSFaceIDUsageDescription": "Money Manager uses Face ID to unlock the app, so your accounts and balances stay private.",
         "UIFileSharingEnabled": true,
-        "LSSupportsOpeningDocumentsInPlace": true
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "com.googleusercontent.apps.486010862889-aaps2ikec9a1aigbei98varil468mn9f"
+            ]
+          }
+        ]
       }
     },
     "android": {
@@ -56,6 +63,9 @@
         }
       ],
       "./plugins/withJdkPin"
-    ]
+    ],
+    "extra": {
+      "googleClientId": "486010862889-aaps2ikec9a1aigbei98varil468mn9f.apps.googleusercontent.com"
+    }
   }
 }

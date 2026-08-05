@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, Text } from '../../src/components/ui';
+import { MINI_APPS, parseEnabled } from '../../src/core/miniApps';
 import { useTabBarClearance } from '../../src/components/TabBar';
 import { syncCategoryReminders, unavailableReason } from '../../src/services/notifications';
 import { PinPad } from '../../src/components/PinPad';
@@ -52,6 +53,7 @@ export default function SettingsScreen() {
   const router = useRouter();
 
   const state = useAppStore();
+  const enabled = parseEnabled(state.miniApps);
   const resetAllData = useAppStore((s) => s.resetAllData);
   const seedDemoData = useAppStore((s) => s.seedDemoData);
 
@@ -388,6 +390,8 @@ export default function SettingsScreen() {
             valueLabel={canUse(state.plan, 'smartDetect') ? undefined : 'Premium'}
             onPress={() => router.push('/settings/sms-automation')}
           />
+
+
           {/*
             No catalog rows here on purpose.
 
@@ -398,6 +402,43 @@ export default function SettingsScreen() {
             was broken — and pressing it would do exactly what already happened
             a moment ago.
           */}
+        </Section>
+
+        {/*
+          Optional extras — off by default.
+
+          Everything else on the dashboard earns its place by being about money
+          moving this month. A fuel log is genuinely useful to someone who drives
+          and pure noise to someone who does not, so these are opt-in rather than
+          shipped to everybody with an apology in Settings later.
+        */}
+        <Section title="ADD-ON FEATURES">
+          {MINI_APPS.map((app, index) => {
+            const on = enabled.has(app.id);
+            return (
+              <View key={app.id}>
+                {index > 0 ? <Divider /> : null}
+                <Row
+                  gap={space.md}
+                  align="center"
+                  style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
+                >
+                  <Glyph icon={app.icon} color={app.color} />
+                  <View style={{ flex: 1 }}>
+                    <Text variant="body">{app.name}</Text>
+                    <Text variant="caption" tone="muted">
+                      {app.description}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={on}
+                    onValueChange={(next) => state.setMiniAppEnabled(app.id, next)}
+                    accessibilityLabel={`${app.name}, ${on ? 'on' : 'off'}`}
+                  />
+                </Row>
+              </View>
+            );
+          })}
         </Section>
 
         {/* Preferences. */}
@@ -498,6 +539,20 @@ export default function SettingsScreen() {
               />
             </>
           ) : null}
+          <Divider />
+          {/*
+            Backup sits under SECURITY rather than with the automation rows:
+            everything lives in one local SQLite file, so this is the only thing
+            standing between a lost phone and every transaction the user has
+            ever recorded. That is a safety concern, not a convenience feature.
+          */}
+          <SettingRow
+            icon="cloud-upload-outline"
+            color={colors.completed}
+            title="Backup & restore"
+            subtitle="Save your data, or bring it back"
+            onPress={() => router.push('/settings/backup')}
+          />
         </Section>
 
         {__DEV__ ? (

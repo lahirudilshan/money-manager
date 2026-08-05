@@ -409,6 +409,31 @@ function RootNavigator() {
           <Stack.Screen name="sms/new" options={SHEET_ROUTE} />
           <Stack.Screen name="sms/[id]" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/sms-automation" options={SHEET_ROUTE} />
+          {/*
+            Backup was missing from this list, so it rendered as a plain pushed
+            screen: no sheet presentation, its header colliding with the status
+            bar and no way to dismiss. A sheet route that is not registered here
+            looks broken in a way the screen's own code cannot fix.
+          */}
+          <Stack.Screen name="settings/backup" options={SHEET_ROUTE} />
+          {/*
+            Fuel add-on — see core/miniApps.ts.
+
+            Plain pushed screens, NOT sheets. This is a place the user goes and
+            drills into (vehicles, services, individual fill-ups) rather than a
+            task they finish and dismiss, so it wants a back chevron and a stack
+            rather than modals piling on top of one another.
+
+            Registered unconditionally: a route that exists but is unreachable
+            costs nothing, whereas conditional registration would leave the
+            dashboard card dead until the next reload.
+          */}
+          <Stack.Screen name="mini/fuel/index" />
+          {/* Logging a fill-up IS a task — filled in once and dismissed — so it
+              stays a sheet while the places around it are pushed screens. */}
+          <Stack.Screen name="mini/fuel/entry" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/fuel/vehicle" />
+          <Stack.Screen name="mini/fuel/services" />
         </Stack>
         )}
       </AppLockGate>

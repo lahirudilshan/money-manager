@@ -75,7 +75,7 @@ export default function OnboardingBanksScreen() {
       }
     }
 
-    router.push('/onboarding/categories');
+    router.push('/onboarding/about');
   }
 
   return (
@@ -91,7 +91,7 @@ export default function OnboardingBanksScreen() {
       showsVerticalScrollIndicator={false}
     >
       <View style={{ gap: 2 }}>
-        <Label>STEP 1 OF 4</Label>
+        <Label>STEP 1 OF 5</Label>
         <Text variant="title">Where do you bank?</Text>
         <Text variant="small" tone="muted">
           Pick every account your money moves through. You can rename them or

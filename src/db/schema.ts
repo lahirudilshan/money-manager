@@ -155,6 +155,31 @@ export const subcategories = sqliteTable(
     loanId: text('loan_id').references(() => loans.id, { onDelete: 'set null' }),
 
     /**
+     * Whether payments on this line are attributed to a HOUSE.
+     *
+     * Only some bills are per-property: electricity, water, rent and transfers
+     * can each belong to a different house, while a Netflix subscription or a
+     * loan installment cannot — asking which house a salary belongs to is
+     * noise. So the picker appears only on lines that opt in here, which is what
+     * keeps the feature invisible everywhere it does not apply.
+     *
+     * Defaulted from the line's category on creation (see
+     * `HOUSE_SCOPED_CATALOG_IDS`), and overridable per line, because only the
+     * user knows whether their "Repairs" line covers one house or several.
+     */
+    houseScoped: integer('house_scoped', { mode: 'boolean' }).notNull().default(false),
+
+    /**
+     * The house this line's payments belong to BY DEFAULT.
+     *
+     * A convenience, not the record: the authoritative per-payment attribution
+     * lives on `transactions.houseId` / `subcategory_states.house_id`, because
+     * one "Electricity" line legitimately pays for two houses in alternate
+     * months. This just seeds the picker so the common case is zero taps.
+     */
+    houseId: text('house_id').references(() => houses.id, { onDelete: 'set null' }),
+
+    /**
      * Saving plan ("sinking fund") for a large bill paid at a future date —
      * vehicle insurance, a 6-month subscription, a credit-card installment
      * plan. When `planTargetMinor` is set, `plannedMinor` is the *monthly*
@@ -204,11 +229,20 @@ export const transactions = sqliteTable(
     note: text('note'),
     /** Local file URI of an attached receipt/photo. */
     imageUri: text('image_uri'),
+    /**
+     * Which property this spend was for. Null when the line is not house-scoped,
+     * or when only one house exists (in which case attribution is unambiguous
+     * and the UI never asks). See `houses`.
+     */
+    houseId: text('house_id').references(() => houses.id, { onDelete: 'set null' }),
     ...timestamps,
   },
   (t) => [
     index('transactions_sub_idx').on(t.subcategoryId),
     index('transactions_lookup_idx').on(t.subcategoryId, t.period),
+    // Per-house totals scan by house within a month — "what did Weligama cost
+    // in August" is the question this feature exists to answer.
+    index('transactions_house_idx').on(t.houseId, t.period),
   ],
 );
 
@@ -245,11 +279,20 @@ export const subcategoryStates = sqliteTable(
     note: text('note'),
     /** Local file URI of a receipt/photo attached when logging this transaction. */
     imageUri: text('image_uri'),
+    /**
+     * Which property this month's payment was for, on a house-scoped line.
+     *
+     * Lives per-PERIOD rather than only on the subcategory because the same
+     * "Electricity" line can pay a different house in different months, which is
+     * precisely the user's situation. Null when the line is not house-scoped.
+     */
+    houseId: text('house_id').references(() => houses.id, { onDelete: 'set null' }),
     ...timestamps,
   },
   (t) => [
     index('subcategory_states_period_idx').on(t.period),
     index('subcategory_states_lookup_idx').on(t.subcategoryId, t.period),
+    index('subcategory_states_house_idx').on(t.houseId, t.period),
   ],
 );
 
@@ -456,7 +499,207 @@ export const smsInbox = sqliteTable(
   ],
 );
 
+/**
+ * A property whose running costs the user pays — their own home, a parents'
+ * house, a rented-out annexe.
+ *
+ * The motivating case: the user pays the electricity and water bills for their
+ * parents' house in Weligama as well as their own. Both arrive as ordinary bank
+ * alerts naming CEB and the water board, so without a house dimension the two
+ * are indistinguishable and roll into one "Electricity" figure — which answers
+ * neither "what does my house cost me" nor "what am I spending on my parents".
+ *
+ * Modelled as its own table rather than as extra categories ("Electricity —
+ * Weligama", "Electricity — Home") because duplicating every utility line per
+ * property multiplies the board, and because the interesting totals run BOTH
+ * ways: per house across all bills, and per bill across all houses. A dimension
+ * gives both; duplicated categories give neither without manual summing.
+ *
+ * `isPrimary` marks the user's own home. Exactly one house holds it (see
+ * `houseRepo.setPrimary`), and it is what lets the UI stay invisible for the
+ * overwhelmingly common single-house setup: with one house, everything belongs
+ * to it and no picker is ever shown.
+ */
+export const houses = sqliteTable('houses', {
+  id: text('id').primaryKey(),
+  /** What the user calls it — "Home", "Weligama (parents)", "Colombo annexe". */
+  name: text('name').notNull(),
+  /**
+   * The user's own residence. Used as the default for new transactions, and to
+   * label the house in summaries. Enforced as a single winner by the repo
+   * rather than by a constraint, since SQLite has no partial-unique in the DDL
+   * this file generates.
+   */
+  isPrimary: integer('is_primary', { mode: 'boolean' }).notNull().default(false),
+  color: text('color').notNull().default('#0F6FDE'),
+  icon: text('icon').notNull().default('home-outline'),
+  /** Free-text, e.g. the town — shown under the name to tell two apart. */
+  note: text('note'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
+  ...timestamps,
+});
+
 /** Key/value app settings (currency, USD rate, onboarding marker). */
+/**
+ * A vehicle the fuel mini-app tracks. See core/miniApps.ts for why it is opt-in.
+ *
+ * Separate from `cards`/`categories` on purpose: a vehicle is not a money
+ * object. It is the thing consumption is measured AGAINST, and every figure the
+ * tracker reports — km/l, cost per km, distance since service — is meaningless
+ * unless it is scoped to one vehicle. A car and a motorbike sharing a log would
+ * average 45 km/l with 12 km/l into a number describing neither.
+ */
+export const vehicles = sqliteTable('vehicles', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /** Plate, shown to tell two of the same model apart. Optional. */
+  registration: text('registration'),
+  kind: text('kind', { enum: ['car', 'bike', 'van', 'three_wheeler', 'other'] })
+    .notNull()
+    .default('car'),
+  fuelType: text('fuel_type', { enum: ['petrol', 'diesel', 'hybrid', 'electric'] })
+    .notNull()
+    .default('petrol'),
+  /** Usable tank size in litres, for "how full is this fill" context. Optional. */
+  tankLitres: real('tank_litres'),
+  /** Distance unit the odometer reads in — stats follow it. */
+  odometerUnit: text('odometer_unit', { enum: ['km', 'mi'] })
+    .notNull()
+    .default('km'),
+  color: text('color').notNull().default('#0E9F6E'),
+  icon: text('icon').notNull().default('car-sport-outline'),
+  /** Local file URI of a photo of the vehicle — see core/imageStorage.ts. */
+  imageUri: text('image_uri'),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+  ...timestamps,
+});
+
+/**
+ * One visit to a filling station.
+ *
+ * `isFullTank` is the field the whole feature turns on. Real consumption can
+ * only be measured between two FULL tanks — you know exactly how much was
+ * burned because you know the tank was brim-full at both ends. A partial fill
+ * gives litres but no such anchor, so it is summed into the window rather than
+ * producing a figure of its own (see core/fuel.ts).
+ *
+ * `transactionId` is the money link. The cost lives ONCE, on the board, where
+ * the bank SMS or a manual entry already put it — this only points at it. The
+ * reference is `set null` rather than cascade so deleting a transaction leaves
+ * the odometer history intact; losing a receipt must not lose the mileage.
+ *
+ * `totalMinor` is a fallback for a cash fill with nothing to link to, so the
+ * cost stats still work when no transaction exists.
+ */
+export const fuelEntries = sqliteTable(
+  'fuel_entries',
+  {
+    id: text('id').primaryKey(),
+    vehicleId: text('vehicle_id')
+      .notNull()
+      .references(() => vehicles.id, { onDelete: 'cascade' }),
+    filledAt: integer('filled_at', { mode: 'timestamp_ms' }).notNull(),
+    /** Odometer reading at the pump, in the vehicle's unit. */
+    odometer: real('odometer').notNull(),
+    litres: real('litres').notNull(),
+    isFullTank: integer('is_full_tank', { mode: 'boolean' }).notNull().default(true),
+    /**
+     * Set when the driver knows the tank was not empty-to-full in the usual way
+     * — a missed fill-up, or fuel added from a can. Breaks the chain so a bogus
+     * window is not reported as a real one.
+     */
+    missedPrevious: integer('missed_previous', { mode: 'boolean' }).notNull().default(false),
+    pricePerLitreMinor: integer('price_per_litre_minor'),
+    totalMinor: integer('total_minor'),
+    transactionId: text('transaction_id').references(() => transactions.id, {
+      onDelete: 'set null',
+    }),
+    station: text('station'),
+    note: text('note'),
+    /**
+     * The pump receipt.
+     *
+     * Worth keeping for a fill-up specifically: the odometer and litres are
+     * typed from a slip that is otherwise thrown away, so the photo is the only
+     * way to check a figure that later looks wrong.
+     */
+    imageUri: text('image_uri'),
+    ...timestamps,
+  },
+  (t) => [
+    index('fuel_entries_vehicle_idx').on(t.vehicleId),
+    // The order every consumption calculation reads in.
+    index('fuel_entries_odometer_idx').on(t.vehicleId, t.odometer),
+  ],
+);
+
+/** A service, repair or other dated piece of vehicle upkeep. */
+export const vehicleServices = sqliteTable(
+  'vehicle_services',
+  {
+    id: text('id').primaryKey(),
+    vehicleId: text('vehicle_id')
+      .notNull()
+      .references(() => vehicles.id, { onDelete: 'cascade' }),
+    servicedAt: integer('serviced_at', { mode: 'timestamp_ms' }).notNull(),
+    odometer: real('odometer'),
+    kind: text('kind', {
+      enum: ['service', 'repair', 'tyres', 'insurance', 'licence', 'other'],
+    })
+      .notNull()
+      .default('service'),
+    title: text('title').notNull(),
+    costMinor: integer('cost_minor'),
+    /** Same money link as a fill-up — see `fuelEntries.transactionId`. */
+    transactionId: text('transaction_id').references(() => transactions.id, {
+      onDelete: 'set null',
+    }),
+    /** Either may be set, so "due in 5,000 km" and "due in March" both work. */
+    nextDueOdometer: real('next_due_odometer'),
+    nextDueDate: integer('next_due_date', { mode: 'timestamp_ms' }),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [index('vehicle_services_vehicle_idx').on(t.vehicleId)],
+);
+
+/**
+ * One line on a service bill — a part, a fluid, or labour.
+ *
+ * A garage invoice is a list, not a single figure: "oil filter 2,400, 5W-30 x4
+ * 9,600, labour 6,500". Storing only the total answers "what did I spend" but
+ * not the question anyone actually returns to a service record for — WHICH
+ * parts were changed, and how long ago. Knowing the air filter was done 8,000
+ * km back is the whole reason to keep the record.
+ *
+ * The parent's `costMinor` stays as the authoritative total, because a real
+ * invoice carries taxes and discounts that the lines do not sum to. Where the
+ * user has itemised, the UI shows both and says when they disagree.
+ */
+export const serviceItems = sqliteTable(
+  'service_items',
+  {
+    id: text('id').primaryKey(),
+    serviceId: text('service_id')
+      .notNull()
+      .references(() => vehicleServices.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** Parts are counted, labour is not — defaults to 1 so it can be ignored. */
+    quantity: real('quantity').notNull().default(1),
+    /** Per-unit price; the row's total is this times `quantity`. */
+    unitPriceMinor: integer('unit_price_minor').notNull().default(0),
+    kind: text('kind', { enum: ['part', 'fluid', 'labour', 'other'] })
+      .notNull()
+      .default('part'),
+    note: text('note'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [index('service_items_service_idx').on(t.serviceId)],
+);
+
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
@@ -467,6 +710,8 @@ export const settings = sqliteTable('settings', {
 
 export type Card = typeof cards.$inferSelect;
 export type NewCard = typeof cards.$inferInsert;
+export type House = typeof houses.$inferSelect;
+export type NewHouse = typeof houses.$inferInsert;
 export type Category = typeof categories.$inferSelect;
 export type NewCategory = typeof categories.$inferInsert;
 export type Subcategory = typeof subcategories.$inferSelect;
@@ -485,6 +730,54 @@ export type Loan = typeof loans.$inferSelect;
 export type NewLoan = typeof loans.$inferInsert;
 export type MerchantRuleRow = typeof merchantRules.$inferSelect;
 export type NewMerchantRuleRow = typeof merchantRules.$inferInsert;
+export type Vehicle = typeof vehicles.$inferSelect;
+export type NewVehicle = typeof vehicles.$inferInsert;
+export type FuelEntry = typeof fuelEntries.$inferSelect;
+export type NewFuelEntry = typeof fuelEntries.$inferInsert;
+export type ServiceItem = typeof serviceItems.$inferSelect;
+export type NewServiceItem = typeof serviceItems.$inferInsert;
+export type ServiceItemKind = ServiceItem['kind'];
+
+export const SERVICE_ITEM_KIND_LABEL: Record<ServiceItemKind, string> = {
+  part: 'Part',
+  fluid: 'Fluid',
+  labour: 'Labour',
+  other: 'Other',
+};
+
+export type VehicleService = typeof vehicleServices.$inferSelect;
+export type NewVehicleService = typeof vehicleServices.$inferInsert;
+
+/** What a vehicle is, for the picker and its icon. */
+export type VehicleKind = Vehicle['kind'];
+export type FuelType = Vehicle['fuelType'];
+export type OdometerUnit = Vehicle['odometerUnit'];
+export type ServiceKind = VehicleService['kind'];
+
+export const VEHICLE_KIND_LABEL: Record<VehicleKind, string> = {
+  car: 'Car',
+  bike: 'Motorbike',
+  van: 'Van',
+  three_wheeler: 'Three-wheeler',
+  other: 'Other',
+};
+
+export const FUEL_TYPE_LABEL: Record<FuelType, string> = {
+  petrol: 'Petrol',
+  diesel: 'Diesel',
+  hybrid: 'Hybrid',
+  electric: 'Electric',
+};
+
+export const SERVICE_KIND_LABEL: Record<ServiceKind, string> = {
+  service: 'Service',
+  repair: 'Repair',
+  tyres: 'Tyres',
+  insurance: 'Insurance',
+  licence: 'Licence',
+  other: 'Other',
+};
+
 export type SmsInboxRow = typeof smsInbox.$inferSelect;
 export type NewSmsInboxRow = typeof smsInbox.$inferInsert;
 

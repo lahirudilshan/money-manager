@@ -98,8 +98,29 @@ const HINT_KEYWORDS: [Hint, RegExp[]][] = [
     ],
   ],
   ['loan', [/\bloan\b/i, /\blease\b/i, /\binstal{1,2}ment\b/i, /Reason\s*:\s*MB:loan/i]],
-  ['transfer', [/\btransfer\b/i, /\bcefts\b/i, /\bslips\b/i, /\bctb\b/i]],
+  /*
+   * ATM before fees: an ATM e-receipt itemises its own "Txn Fee", so testing
+   * fee wording first tags every cash withdrawal as a bank charge.
+   */
   ['atm', [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i]],
+  /*
+   * Bank fees. AFTER `atm` (an ATM e-receipt itemises its own "Txn Fee", and
+   * the transaction is the withdrawal, not the fee) and BEFORE `transfer`
+   * ("CEFTS Transfer Charges" matches both, and the more specific rule must
+   * win). Mirrors HINT_KEYWORDS in src/core/smsCategoryHints.ts — the two must
+   * agree, or a message is categorised differently depending on whether the
+   * network was up.
+   */
+  [
+    'bank_charge',
+    [
+      /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:charge|charges|fee|fees)\b/i,
+      /\bstamp\s+duty\b/i,
+      /\bcommission\b/i,
+      /\bcharges?\s*(?:applied|debited)\b/i,
+    ],
+  ],
+  ['transfer', [/\btransfer\b/i, /\bcefts\b/i, /\bslips\b/i, /\bctb\b/i]],
   ['income', [/\bsalary\b/i, /\bpayroll\b/i, /\bdividend\b/i, /\brefund\b/i]],
 ];
 
@@ -142,6 +163,7 @@ const HINT_SELF_WORDS: Record<Hint, RegExp[]> = {
   transfer: [/\btransfer(?:s)?\b/i, /\bcash\b/i],
   atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i],
   income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
+  bank_charge: [/\bbank\b/i, /\bcharge(?:s)?\b/i, /\bfee(?:s)?\b/i, /\bduty\b/i],
 };
 
 /**

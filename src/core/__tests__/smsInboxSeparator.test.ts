@@ -40,18 +40,25 @@ describe('two SMS separated by ---', () => {
   });
 
   /*
-   * The whole reason the separator is worth a test of its own.
+   * A missing separator used to be silent data loss — and worse.
    *
-   * Two messages appended with no `---` between them are ONE record, and the
-   * parser reads the first amount it finds — so the second transaction vanishes
-   * with no error anywhere. That is a silent data-loss bug in the user's
-   * Shortcut, which is why the setup steps have to spell out the separator.
+   * Two messages appended with no `---` between them formed ONE record, and the
+   * parser read the first amount it found: the second transaction vanished, and
+   * when the two messages had different amounts the surviving row could carry
+   * one message's figure with another's merchant. That is exactly what happened
+   * on the user's device — a LKR 50.00 purchase stored as LKR 10,000.00.
+   *
+   * `splitMergedMessages` now recovers both, so a Shortcut that forgets the
+   * separator degrades to "still works" rather than "wrong numbers". The braced
+   * `{message}` format prevents the situation arising at all.
    */
-  it('loses the second transaction when the separator is missing', () => {
+  it('recovers BOTH transactions when the separator is missing', () => {
     const glued = planDrain(`${WATER}\n${ELECTRICITY}`, 99);
 
-    expect(glued.messages).toHaveLength(1);
-    expect(parseSms(glued.messages[0])?.amountMinor).toBe(286740);
+    expect(glued.messages).toHaveLength(2);
+    expect(glued.messages.map((message) => parseSms(message)?.amountMinor)).toEqual([
+      286740, 950000,
+    ]);
   });
 
   /*

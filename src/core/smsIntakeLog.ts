@@ -20,6 +20,18 @@ export type SmsIntakeOutcome =
   | 'ingested'
   /** Decoded fine, but `parseSms` did not see a money movement in it. */
   | 'parser-rejected'
+  /**
+   * Recognised as noise and DISCARDED — an OTP, a marketing blast, a message
+   * with no money wording at all.
+   *
+   * Distinct from `parser-rejected`, and the distinction decides what happens
+   * to the text: a parser gap is retained in the handoff file so it can be
+   * fixed retroactively, whereas noise is consumed so the file does not fill
+   * with every promo SMS the user has ever received. Logged anyway, so a
+   * message wrongly classified as noise leaves a trace rather than vanishing
+   * without evidence. See `isRejectedAsNoise`.
+   */
+  | 'noise-discarded'
   /** The URL reached the app with no usable `text=` parameter. */
   | 'no-text-param'
   /**
@@ -83,6 +95,8 @@ export function describeOutcome(outcome: SmsIntakeOutcome): string {
       return 'Draft created';
     case 'parser-rejected':
       return 'Opened, but not read as a payment';
+    case 'noise-discarded':
+      return 'Discarded — OTP, promo, or not a payment';
     case 'duplicate':
       return 'Already added';
     case 'truncated':

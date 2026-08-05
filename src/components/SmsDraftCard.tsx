@@ -83,6 +83,9 @@ export function SmsDraftCard({
     // shows for a reversal whose charge was not in the same batch.
     reversal: 'Refund',
     loan_payment: 'Loan payment',
+    // Filed automatically onto the shared charges line, so this label is only
+    // seen on a fee the user opened from history.
+    bank_charge: 'Bank charge',
     utility: 'Bill due',
     other: isCredit ? 'Money in' : 'Paid out',
   }[parsed.kind];

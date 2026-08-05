@@ -22,6 +22,7 @@ export const HINTS = [
   'transfer',
   'atm',
   'income',
+  'bank_charge',
 ] as const;
 
 export type Hint = (typeof HINTS)[number];
