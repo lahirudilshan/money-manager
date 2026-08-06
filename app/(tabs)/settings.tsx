@@ -23,6 +23,17 @@ import {
   selectCategoryViews,
   useAppStore,
 } from '../../src/store/useAppStore';
+import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
+import {
+  averageRate,
+  driftPercent,
+  isFetchDue,
+  latestRate,
+  parseHistory,
+  recordRate,
+  serialiseHistory,
+  type RateMode,
+} from '../../src/core/exchangeRate';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 
@@ -46,6 +57,31 @@ const CURRENCIES: { code: string; symbol: string; name: string; flag: string }[]
  * destructive reset. Grouped as a settings list rather than the board's card
  * layout, since these are controls, not data.
  */
+/**
+ * The three figures the board can convert with, and when each is right.
+ *
+ * "Safe" leads as the default because the riskier mistake is planning future
+ * dollar income at the spot rate: that over-commits the budget the moment the
+ * rupee strengthens, whereas a conservative figure merely under-promises.
+ */
+const RATE_MODES: { key: RateMode; label: string; hint: string }[] = [
+  {
+    key: 'safe',
+    label: 'Safe',
+    hint: 'Your own conservative figure — best for planning future income.',
+  },
+  {
+    key: 'average',
+    label: 'Average',
+    hint: 'The mean of recent readings — smooths out one unusual day.',
+  },
+  {
+    key: 'live',
+    label: 'Live',
+    hint: 'The latest fetched rate — best for money that already arrived.',
+  },
+];
+
 export default function SettingsScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
@@ -105,26 +141,70 @@ export default function SettingsScreen() {
   }, []);
   const [themeOpen, setThemeOpen] = useState(false);
   const [fetchingRate, setFetchingRate] = useState(false);
+  const [autoFetch, setAutoFetch] = useState(
+    () => settingsRepo.get(SETTINGS_KEYS.rateAutoFetch) === 'true',
+  );
+  const [rateMode, setRateMode] = useState<RateMode>(
+    () => (settingsRepo.get(SETTINGS_KEYS.rateMode) as RateMode) ?? 'safe',
+  );
+  const [rateHistory, setRateHistory] = useState(() =>
+    parseHistory(settingsRepo.get(SETTINGS_KEYS.rateHistory)),
+  );
+  const lastFetched = settingsRepo.get(SETTINGS_KEYS.rateFetchedAt) ?? null;
+  const drift = driftPercent(latestRate(rateHistory), parseFloat(rateText) || 0);
 
   /** Fetch the live USD→currency rate. Uses a free, key-less endpoint; on any
    * failure the user can still type the rate by hand. */
-  async function fetchRate() {
+  /**
+   * Fetch and RECORD the live rate.
+   *
+   * The reading is appended to the stored history rather than only filling the
+   * input, which is what makes the average mode possible and lets the user see
+   * whether their safe rate has drifted out of touch. `quiet` suppresses the
+   * alerts for the automatic daily fetch — a background refresh that fails
+   * should not interrupt someone who came to Settings for something else.
+   */
+  async function fetchRate(quiet = false) {
     setFetchingRate(true);
     try {
       const res = await fetch(`https://open.er-api.com/v6/latest/USD`);
       const data = await res.json();
       const rate = data?.rates?.[state.currency];
+
       if (typeof rate === 'number' && rate > 0) {
-        setRateText(String(Math.round(rate * 100) / 100));
-      } else {
+        const rounded = Math.round(rate * 100) / 100;
+        if (!quiet) setRateText(String(rounded));
+
+        const next = recordRate(rateHistory, rounded);
+        setRateHistory(next);
+        settingsRepo.set(SETTINGS_KEYS.rateHistory, serialiseHistory(next));
+        settingsRepo.set(SETTINGS_KEYS.rateFetchedAt, new Date().toISOString());
+      } else if (!quiet) {
         Alert.alert('Could not fetch', `No rate available for ${state.currency}. Enter it manually.`);
       }
     } catch {
-      Alert.alert('Could not fetch', 'Check your connection, or enter the rate manually.');
+      if (!quiet) {
+        Alert.alert('Could not fetch', 'Check your connection, or enter the rate manually.');
+      }
     } finally {
       setFetchingRate(false);
     }
   }
+
+  /*
+   * The automatic daily refresh.
+   *
+   * Guarded by `isFetchDue` so opening Settings repeatedly costs nothing —
+   * published rates move on a daily cycle, and refetching per visit would spend
+   * the user's data to redraw the same number.
+   */
+  useEffect(() => {
+    if (!autoFetch) return;
+    if (!isFetchDue(settingsRepo.get(SETTINGS_KEYS.rateFetchedAt))) return;
+
+    void fetchRate(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoFetch]);
 
   async function handleSyncReminders() {
     const blocked = unavailableReason();
@@ -507,7 +587,16 @@ export default function SettingsScreen() {
           */}
           <ToggleRow
             icon="lock-closed-outline"
-            color={colors.completed}
+            /*
+             * Amber, so this and Backup & restore below are told apart.
+             *
+             * Both were `completed` green, which made two adjacent rows read as
+             * one group. Backup keeps the green — a saved copy is the safe
+             * state that screen is about — and the lock takes the palette's
+             * warm tone, which already means "needs your attention" elsewhere
+             * in the app and suits a switch that is off by default.
+             */
+            color={colors.pending}
             title="App lock"
             /*
              * Both states are plain sentences addressed to the user, so flipping
@@ -548,6 +637,9 @@ export default function SettingsScreen() {
           */}
           <SettingRow
             icon="cloud-upload-outline"
+            // Green: a saved backup is the "safe" state this screen is about.
+            // App lock above carries the contrasting colour instead — the two
+            // rows must not share one, or they read as a single group.
             color={colors.completed}
             title="Backup & restore"
             subtitle="Save your data, or bring it back"
@@ -656,8 +748,125 @@ export default function SettingsScreen() {
             icon="cloud-download-outline"
             variant="secondary"
             loading={fetchingRate}
-            onPress={fetchRate}
+            onPress={() => void fetchRate()}
           />
+
+          {/*
+            Keep it current on its own. Guarded to once a day (see
+            `isFetchDue`), because published rates move on a daily cycle and
+            refetching per launch spends data to redraw the same number.
+          */}
+          <Surface padded={false} style={{ overflow: 'hidden' }}>
+            <Row
+              gap={space.md}
+              style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
+            >
+              <Ionicons name="sync-outline" size={19} color={colors.accent} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="bodyStrong">Update daily</Text>
+                <Text variant="caption" tone="muted">
+                  {lastFetched
+                    ? `Last checked ${new Date(lastFetched).toLocaleDateString()}`
+                    : 'Fetches once a day while the app is open'}
+                </Text>
+              </View>
+              <Switch
+                value={autoFetch}
+                onValueChange={(next) => {
+                  setAutoFetch(next);
+                  settingsRepo.set(SETTINGS_KEYS.rateAutoFetch, next ? 'true' : 'false');
+                }}
+              />
+            </Row>
+          </Surface>
+
+          {/*
+            WHICH figure the board converts with.
+
+            The distinction matters most for planning: someone paid in USD who
+            budgets at the spot rate is over-committed the moment the rupee
+            strengthens, so "Safe" — their own conservative number — is the
+            default rather than the live one.
+          */}
+          <View style={{ gap: space.sm }}>
+            <Label>USE FOR CONVERSIONS</Label>
+            <Row gap={6}>
+              {RATE_MODES.map((mode) => {
+                const active = rateMode === mode.key;
+                const value =
+                  mode.key === 'live'
+                    ? latestRate(rateHistory)
+                    : mode.key === 'average'
+                      ? averageRate(rateHistory)
+                      : parseFloat(rateText) || 0;
+
+                return (
+                  <Pressable
+                    key={mode.key}
+                    onPress={() => {
+                      setRateMode(mode.key);
+                      settingsRepo.set(SETTINGS_KEYS.rateMode, mode.key);
+                    }}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: active }}
+                    style={({ pressed }) => ({
+                      opacity: pressed ? 0.7 : 1,
+                      flex: 1,
+                      minWidth: 0,
+                      alignItems: 'center',
+                      gap: 1,
+                      paddingVertical: 9,
+                      borderRadius: 12,
+                      backgroundColor: active ? colors.accent : colors.surface,
+                      borderWidth: 1,
+                      borderColor: active ? colors.accent : colors.hairline,
+                    })}
+                  >
+                    <Text
+                      variant="bodyStrong"
+                      color={active ? colors.inkInverse : colors.ink}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.8}
+                    >
+                      {value ? Math.round(value) : '—'}
+                    </Text>
+                    <Text
+                      variant="caption"
+                      color={active ? colors.inkInverse : colors.inkMuted}
+                      numberOfLines={1}
+                    >
+                      {mode.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </Row>
+            <Text variant="caption" tone="muted">
+              {RATE_MODES.find((mode) => mode.key === rateMode)?.hint}
+            </Text>
+          </View>
+
+          {/*
+            Drift, shown only when it is worth acting on.
+
+            A "safe" rate set months ago and left 20% below spot is not
+            conservative — it is out of date, and nothing else on this screen
+            would say so.
+          */}
+          {drift !== null && Math.abs(drift) >= 5 ? (
+            <Row gap={space.sm}>
+              <Ionicons
+                name="trending-up-outline"
+                size={16}
+                color={drift > 0 ? colors.pending : colors.completed}
+              />
+              <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
+                The live rate is {Math.abs(drift)}% {drift > 0 ? 'above' : 'below'} your saved
+                rate.
+              </Text>
+            </Row>
+          ) : null}
 
           {/* Conversion preview: what $100 becomes. */}
           <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>

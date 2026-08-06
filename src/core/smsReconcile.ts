@@ -10,9 +10,15 @@
  * testable and the store can call it after any refresh.
  */
 
-import { isMatchableAccount, type ParsedSms } from './smsParser';
+import { isMatchableAccount, parentReceiptOf, type ParsedSms } from './smsParser';
 import { resolveCardId } from './planning';
 import { billMatchesHint, inferCategoryHint, type CategoryHint } from './smsCategoryHints';
+import {
+  guessCategories,
+  lineMatchesCategory,
+  SUGGEST_THRESHOLD,
+  type CategoryGuess,
+} from './merchantSignals';
 import { matchMerchant, type MatchConfidence, type MerchantRule } from './merchantRules';
 import type { CatalogSuggestion } from './catalogSync';
 import type { Minor } from './money';
@@ -21,6 +27,42 @@ import type { Minor } from './money';
 /** The minimum a leaf's plan/actual and the SMS must be within to count as an
  * amount match, as a fraction — utilities vary month to month. */
 const AMOUNT_TOLERANCE = 0.15;
+
+/**
+ * How steeply a runner-up category is discounted per point it lost by.
+ *
+ * At 4, the 0.06 gap between "A S P Pharmacy & Grocery"'s health (0.91) and
+ * groceries (0.85) costs the grocery reading ~24% of its score — enough to drop
+ * the match below the confident-match bar so the user is ASKED, rather than
+ * having a pharmacy visit filed under Groceries. A genuine near-tie (a 0.01
+ * gap) is left almost untouched, and a distant also-ran scores nearly nothing.
+ */
+const RUNNER_UP_DISCOUNT = 4;
+
+/**
+ * Fall back to what the message SCORER concluded when no keyword matched.
+ *
+ * `inferCategoryHint` is a fixed keyword list that never learned health,
+ * dining, clothing or the rest, so it returned null for merchants that are
+ * unmistakable to a human. The user's real queue is the proof: three NAWALOKA
+ * rows and an "A S P Pharmacy & Grocery" scored `health` at 1.00 and 0.91
+ * respectively, while the card — which renders the HINT — showed "Needs a
+ * category" on all four. The app had the answer and refused to say it.
+ *
+ * Only consulted when the keyword walk finds nothing, so every existing
+ * mapping keeps its exact behaviour and this can only fill in blanks.
+ */
+function hintFromGuesses(guesses: readonly CategoryGuess[]): CategoryHint | null {
+  const [best] = guesses;
+  if (!best || best.score < SUGGEST_THRESHOLD) return null;
+
+  /*
+   * `SpendCategory` is a superset of `CategoryHint` by construction — every
+   * category the scorer can name is now a hint (see smsCategoryHints.ts) — so
+   * this is a widening, not a guess.
+   */
+  return best.category as CategoryHint;
+}
 
 /** A candidate bill the SMS might be about, with why we think so. */
 export interface DraftMatch {
@@ -78,6 +120,15 @@ export interface SmsDraft {
    * the alternatives the user is meant to be able to pick from.
    */
   suggestions: CatalogSuggestion[];
+  /**
+   * What the message looks like it was for, read from EVERYTHING it says.
+   *
+   * Wider than `hint`, which only names the ten buckets the shared catalog
+   * votes on. This is what lets a hospital or a restaurant be recognised at
+   * all — and when the user has no matching line, what the UI offers to create.
+   * Empty when the message named nothing recognisable.
+   */
+  guesses: CategoryGuess[];
   /** When the draft was created, for ordering the queue newest-first. */
   createdAt: number;
 }
@@ -232,8 +283,27 @@ export function isFixedCommitment(sub: BoardSlice['subcategories'][number]): boo
   // A loan-linked line is an installment by construction — the same figure
   // every month — which is exactly what makes an exact amount match evidence
   // rather than coincidence. See `isFixedAmount` in db/schema.ts.
-  return sub.loanId !== null;
+  if (sub.loanId !== null) return true;
+
+  /*
+   * A line NAMED as a lease/loan/instalment counts too, even with no `loanId`.
+   *
+   * The loan table is opt-in: plenty of people add "Vehicle lease" as an
+   * ordinary monthly bill and never fill in the amortisation screen. Their
+   * lease debit is just as contractually fixed as a linked one, so refusing to
+   * treat it as such meant the exact-amount evidence was thrown away precisely
+   * for the users who track leases most simply.
+   *
+   * Matched on the line's own name, and kept to vocabulary that genuinely
+   * implies a fixed contractual sum — a "subscription" is not here, because
+   * those change price and a coincidental match would be weak evidence.
+   */
+  return FIXED_COMMITMENT_NAMES.test(sub.name);
 }
+
+/** Line names that imply a contractually fixed monthly sum. */
+const FIXED_COMMITMENT_NAMES =
+  /\b(?:lease|leasing|loan|instal{1,2}ment|emi|mortgage|rental|hire\s*purchase|premium)\b/i;
 
 /**
  * Whether the SMS named anything the board could reason about.
@@ -249,9 +319,34 @@ export function isFixedCommitment(sub: BoardSlice['subcategories'][number]): boo
  * banks put a reference number where the merchant goes, which names nothing.
  */
 function messageNamesSomething(parsed: ParsedSms, hint: CategoryHint | null): boolean {
+  /*
+   * A GENERIC transaction-type label names nothing.
+   *
+   * "Transfer Out", "CEFTS Outward Transfer" and friends are the bank's word
+   * for the mechanism, not a payee — every outgoing transfer carries one, so
+   * treating it as "the message identified itself" suppressed the exact-amount
+   * evidence on exactly the messages that have no other signal. The user's
+   * vehicle lease debits arrive as a bare "as Transfer Out" for 122,867.00
+   * against a lease line planned at 122,867.00, and that match was being
+   * discarded because of a label that distinguishes nothing.
+   *
+   * Checked BEFORE the hint, because these messages also infer a `transfer`
+   * hint from the same worthless word.
+   */
+  if (GENERIC_TYPE_LABEL.test(parsed.merchant)) return false;
+
   if (hint) return true;
   return /[a-z]{3,}/i.test(parsed.merchant);
 }
+
+/**
+ * Merchant strings that are really transaction-type labels.
+ *
+ * Anchored to the whole string: a shop genuinely called "Transfer House" must
+ * still count as a named merchant, so a substring match would be wrong.
+ */
+const GENERIC_TYPE_LABEL =
+  /^\s*(?:(?:cefts|slips|ctb|mb|ib|atm|pos)\s+)*(?:inward|outward|online|mobile|internet)?\s*(?:transfer|payment|withdrawal|deposit|credit|debit|transaction)(?:\s+(?:in|out|txn|charges?|fees?))?\s*$/i;
 
 /**
  * How exactly two amounts agree, as a separate signal from `amountScore`.
@@ -282,6 +377,8 @@ function scoreSubcategory(
   sub: BoardSlice['subcategories'][number],
   board: BoardSlice,
   hint: CategoryHint | null,
+  /** Ranked reads of the whole message — see core/merchantSignals.ts. */
+  guesses: readonly CategoryGuess[],
 ): number {
   const category = board.categories.find((c) => c.id === sub.categoryId);
   const cardId = resolveCardId(sub.cardId, category?.cardId);
@@ -329,6 +426,44 @@ function scoreSubcategory(
   // it turns "the words happen to overlap" into "this is the same kind of thing".
   const hintHit = hint && billMatchesHint(hint, billText) ? 1 : 0;
 
+  /*
+   * The broader read of the message, for everything the hint list never knew.
+   *
+   * `inferCategoryHint` covers only the ten buckets the shared catalog votes
+   * on, so hospitals, restaurants, clothing and hardware shops scored nothing —
+   * on the user's real queue that left 9 of 14 drafts with no suggestion at
+   * all, despite merchant names like "NAWALOKA HOSPITALS" and "A S P Pharmacy &
+   * Grocery" saying plainly what they were.
+   *
+   * Scored BELOW `hintHit` deliberately: when the narrow list fires it is the
+   * better evidence, and this only has to beat "nothing".
+   */
+  const guessIndex = guesses.findIndex((guess) => lineMatchesCategory(guess.category, billText));
+  const guessHit = guessIndex >= 0 ? guesses[guessIndex] : null;
+
+  /*
+   * A RUNNER-UP guess is worth less than the winner, not the same.
+   *
+   * Walking the ranked list and taking the first category that happens to match
+   * a line means a losing read can win the match outright. "A S P Pharmacy &
+   * Grocery" reads health 0.91, groceries 0.85 — pharmacy leads the name, so
+   * health is the answer — but the user's board has a Groceries line and no
+   * health line, so the search fell through to the loser and filed a pharmacy
+   * visit under Groceries at 0.42. The app concluded health and then quietly
+   * did something else.
+   *
+   * Keeping the runner-up in play is still right: a supermarket that also sells
+   * fuel should find the user's Fuel line when it has no Groceries line. What
+   * was wrong is pretending the second-best read is as good as the best. So it
+   * is discounted by how far it lost by — a near-tie is barely penalised, a
+   * distant also-ran barely scores — which lets the confident winner's absence
+   * show up as a weak match the user is asked about, instead of a confident
+   * match that is wrong.
+   */
+  const guessScore = guessHit
+    ? guessHit.score * (1 - Math.min(1, (guesses[0].score - guessHit.score) * RUNNER_UP_DISCOUNT))
+    : 0;
+
   // Fuzzy text overlap between the SMS and the bill, as a softer fallback.
   const text = textScore(parsed.merchant || parsed.raw, billText);
 
@@ -342,7 +477,22 @@ function scoreSubcategory(
       ? 1
       : 0;
 
-  const base = hintHit * 0.45 + text * 0.25 + amount * 0.1 + accountHit * 0.2;
+  /*
+   * Weights, and why the guess is worth as much as the hint.
+   *
+   * A confident category read ("SPAR" → groceries at 1.00) is the same quality
+   * of evidence as the narrow hint list firing — both say "this message is
+   * about this kind of thing". Scoring it at 0.3 left SPAR at 0.300 against a
+   * Groceries line while `CONFIDENT_MATCH_SCORE` is 0.4, so a perfect read
+   * produced no suggestion at all.
+   *
+   * The two never double-count: `guessHit` and `hintHit` describe the same
+   * conclusion from different vocabularies, so `Math.max` takes the better
+   * evidence rather than summing them into a falsely confident score.
+   */
+  const semantic = Math.max(hintHit, guessScore);
+
+  const base = semantic * 0.5 + text * 0.25 + amount * 0.1 + accountHit * 0.2;
 
   /*
    * An exact hit on a FIXED commitment, when the message named nothing useful.
@@ -423,15 +573,42 @@ export function reconcileSms(
   // shipped heuristic — that is the whole point of learning.
   const learned = matchMerchant(parsed.merchant, rules);
 
-  // Read what the SMS is *for*: the learned hint when we have one, else the
-  // static keywords over the merchant + full text.
-  const hint = learned.hint ?? inferCategoryHint(`${parsed.merchant} ${parsed.raw}`);
+  /*
+   * Read what the SMS is *for*: the learned hint when we have one, else the
+   * transaction's own KIND, else the static keywords over merchant + full text.
+   *
+   * The kind sits in the middle because for a bank charge it is not a guess.
+   * `classifyKind` only returns `bank_charge` when the message names a charge
+   * as the transaction's own type, whereas `inferCategoryHint` is a first-match
+   * keyword walk that tests `atm` before `bank_charge` — so the fee split out of
+   * an ATM receipt, whose text is full of the word "ATM", was labelled "Looks
+   * like ATM cash" on a LKR 30.00 row sitting right beneath the LKR 85,000
+   * withdrawal it was charged for.
+   *
+   * Only `bank_charge` is promoted this way. The other kinds genuinely are
+   * coarser than the keyword read — a `purchase` says nothing about whether it
+   * was groceries or fuel, and letting the kind win there would throw away the
+   * better answer.
+   */
+  // Everything the message says, ranked. Computed once and passed down rather
+  // than re-derived per line — it depends only on the message.
+  const guesses = guessCategories({
+    merchant: parsed.merchant,
+    raw: parsed.raw,
+    kind: parsed.kind,
+  });
+
+  const hint =
+    learned.hint ??
+    (parsed.kind === 'bank_charge'
+      ? 'bank_charge'
+      : (inferCategoryHint(`${parsed.merchant} ${parsed.raw}`) ?? hintFromGuesses(guesses)));
 
   const matches: DraftMatch[] = board.subcategories
     .filter((sub) => sub.type === wantType)
     .map((sub) => ({
       subcategoryId: sub.id,
-      score: scoreSubcategory(scoringParsed, sub, board, hint),
+      score: scoreSubcategory(scoringParsed, sub, board, hint, guesses),
     }))
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score);
@@ -466,10 +643,77 @@ export function reconcileSms(
     foreign,
     matches,
     confidence,
+    guesses,
     // Filled in asynchronously by the store once the catalog answers; the draft
     // is built synchronously so it can appear immediately, and reconciliation
     // stays a pure function with no network in it.
     suggestions: [],
     createdAt: Date.now(),
   };
+}
+
+/**
+ * Put every itemised fee directly beneath the transaction it was charged for.
+ *
+ * ## Why the queue's own ordering gets this wrong
+ *
+ * `smsInboxRepo.pending()` sorts by when the money moved — date, then time,
+ * then arrival. A fee split out of an ATM receipt carries its PARENT's date and
+ * time, because both figures come from the same message, so the first two keys
+ * tie and the answer falls through to arrival order. The fee is inserted second
+ * and sorts DESC, which puts LKR 30.00 above the LKR 85,000.00 withdrawal that
+ * explains it — a charge with no visible cause, immediately above its cause.
+ *
+ * Reading the pair in the other order is the whole point: the user recognises
+ * "HNB ATM Withdrawal", and then the fee beneath it needs no explanation.
+ *
+ * Everything else keeps its existing position. This only ever MOVES a fee row
+ * to sit after its own parent, so a queue with no split receipts comes back
+ * completely unchanged.
+ */
+export function orderDraftsWithFees<T extends { parsed: { raw: string } }>(
+  drafts: readonly T[],
+): T[] {
+  /*
+   * Index parents by their exact text.
+   *
+   * Matching on the parent's own raw text rather than on "the nearest ATM row"
+   * is what keeps this correct once the queue holds two receipts: each fee
+   * carries the text it was split from, so it can only ever attach to the row
+   * it actually came from.
+   */
+  const feesByParent = new Map<string, T[]>();
+  for (const draft of drafts) {
+    const parent = parentReceiptOf(draft.parsed.raw);
+    if (parent === null) continue;
+
+    const existing = feesByParent.get(parent);
+    if (existing) existing.push(draft);
+    else feesByParent.set(parent, [draft]);
+  }
+
+  if (feesByParent.size === 0) return [...drafts];
+
+  const ordered: T[] = [];
+  for (const draft of drafts) {
+    // A fee is placed by its parent, not by its own position in the queue.
+    if (parentReceiptOf(draft.parsed.raw) !== null) continue;
+
+    ordered.push(draft);
+    for (const fee of feesByParent.get(draft.parsed.raw) ?? []) ordered.push(fee);
+  }
+
+  /*
+   * A fee whose parent is no longer in the queue still has to appear.
+   *
+   * The user can dismiss the withdrawal and keep the fee, which would otherwise
+   * drop the row from the board entirely — money silently missing, which is the
+   * failure this whole feature exists to prevent.
+   */
+  const placed = new Set(ordered);
+  for (const draft of drafts) {
+    if (!placed.has(draft)) ordered.push(draft);
+  }
+
+  return ordered;
 }

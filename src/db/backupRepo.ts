@@ -10,10 +10,13 @@
 
 import { expoDb } from './client';
 import {
+  ALL_PARTS,
   buildSnapshot,
   SNAPSHOT_TABLES,
+  tablesForParts,
   tablesForScope,
   validateSnapshot,
+  type BackupPartKey,
   type RestoreScope,
   type Snapshot,
   type SnapshotTable,
@@ -37,15 +40,34 @@ function tableExists(table: string): boolean {
  * device mid-migration, or one running an older build, should still be able to
  * export what it does have.
  */
-export function exportSnapshot(appVersion: string): Snapshot {
+export function exportSnapshot(
+  appVersion: string,
+  options: {
+    /** Which parts to include. Defaults to everything. */
+    parts?: BackupPartKey[];
+    /** The user's own name for this backup. */
+    label?: string;
+  } = {},
+): Snapshot {
+  const parts = options.parts ?? ALL_PARTS;
+
+  /*
+   * Only the SELECTED tables are read.
+   *
+   * Excluded ones are written as empty arrays by `buildSnapshot`, which is what
+   * keeps the file's shape stable — a reader never has to tell "no rows" from
+   * "this version had no such table" — while the row counts honestly report
+   * zero for anything left out.
+   */
+  const wanted = new Set(tablesForParts(parts));
   const tables: Partial<Record<SnapshotTable, TableRows>> = {};
 
   for (const table of SNAPSHOT_TABLES) {
-    if (!tableExists(table)) continue;
+    if (!wanted.has(table) || !tableExists(table)) continue;
     tables[table] = expoDb.getAllSync(`SELECT * FROM ${table}`) as TableRows;
   }
 
-  return buildSnapshot(tables, { appVersion });
+  return buildSnapshot(tables, { appVersion, parts, label: options.label });
 }
 
 /** What a restore did, for the confirmation the user sees. */
@@ -79,10 +101,13 @@ export interface RestoreResult {
 export function restoreSnapshot(
   snapshot: Snapshot,
   /**
-   * How much to bring back. `setup` restores accounts, houses, categories and
-   * budget lines but no record of money moving — see `RestoreScope`.
+   * How much to bring back.
+   *
+   * A `RestoreScope` is the coarse form kept for existing callers; an explicit
+   * list of parts is what the UI now passes, so the user can bring back their
+   * categories without last year's transactions.
    */
-  scope: RestoreScope = 'everything',
+  scope: RestoreScope | readonly BackupPartKey[] = 'everything',
 ): RestoreResult {
   const validation = validateSnapshot(snapshot);
   if (!validation.ok) {
@@ -111,7 +136,9 @@ export function restoreSnapshot(
      * promises. Their rows are then orphaned by the new structure — which is
      * why the UI recommends setup-only for a fresh board.
      */
-    const tables = tablesForScope(scope);
+    const tables = Array.isArray(scope)
+      ? tablesForParts(scope as BackupPartKey[])
+      : tablesForScope(scope as RestoreScope);
 
     for (const table of [...tables].reverse()) {
       if (!tableExists(table)) continue;

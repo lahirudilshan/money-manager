@@ -416,6 +416,7 @@ function RootNavigator() {
             looks broken in a way the screen's own code cannot fix.
           */}
           <Stack.Screen name="settings/backup" options={SHEET_ROUTE} />
+          <Stack.Screen name="settings/sms-history" options={SHEET_ROUTE} />
           {/*
             Fuel add-on — see core/miniApps.ts.
 

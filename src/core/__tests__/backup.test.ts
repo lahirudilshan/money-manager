@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ALL_PARTS,
   buildSnapshot,
+  describeParts,
+  partsOf,
+  SETUP_PARTS,
+  tablesForParts,
   describeScope,
   describeSnapshot,
   isSnapshotFilename,
   parseSnapshot,
   serialiseSnapshot,
+  summariseSnapshot,
   SNAPSHOT_TABLES,
   SNAPSHOT_VERSION,
   snapshotFilename,
@@ -249,5 +255,129 @@ describe('describeSnapshot drives the restore list', () => {
     // A brand-new user's first backup is genuinely empty, and "0 bills · 0
     // transactions" is honest rather than alarming.
     expect(describeSnapshot(buildSnapshot({}, META))).toBe('0 bills · 0 transactions');
+  });
+});
+
+describe('selectable backup parts', () => {
+  /*
+   * The `setup` / `everything` split was too coarse to express "my accounts and
+   * categories, but not last year's transactions" — which is exactly what
+   * someone starting a fresh year or handing a plan to a family member wants.
+   */
+  it('always includes the required parts, ticked or not', () => {
+    // A restore whose bills point at accounts that were not restored is a
+    // broken board, so `core` travels with every selection.
+    expect(tablesForParts([])).toContain('cards');
+    expect(tablesForParts([])).toContain('settings');
+  });
+
+  it('leaves history out when it is not selected', () => {
+    const tables = tablesForParts(SETUP_PARTS);
+
+    expect(tables).toContain('subcategories');
+    expect(tables).not.toContain('transactions');
+    expect(tables).not.toContain('subcategory_states');
+  });
+
+  it('preserves dependency order after filtering', () => {
+    // Restore inserts in this order, so a filtered list that reordered tables
+    // would point a foreign key at a row not yet written.
+    const selected = tablesForParts(ALL_PARTS);
+    const positions = selected.map((table) => SNAPSHOT_TABLES.indexOf(table));
+
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  it('records the parts and label on the snapshot', () => {
+    const snapshot = buildSnapshot({}, {
+      appVersion: '1.0.0',
+      parts: SETUP_PARTS,
+      label: 'before 2027 reset',
+    });
+
+    expect(snapshot.label).toBe('before 2027 reset');
+    expect(snapshot.parts).toEqual(SETUP_PARTS);
+  });
+
+  it('reads a pre-selective snapshot as holding everything', () => {
+    /*
+     * Snapshots written before this feature carry no `parts` field. They always
+     * held everything, so treating an absent field as "nothing" would make
+     * every old backup look empty and unrestorable.
+     */
+    const old = buildSnapshot({ cards: [{ id: 'c1' }] }, { appVersion: '1.0.0' });
+    delete old.parts;
+
+    expect(partsOf(old)).toEqual(ALL_PARTS);
+  });
+
+  it('describes only what the selection would bring back', () => {
+    const snapshot = buildSnapshot(
+      {
+        cards: [{ id: 'c1' }],
+        subcategories: [{ id: 's1' }, { id: 's2' }],
+        transactions: [{ id: 't1' }, { id: 't2' }, { id: 't3' }],
+      },
+      { appVersion: '1.0.0' },
+    );
+
+    expect(describeParts(snapshot, SETUP_PARTS)).not.toContain('transaction');
+    expect(describeParts(snapshot, ALL_PARTS)).toContain('3 transactions');
+  });
+});
+
+describe('summariseSnapshot', () => {
+  /*
+   * What a restore file HOLDS, part by part.
+   *
+   * `describeSnapshot` answers this in six words, which is right for a list row
+   * but useless for choosing between two backups taken a day apart — and
+   * restoring replaces the whole board. This is what the details panel shows.
+   */
+  it('totals every table in a part', () => {
+    const snapshot = buildSnapshot(
+      { categories: [{ id: 'c1' }], subcategories: [{ id: 's1' }, { id: 's2' }], incomes: [{ id: 'i1' }] },
+      META,
+    );
+
+    const plan = summariseSnapshot(snapshot).find((part) => part.key === 'plan');
+    // categories + subcategories + incomes all roll into "Categories & bills".
+    expect(plan?.count).toBe(4);
+  });
+
+  it('names parts in the user\'s words, not table names', () => {
+    const labels = summariseSnapshot(buildSnapshot({}, META)).map((part) => part.label);
+
+    expect(labels).toContain('Transactions & history');
+    expect(labels.join(' ')).not.toMatch(/subcategory_states|merchant_rules/);
+  });
+
+  it('reports a part the file does NOT carry rather than hiding it', () => {
+    /*
+     * The omissions are the most important thing about a selective backup:
+     * "this one has no transactions" is exactly what someone needs to see
+     * before restoring it over a board that does. Dropping those rows would
+     * leave them to notice an absence, which nobody does reliably.
+     */
+    const setupOnly = buildSnapshot({}, { ...META, parts: SETUP_PARTS });
+
+    const history = summariseSnapshot(setupOnly).find((part) => part.key === 'history');
+    expect(history?.included).toBe(false);
+  });
+
+  it('always marks the required part as included', () => {
+    // `core` travels with every selection, so it is never absent.
+    const historyOnly = buildSnapshot({}, { ...META, parts: ['history'] });
+
+    expect(summariseSnapshot(historyOnly).find((part) => part.key === 'core')?.included).toBe(true);
+  });
+
+  it('reads a pre-selective backup as holding everything', () => {
+    // Snapshots written before `parts` existed always held it all; treating an
+    // absent field as "nothing" would make every old backup look empty.
+    const legacy = buildSnapshot({}, META);
+    delete (legacy as { parts?: unknown }).parts;
+
+    expect(summariseSnapshot(legacy).every((part) => part.included)).toBe(true);
   });
 });

@@ -372,6 +372,36 @@ const DDL = [
   // `matchMerchant` picks between them by hit count.
   `CREATE INDEX IF NOT EXISTS merchant_rules_pattern_idx ON merchant_rules(pattern)`,
   // The durable SMS review queue — see `smsInbox` in schema.ts.
+  /*
+   * Every message the intake has EVER seen, with what became of it.
+   *
+   * The review queue (`sms_inbox`) only holds what is still pending, and the
+   * old diagnostics log kept ten entries in memory that vanished on restart —
+   * so "why didn't yesterday's transaction appear?" had no answer anywhere.
+   * This is the durable history that answers it.
+   *
+   * Holds full message text, which is exactly why the database must stay out
+   * of the file-shared folder (see DATABASE_DIRECTORY) and why the log is
+   * excluded from backups.
+   */
+  `CREATE TABLE IF NOT EXISTS sms_log (
+    id TEXT PRIMARY KEY NOT NULL,
+    raw TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    reason TEXT,
+    source TEXT NOT NULL DEFAULT 'file',
+    amount_minor INTEGER,
+    merchant TEXT,
+    kind TEXT,
+    occurred_on TEXT,
+    seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  // Unique: `record()` upserts on this, so a re-delivered message updates its
+  // row instead of filling the log with copies of the same alert.
+  `CREATE UNIQUE INDEX IF NOT EXISTS sms_log_fingerprint_idx ON sms_log(fingerprint)`,
+  `CREATE INDEX IF NOT EXISTS sms_log_seen_idx ON sms_log(seen_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS sms_log_outcome_idx ON sms_log(outcome, seen_at DESC)`,
   `CREATE TABLE IF NOT EXISTS sms_inbox (
     id TEXT PRIMARY KEY NOT NULL,
     raw TEXT NOT NULL,

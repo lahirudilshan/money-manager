@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reconcileSms, type BoardSlice } from '../smsReconcile';
+import { isFixedCommitment, reconcileSms, type BoardSlice } from '../smsReconcile';
 import { parseSms } from '../smsParser';
 
 /**
@@ -141,5 +141,76 @@ describe('loan / lease repayment detection', () => {
   /** An ordinary purchase must not be swept up by the widened pattern. */
   it('leaves an ordinary purchase alone', () => {
     expect(kindOf('LKR 1,038.30 debited at KEELLS on 02/08')).not.toBe('loan_payment');
+  });
+});
+
+describe('a lease debit that names only its transaction type', () => {
+  /*
+   * The user's real vehicle lease deduction. It arrives as a bare
+   * "as Transfer Out" — no merchant, no loan vocabulary — for exactly the
+   * amount their lease line is planned at.
+   *
+   * Two things previously stopped it matching:
+   *   1. "Transfer Out" counted as "the message named something", suppressing
+   *      the exact-amount evidence. But that label is the bank's word for the
+   *      mechanism; EVERY outgoing transfer carries one, so it distinguishes
+   *      nothing.
+   *   2. `isFixedCommitment` required a `loanId`, and the loan table is opt-in
+   *      — someone who tracks a lease as an ordinary monthly bill got no
+   *      benefit at all.
+   */
+  const LEASE_SMS =
+    'LKR 122,867.00 debited from AC XXXXXXXX6796 on 01 Aug 2026 06:04 as Transfer Out. Avl Bal 5,543.06 Call 94112448888 for info';
+
+  const BOARD = {
+    subcategories: [
+      { id: 'lease', name: 'Vehicle lease', type: 'expense' as const, plannedMinor: 12_286_700, categoryId: 'c1', cardId: null, loanId: null },
+      { id: 'xfer', name: 'Transfers to family', type: 'expense' as const, plannedMinor: 1_000_000, categoryId: 'c2', cardId: null, loanId: null },
+      { id: 'groc', name: 'Groceries', type: 'expense' as const, plannedMinor: 5_000_000, categoryId: 'c2', cardId: null, loanId: null },
+    ],
+    categories: [
+      { id: 'c1', name: 'Loans', cardId: null },
+      { id: 'c2', name: 'Living', cardId: null },
+    ],
+    cards: [],
+  };
+
+  it('matches the lease line on the amount alone', () => {
+    const draft = reconcileSms(parseSms(LEASE_SMS)!, BOARD, 'd1');
+    expect(draft.subcategoryId).toBe('lease');
+  });
+
+  it('treats a lease line as fixed even with no loan record', () => {
+    // The loan table is opt-in; a named lease is contractually fixed regardless.
+    expect(
+      isFixedCommitment({ id: 'l', name: 'Vehicle lease', type: 'expense', plannedMinor: 1, categoryId: 'c', cardId: null, loanId: null }),
+    ).toBe(true);
+
+    expect(
+      isFixedCommitment({ id: 'g', name: 'Groceries', type: 'expense', plannedMinor: 1, categoryId: 'c', cardId: null, loanId: null }),
+    ).toBe(false);
+  });
+
+  it('does NOT turn every outward transfer into a lease', () => {
+    /*
+     * The safeguard. A genuine 10,000 payment to the user's parents uses the
+     * same "CEFTS Outward Transfer" wording — it must not inherit the lease
+     * line just because both are transfers.
+     */
+    const parents = parseSms(
+      'LKR 10,000.00 debited from AC XXXXXXXX6796 on 04 Aug 2026 12:02 as CEFTS Outward Transfer. Avl Bal 8,747.20',
+    )!;
+
+    expect(reconcileSms(parents, BOARD, 'd2').subcategoryId).not.toBe('lease');
+  });
+
+  it('still lets a named merchant beat an equal-amount lease line', () => {
+    // A real merchant name is stronger evidence than an amount coincidence,
+    // even when the amount matches the lease to the cent.
+    const keells = parseSms(
+      'LKR 122,867.00 debited from AC XXXXXXXX6796 as POS TXN at KEELLS SUPER. Avl Bal 5,543.06',
+    )!;
+
+    expect(reconcileSms(keells, BOARD, 'd3').subcategoryId).toBe('groc');
   });
 });

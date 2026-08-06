@@ -24,7 +24,8 @@ import {
   type CatalogCategory,
   type CatalogSubcategory,
 } from '../data/categoryCatalog';
-import { billMatchesHint, type CategoryHint } from './smsCategoryHints';
+import { type CategoryHint } from './smsCategoryHints';
+import { lineMatchesCategory } from './merchantSignals';
 
 /**
  * Which catalog line each hint proposes, as `[categoryId, subcategoryId]`.
@@ -40,7 +41,7 @@ import { billMatchesHint, type CategoryHint } from './smsCategoryHints';
  * purpose. They map to a general "Cash & transfers" holding line so the money
  * is recorded rather than lost, which is the point of a funding board.
  */
-const HINT_TARGET: Record<CategoryHint, readonly [string, string]> = {
+const HINT_TARGET: Record<string, readonly [string, string]> = {
   water: ['housing', 'water'],
   electricity: ['housing', 'electricity'],
   telecom: ['living', 'mobile'],
@@ -48,10 +49,35 @@ const HINT_TARGET: Record<CategoryHint, readonly [string, string]> = {
   fuel: ['transport', 'fuel'],
   subscription: ['subscriptions', 'streaming'],
   loan: ['loans', 'personal-loan'],
-  atm: ['living', 'household'],
-  transfer: ['living', 'household'],
+  atm: ['living', 'cash'],
+  /*
+   * A transfer out is money SENT, not bought.
+   *
+   * Pointed at the cash line rather than "Household items" for the same reason
+   * as `atm`: nothing was purchased, so filing it under a spending category
+   * silently inflates that category's total.
+   */
+  transfer: ['living', 'cash'],
   income: ['income', 'salary'],
   bank_charge: ['bank-fees', 'bank-charges'],
+
+  /*
+   * The wider categories `merchantSignals` can detect.
+   *
+   * `CategoryHint` covers only the ten buckets the shared catalog votes on, so
+   * a hospital, a restaurant or a clothes shop had nowhere to go — the app
+   * could READ the merchant perfectly and still offer the user nothing. These
+   * map each additional category onto a real catalog line so "create it for me"
+   * works for them too.
+   */
+  health: ['health', 'medicine'],
+  dining: ['living', 'dining'],
+  clothing: ['living', 'clothing'],
+  education: ['family', 'tuition'],
+  transport: ['transport', 'public-transport'],
+  entertainment: ['lifestyle', 'entertainment'],
+  household: ['living', 'household'],
+  insurance: ['health', 'health-insurance'],
 };
 
 /** A concrete proposal: the group and line a hint would create. */
@@ -69,7 +95,7 @@ export interface HintProposal {
  * mapping should fall back to the plain picker, not offer to create something
  * arbitrary the user then has to find and delete.
  */
-export function proposalForHint(hint: CategoryHint | null): HintProposal | null {
+export function proposalForHint(hint: CategoryHint | string | null): HintProposal | null {
   if (!hint) return null;
 
   const target = HINT_TARGET[hint];
@@ -115,7 +141,7 @@ export interface ExistingGroup {
  * would undo a decision the user made deliberately.
  */
 export function findLineForHint(
-  hint: CategoryHint | null,
+  hint: CategoryHint | string | null,
   lines: readonly ExistingLine[],
   groups: readonly ExistingGroup[],
 ): ExistingLine | null {
@@ -133,9 +159,19 @@ export function findLineForHint(
   // Keyword match over the line plus its group name, mirroring how the
   // reconciler decides a bill "belongs to" a hint.
   const groupName = new Map(groups.map((group) => [group.id, group.name]));
+  /*
+   * Matched through `lineMatchesCategory`, which covers the WIDER set.
+   *
+   * `billMatchesHint` only knows the ten catalog buckets, so a user's existing
+   * "Medicine" line was invisible to a health-categorised message and the app
+   * would have created a second one beside it.
+   */
   return (
     live.find((line) =>
-      billMatchesHint(hint, `${line.name} ${groupName.get(line.categoryId) ?? ''}`),
+      lineMatchesCategory(
+        hint as Parameters<typeof lineMatchesCategory>[0],
+        `${line.name} ${groupName.get(line.categoryId) ?? ''}`,
+      ),
     ) ?? null
   );
 }

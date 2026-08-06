@@ -164,6 +164,21 @@ const HINT_SELF_WORDS: Record<Hint, RegExp[]> = {
   atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i],
   income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
   bank_charge: [/\bbank\b/i, /\bcharge(?:s)?\b/i, /\bfee(?:s)?\b/i, /\bduty\b/i],
+  /*
+   * The wider tags, named as a BILL LINE would name itself.
+   *
+   * Mirrors the client list exactly (see the note above): these let a
+   * health-tagged message find an existing "Medicine" or "Doctor" line instead
+   * of proposing a new one.
+   */
+  health: [/\bhealth\b/i, /\bmedic(?:al|ine)\b/i, /\bdoctor\b/i, /\bhospital\b/i, /\bpharmac/i],
+  dining: [/\bdining\b/i, /\brestaurant\b/i, /\beat(?:ing)?\s*out\b/i, /\bcafe\b/i],
+  clothing: [/\bcloth(?:es|ing)\b/i, /\bapparel\b/i, /\bfashion\b/i],
+  education: [/\beducation\b/i, /\btuition\b/i, /\bschool\b/i, /\bclasses\b/i],
+  transport: [/\btransport\b/i, /\btaxi\b/i, /\bbus\b/i, /\btravel\b/i],
+  entertainment: [/\bentertainment\b/i, /\bcinema\b/i, /\bmovies?\b/i, /\bleisure\b/i],
+  household: [/\bhousehold\b/i, /\bhome\b/i, /\bfurniture\b/i, /\bappliance/i],
+  insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpremium\b/i],
 };
 
 /**

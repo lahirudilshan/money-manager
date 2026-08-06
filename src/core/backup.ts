@@ -178,6 +178,25 @@ export interface Snapshot {
   /** App version that wrote it, for diagnosing a bad restore. */
   appVersion: string;
   /**
+   * The user's own name for this backup — "before 2027 reset", "for Amma".
+   *
+   * A list of timestamps is unusable once there are more than about three:
+   * every row looks the same and the only way to tell them apart is to restore
+   * one and see. A label is the difference between a backup someone keeps and
+   * one they are afraid to touch. Optional — an unnamed backup still lists by
+   * date, exactly as before.
+   */
+  label?: string;
+  /**
+   * Which parts this snapshot actually holds.
+   *
+   * Written so the restore screen can say "this one has no transactions"
+   * BEFORE the user restores it, rather than presenting a partial backup as if
+   * it were complete. Absent on snapshots written before selective backup, and
+   * read as "everything" for those.
+   */
+  parts?: BackupPartKey[];
+  /**
    * Row counts per table, written at export time.
    *
    * Redundant with the data, and that is the point: it is the integrity check.
@@ -208,7 +227,7 @@ export interface ValidationResult {
  */
 export function buildSnapshot(
   tables: Partial<Record<SnapshotTable, TableRows>>,
-  meta: { appVersion: string; now?: Date },
+  meta: { appVersion: string; now?: Date; label?: string; parts?: BackupPartKey[] },
 ): Snapshot {
   const filled: Record<string, TableRows> = {};
   const counts: Record<string, number> = {};
@@ -223,6 +242,8 @@ export function buildSnapshot(
     version: SNAPSHOT_VERSION,
     createdAt: (meta.now ?? new Date()).toISOString(),
     appVersion: meta.appVersion,
+    ...(meta.label ? { label: meta.label } : {}),
+    ...(meta.parts ? { parts: meta.parts } : {}),
     counts,
     tables: filled,
   };
@@ -349,4 +370,173 @@ export function snapshotFilename(now = new Date()): string {
 /** Whether a filename is one of ours, for filtering the Drive folder listing. */
 export function isSnapshotFilename(name: string): boolean {
   return /^money-manager-.*\.json$/i.test(name);
+}
+
+/**
+ * The selectable PARTS of a backup, as a user thinks about them.
+ *
+ * The `setup` / `everything` split was the right first cut but too coarse: it
+ * could not express "my accounts and categories, but not last year's
+ * transactions", which is exactly what someone starting a fresh year or handing
+ * a plan to a family member wants.
+ *
+ * Each part names a group of tables and says what it is FOR, because
+ * "subcategory_states" means nothing to anyone. Order is the order they are
+ * offered in — structure first, history last, matching how destructive each is
+ * to bring back.
+ */
+export interface BackupPart {
+  key: BackupPartKey;
+  label: string;
+  hint: string;
+  tables: readonly SnapshotTable[];
+  /**
+   * Whether unticking it is allowed.
+   *
+   * `settings` and `cards` underpin everything else — a restore without the
+   * accounts a bill is funded from leaves dangling references — so they travel
+   * with any selection rather than being offered as a choice that produces a
+   * broken board.
+   */
+  required?: boolean;
+}
+
+export type BackupPartKey =
+  | 'core'
+  | 'plan'
+  | 'houses'
+  | 'loans'
+  | 'vehicles'
+  | 'rules'
+  | 'history';
+
+export const BACKUP_PARTS: readonly BackupPart[] = [
+  {
+    key: 'core',
+    label: 'Accounts & settings',
+    hint: 'Your banks, cards and app preferences',
+    tables: ['settings', 'cards'],
+    required: true,
+  },
+  {
+    key: 'plan',
+    label: 'Categories & bills',
+    hint: 'The plan itself — what you budget for',
+    tables: ['categories', 'subcategories', 'incomes'],
+  },
+  { key: 'houses', label: 'Houses', hint: 'Properties whose bills you track', tables: ['houses'] },
+  { key: 'loans', label: 'Loans', hint: 'Loan records and their schedules', tables: ['loans'] },
+  {
+    key: 'vehicles',
+    label: 'Vehicles',
+    hint: 'Vehicles and their service records',
+    tables: ['vehicles', 'vehicle_services', 'service_items'],
+  },
+  {
+    key: 'rules',
+    label: 'Learned merchants',
+    hint: 'What the app has learned about your shops',
+    tables: ['merchant_rules'],
+  },
+  {
+    key: 'history',
+    label: 'Transactions & history',
+    hint: 'Every payment recorded, month by month',
+    tables: ['transactions', 'subcategory_states', 'category_states', 'fundings', 'fuel_entries'],
+  },
+];
+
+/** Everything — the default for a backup, where leaving data out is the odd case. */
+export const ALL_PARTS: BackupPartKey[] = BACKUP_PARTS.map((part) => part.key);
+
+/** Structure without history — the "reuse this plan" selection. */
+export const SETUP_PARTS: BackupPartKey[] = BACKUP_PARTS.filter(
+  (part) => part.key !== 'history',
+).map((part) => part.key);
+
+/**
+ * The tables a selection covers.
+ *
+ * Required parts are folded in whether or not they were ticked, so a selection
+ * can never produce a board whose bills point at accounts that were not
+ * restored. Order follows `SNAPSHOT_TABLES` so the dependency ordering a
+ * restore relies on still holds.
+ */
+export function partsOf(snapshot: Snapshot): BackupPartKey[] {
+  /*
+   * Snapshots written before selective backup carry no `parts` field. They
+   * always held everything, so reading them as `ALL_PARTS` is accurate — the
+   * alternative, treating an absent field as "nothing", would make every old
+   * backup look empty and unrestorable.
+   */
+  return snapshot.parts ?? ALL_PARTS;
+}
+
+/** One line of a backup's contents: a part, and how much of it is in there. */
+export interface SnapshotPartSummary {
+  key: BackupPartKey;
+  label: string;
+  /** Rows across every table in this part. */
+  count: number;
+  /** Whether the file actually carries this part at all. */
+  included: boolean;
+}
+
+/**
+ * What a backup file holds, part by part.
+ *
+ * `describeSnapshot` answers the same question in six words ("10 bills · 142
+ * transactions"), which is right for a list row but not enough to choose by:
+ * restoring REPLACES the board, and two files a day apart look identical at
+ * that resolution. This reports every part with its real row count, so the
+ * decision is made against what is actually inside rather than a timestamp.
+ *
+ * Parts the file does NOT carry are still returned, marked `included: false`.
+ * A selective backup's omissions are the most important thing about it — "this
+ * one has no transactions" is exactly what a user needs to see before they
+ * restore it over a board that does.
+ */
+export function summariseSnapshot(snapshot: Snapshot): SnapshotPartSummary[] {
+  const included = new Set(partsOf(snapshot));
+
+  return BACKUP_PARTS.map((part) => ({
+    key: part.key,
+    label: part.label,
+    count: part.tables.reduce((total, table) => total + (snapshot.counts?.[table] ?? 0), 0),
+    // `required` parts travel with every selection, so they are always present.
+    included: part.required === true || included.has(part.key),
+  }));
+}
+
+export function tablesForParts(parts: readonly BackupPartKey[]): SnapshotTable[] {
+  const wanted = new Set<SnapshotTable>();
+
+  for (const part of BACKUP_PARTS) {
+    if (!part.required && !parts.includes(part.key)) continue;
+    for (const table of part.tables) wanted.add(table);
+  }
+
+  return SNAPSHOT_TABLES.filter((table) => wanted.has(table));
+}
+
+/** What a selection would bring back, in the user's terms. */
+export function describeParts(snapshot: Snapshot, parts: readonly BackupPartKey[]): string {
+  const count = (table: string) => snapshot.counts?.[table] ?? 0;
+  const has = (key: BackupPartKey) => parts.includes(key);
+
+  const pieces: string[] = [];
+
+  if (count('cards') > 0) pieces.push(plural(count('cards'), 'account'));
+  if (has('plan') && count('subcategories') > 0) pieces.push(plural(count('subcategories'), 'bill'));
+  if (has('houses') && count('houses') > 0) pieces.push(plural(count('houses'), 'house'));
+  if (has('loans') && count('loans') > 0) pieces.push(plural(count('loans'), 'loan'));
+  if (has('history') && count('transactions') > 0) {
+    pieces.push(plural(count('transactions'), 'transaction'));
+  }
+
+  return pieces.length > 0 ? pieces.join(' · ') : 'nothing';
+}
+
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }

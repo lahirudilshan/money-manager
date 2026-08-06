@@ -32,21 +32,66 @@ export type CategoryHint =
    * Charges" contains the word Transfer and would otherwise be proposed against
    * the user's real transfer lines. Every fee belongs on one shared line.
    */
-  | 'bank_charge';
+  | 'bank_charge'
+  /*
+   * The wider categories the message SCORER can read.
+   *
+   * These have no keyword patterns below — nothing infers them from a word
+   * list. They exist because `merchantSignals` reads a merchant name properly
+   * and can conclude "hospital" or "restaurant", and without a tag to carry
+   * that answer the conclusion had nowhere to go: the user's NAWALOKA rows
+   * scored health at 1.00 and still showed "Needs a category", because the card
+   * renders the hint and the hint was null.
+   *
+   * `HINT_TARGET` in hintCatalog.ts already maps every one of these onto a real
+   * catalog line, so "create it for me" works for them the moment they can be
+   * named here.
+   */
+  | 'health'
+  | 'dining'
+  | 'clothing'
+  | 'education'
+  | 'transport'
+  | 'entertainment'
+  | 'household'
+  | 'insurance';
 
-/** Human label + icon for each hint, for chips and the filter UI. */
+/**
+ * Human label + icon for each hint, for chips and the filter UI.
+ *
+ * The labels are written to finish the sentence the card starts: "Looks like
+ * ___". A bare noun reads as the substance rather than the transaction — "Looks
+ * like Water" is a puddle, "Looks like Water bill" is something you pay — so
+ * anything that arrives AS a bill says so.
+ *
+ * Deliberately not applied to everything. A supermarket run is not a
+ * "Groceries bill" and a cash withdrawal is not an "ATM bill"; forcing the word
+ * on those would trade one kind of wrong for another. The rule is what the
+ * money actually was: a billed service says "bill", a purchase does not.
+ */
 export const HINT_META: Record<CategoryHint, { label: string; icon: string }> = {
-  water: { label: 'Water', icon: 'water-outline' },
-  electricity: { label: 'Electricity', icon: 'flash-outline' },
-  telecom: { label: 'Phone / Internet', icon: 'call-outline' },
+  water: { label: 'Water bill', icon: 'water-outline' },
+  electricity: { label: 'Electricity bill', icon: 'flash-outline' },
+  telecom: { label: 'Phone / Internet bill', icon: 'call-outline' },
   groceries: { label: 'Groceries', icon: 'cart-outline' },
   fuel: { label: 'Fuel', icon: 'car-outline' },
   subscription: { label: 'Subscription', icon: 'repeat-outline' },
-  loan: { label: 'Loan', icon: 'trending-down-outline' },
+  loan: { label: 'Loan payment', icon: 'trending-down-outline' },
   transfer: { label: 'Transfer', icon: 'swap-horizontal-outline' },
   atm: { label: 'ATM cash', icon: 'cash-outline' },
   income: { label: 'Income', icon: 'arrow-down-circle-outline' },
   bank_charge: { label: 'Bank charge', icon: 'receipt-outline' },
+  // A hospital visit or a pharmacy run is a PURCHASE, not a billed service —
+  // "Health bill" would be wrong for the very rows this tag exists to catch.
+  health: { label: 'Health & medicine', icon: 'medkit-outline' },
+  dining: { label: 'Dining out', icon: 'restaurant-outline' },
+  clothing: { label: 'Clothing', icon: 'shirt-outline' },
+  education: { label: 'Education fees', icon: 'school-outline' },
+  transport: { label: 'Transport', icon: 'bus-outline' },
+  entertainment: { label: 'Entertainment', icon: 'film-outline' },
+  household: { label: 'Household', icon: 'home-outline' },
+  // The word a policy actually uses for its payment.
+  insurance: { label: 'Insurance premium', icon: 'shield-checkmark-outline' },
 };
 
 /**
@@ -220,6 +265,21 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
   atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i],
   income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
   bank_charge: [/\bbank\b/i, /\bcharge(?:s)?\b/i, /\bfee(?:s)?\b/i, /\bduty\b/i],
+  /*
+   * The wider tags, named as a BILL LINE would name itself.
+   *
+   * These are what let a health-tagged message find the user's existing
+   * "Medicine" or "Doctor" line instead of proposing a new one — the same job
+   * the entries above do, for the categories the scorer can now detect.
+   */
+  health: [/\bhealth\b/i, /\bmedic(?:al|ine)\b/i, /\bdoctor\b/i, /\bhospital\b/i, /\bpharmac/i],
+  dining: [/\bdining\b/i, /\brestaurant\b/i, /\beat(?:ing)?\s*out\b/i, /\bcafe\b/i],
+  clothing: [/\bcloth(?:es|ing)\b/i, /\bapparel\b/i, /\bfashion\b/i],
+  education: [/\beducation\b/i, /\btuition\b/i, /\bschool\b/i, /\bclasses\b/i],
+  transport: [/\btransport\b/i, /\btaxi\b/i, /\bbus\b/i, /\btravel\b/i],
+  entertainment: [/\bentertainment\b/i, /\bcinema\b/i, /\bmovies?\b/i, /\bleisure\b/i],
+  household: [/\bhousehold\b/i, /\bhome\b/i, /\bfurniture\b/i, /\bappliance/i],
+  insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpremium\b/i],
 };
 
 /**

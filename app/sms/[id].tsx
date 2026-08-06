@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
+import { ManagePlanSheet } from '../../src/components/ManagePlanSheet';
 import { HousePicker } from '../../src/components/HousePicker';
 import { AmountField, Field } from '../../src/components/forms';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
@@ -122,6 +123,14 @@ export default function SmsDraftModal() {
    * house across — see `effectiveHouseId`.
    */
   const [houseChoice, setHouseChoice] = useState<string | null>(null);
+  /**
+   * The manage-plan sheet, reachable from the category grid.
+   *
+   * The manual "new transaction" screen has always offered this tile, and the
+   * review screen did not — so a message whose bill does not exist yet left the
+   * user with no way to create one without abandoning the draft.
+   */
+  const [manageOpen, setManageOpen] = useState(false);
 
   // The draft may have been resolved on another screen; close cleanly if gone.
   if (!draft) {
@@ -384,6 +393,16 @@ export default function SmsDraftModal() {
             name={suggested.name}
             categoryName={categoryNameOf(state, suggested.id)}
             icon={(hintMeta?.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
+            onManage={() => setManageOpen(true)}
+            /*
+             * WHY this category was chosen, in the message's own words.
+             *
+             * The app knew "hospital" was the deciding word and never said so,
+             * which makes a suggestion feel like a guess the user has to audit
+             * by re-reading the SMS. Naming the evidence turns it into a claim
+             * they can check at a glance — and disagree with confidently.
+             */
+            because={draft.guesses[0]?.reasons.slice(0, 2) ?? []}
           />
         ) : null}
 
@@ -468,6 +487,16 @@ export default function SmsDraftModal() {
               destinations={destinations}
               selectedId={subcategoryId || null}
               onSelect={setSubcategoryId}
+              // Matches the manual entry screen, so the grid offers the same
+              // escape hatch wherever it appears: the bill you need may not
+              // exist yet, and the draft should not have to be abandoned to
+              // create it.
+              extraTile={{
+                label: 'Manage',
+                icon: 'options-outline',
+                selected: false,
+                onPress: () => setManageOpen(true),
+              }}
             />
           )}
         </View>
@@ -493,6 +522,7 @@ export default function SmsDraftModal() {
           onPress={markAlreadyLogged}
         />
 
+      <ManagePlanSheet visible={manageOpen} onClose={() => setManageOpen(false)} />
     </BottomSheet>
   );
 }
@@ -586,11 +616,17 @@ function DetectedCategoryCard({
   name,
   categoryName,
   icon,
+  onManage,
+  because = [],
 }: {
   confidence: 'exact' | 'likely' | 'unknown';
   name: string;
   categoryName: string;
   icon: keyof typeof Ionicons.glyphMap;
+  /** Opens the manage-plan sheet. Omitted renders no button. */
+  onManage?: () => void;
+  /** The words in the message that drove this guess. */
+  because?: readonly string[];
 }) {
   const { colors, radius, space } = useTheme();
   const isExact = confidence === 'exact';
@@ -641,7 +677,52 @@ function DetectedCategoryCard({
             </Text>
           ) : null}
         </View>
+
+        {/*
+          Manage, reachable from the CONFIDENT path too.
+          
+          It previously lived only on the category grid, which appears when
+          nothing was detected — so a user who wanted to rename the matched line,
+          set its budget, or add a related one had to tap "Wrong category" first
+          and pretend the suggestion was wrong.
+        */}
+        {onManage ? (
+          <Pressable
+            onPress={onManage}
+            accessibilityRole="button"
+            accessibilityLabel="Manage categories"
+            hitSlop={10}
+            style={({ pressed }) => ({
+              opacity: pressed ? 0.6 : 1,
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colors.surface,
+            })}
+          >
+            <Ionicons name="options-outline" size={16} color={tint} />
+          </Pressable>
+        ) : null}
       </Row>
+
+      {/*
+        The evidence, shown only when the app INFERRED the category.
+
+        A learned rule ("you confirmed this before") needs no justification —
+        the user made that call themselves. A fresh guess does, and quoting the
+        matched words is the difference between "trust me" and "because the
+        name says HOSPITAL".
+      */}
+      {!isExact && because.length > 0 ? (
+        <Row gap={5}>
+          <Ionicons name="search-outline" size={12} color={tint} />
+          <Text variant="caption" color={tint} style={{ flex: 1 }} numberOfLines={1}>
+            matched “{because.join('”, “')}”
+          </Text>
+        </Row>
+      ) : null}
     </View>
   );
 }

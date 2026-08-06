@@ -79,6 +79,18 @@ export interface ParsedSms {
   currency: string | null;
   /** Best-effort payee/merchant/description, trimmed. Empty string if none. */
   merchant: string;
+  /**
+   * A qualifier shown after the merchant — "HNB ATM Withdrawal — Txn Fee".
+   *
+   * Kept OUT of `merchant` on purpose. The merchant is matched against learned
+   * rules and scored for a category, so folding a qualifier into it would make
+   * the fee row a different merchant from its own parent and teach the learning
+   * table a name no future message will ever repeat. This is presentation: what
+   * distinguishes this row from the one above it.
+   *
+   * Empty for ordinary messages, which have nothing to qualify.
+   */
+  detail?: string;
   /** Account / card fragment the message referenced (often last 4). */
   account: string;
   /** ISO date (YYYY-MM-DD) the message referenced, or null if none found. */
@@ -288,6 +300,219 @@ function extractAmount(text: string): { amountMinor: Minor; currency: string | n
   return null;
 }
 
+/**
+ * A fee the message itemises ALONGSIDE the transaction.
+ *
+ * An ATM e-receipt states two separate movements in one SMS:
+ *
+ *   Amt(Approx.): 85000.00 LKR   <- the withdrawal
+ *   Txn Fee: 30.00LKR            <- the bank's charge
+ *
+ * Both are real money leaving the account, and until now only the first
+ * survived. `extractAmount` deliberately SKIPS the fee clause so the receipt
+ * reports 85,000 rather than 30 — correct, but it meant the 30 was read,
+ * recognised as not-the-amount, and then thrown away. The user's balance
+ * dropped by 85,030 while the board recorded 85,000, and nothing on screen
+ * accounted for the difference.
+ *
+ * So the fee is extracted too, and the caller emits it as its own draft on the
+ * bank-charges line. The alternative — folding 30 into the withdrawal — is
+ * worse: it inflates a cash figure the user can reconcile against what came out
+ * of the machine, and it hides the charge on the one line that exists to make
+ * charges visible.
+ *
+ * Returns null when the message itemises no fee, which is nearly all of them.
+ */
+export interface ItemisedFee {
+  amountMinor: Minor;
+  currency: string | null;
+  /** The label the bank used, for the draft's description. */
+  label: string;
+}
+
+/**
+ * Fee labels, each followed by its amount.
+ *
+ * Anchored on the LABEL rather than on the word "fee" anywhere, because a
+ * receipt that merely mentions charges is not itemising one. The amount must
+ * follow the label directly — a lone "Txn Fee" with no figure yields nothing
+ * rather than borrowing a number from elsewhere in the message.
+ *
+ * `\s*[:.]?\s*` keeps the separator optional: "Txn Fee: 30.00LKR",
+ * "Txn Fee 30.00", and "Fee:30.00LKR" all occur.
+ */
+const ITEMISED_FEE_RE = new RegExp(
+  `\\b((?:txn|transaction|service|handling|processing|atm|bank)\\s+(?:fee|fees|charge|charges)|fee|charges?)\\s*[:.]?\\s*` +
+    `(?:(${CURRENCY_ALTERNATION})\\s*([\\d,]+(?:\\.\\d{1,2})?)|([\\d,]+(?:\\.\\d{1,2})?)\\s*(${CURRENCY_ALTERNATION})?)`,
+  'i',
+);
+
+/**
+ * Read a fee itemised inside a message that is mostly about something else.
+ *
+ * Only meaningful when the message's OWN kind is not already a bank charge —
+ * a "CEFTS Transfer Charges" alert IS the fee, and splitting it would double
+ * it. The caller enforces that; see `feeDraftFor` in the store.
+ */
+export function extractItemisedFee(text: string): ItemisedFee | null {
+  if (typeof text !== 'string') return null;
+
+  const match = text.match(ITEMISED_FEE_RE);
+  if (!match) return null;
+
+  const body = match[3] ?? match[4];
+  if (!body) return null;
+
+  const amountMinor = amountBodyToMinor(body);
+
+  /*
+   * A zero or absurd fee is not one.
+   *
+   * Banks print "Txn Fee: 0.00" on transactions they did not charge for, and
+   * queueing a zero-rupee draft for the user to confirm is pure noise. The
+   * upper bound guards the other failure: if the label ever matches loosely
+   * enough to capture the transaction's own amount, an 85,000 "fee" is plainly
+   * a misread and is better dropped than shown.
+   */
+  if (amountMinor <= 0) return null;
+
+  return {
+    amountMinor,
+    currency: (match[2] ?? match[5] ?? null)?.toUpperCase() ?? null,
+    label: clean(match[1]),
+  };
+}
+
+/**
+ * The fee a message itemises, as a movement in its own right.
+ *
+ * Returns null unless the message states BOTH a transaction and a separate fee
+ * — which in practice means ATM receipts and little else.
+ *
+ * ## Why the fee gets its own draft rather than being added to the parent
+ *
+ * The two figures answer different questions and belong on different lines. The
+ * 85,000 is cash the user withdrew and will reconcile against what the machine
+ * handed them; the 30 is what the bank took for handing it over. Folding them
+ * into 85,030 breaks the first and hides the second on the one line — "Bank
+ * charges" — that exists precisely to make these visible and add them up.
+ *
+ * ## Why the raw text is annotated
+ *
+ * The draft's `raw` gets a "— Txn Fee" suffix. That is not cosmetic: the queue
+ * de-duplicates on a fingerprint of `raw`, so a fee draft carrying the parent's
+ * text verbatim would hash identically to the withdrawal and be rejected as a
+ * duplicate of it. The suffix also means the review card shows the user which
+ * half of the receipt each row came from.
+ */
+/**
+ * The marker that turns a receipt's text into the FEE half of it.
+ *
+ * The queue stores `raw` and re-parses it on every load (see `loadSmsDrafts`),
+ * so a fee row holding the receipt's text verbatim re-reads as the withdrawal —
+ * 85,000 instead of 30, the parent counted twice. The marker is what makes the
+ * split survive a round trip through the database, and `parseSms` honours it
+ * before doing anything else.
+ *
+ * On screen it reads as a plain continuation line ("— Txn Fee"), so the review
+ * card shows which half of the receipt the row came from.
+ */
+const FEE_MARKER = '\n— ';
+
+/**
+ * The receipt text a fee row was split OUT of, or null when it is not one.
+ *
+ * Used to keep the pair together on screen. The two rows share an account, a
+ * date and a time, so the queue's "newest first" ordering falls through to
+ * arrival order and puts the LATER-inserted fee above the withdrawal it was
+ * charged for — the 30 rupees appearing before the 85,000 that explains it.
+ *
+ * Returning the parent's text rather than a boolean lets the caller match a fee
+ * to its own parent specifically, which matters once a queue holds two ATM
+ * receipts.
+ */
+export function parentReceiptOf(text: string): string | null {
+  if (typeof text !== 'string') return null;
+  if (markedFeeLabel(text) === null) return null;
+
+  return text.slice(0, text.lastIndexOf(FEE_MARKER));
+}
+
+/** The fee label a marked message carries, or null when it is not marked. */
+function markedFeeLabel(text: string): string | null {
+  const at = text.lastIndexOf(FEE_MARKER);
+  if (at === -1) return null;
+
+  const label = text.slice(at + FEE_MARKER.length).trim();
+  // A marker with nothing after it, or with a whole line after it, is not ours.
+  if (label.length === 0 || label.includes('\n')) return null;
+
+  return label;
+}
+
+export function splitItemisedFee(parsed: ParsedSms): ParsedSms | null {
+  /*
+   * A message that IS a fee is not split.
+   *
+   * "CEFTS Transfer Charges" would otherwise match its own fee vocabulary and
+   * spawn a second draft for the same 25 rupees — the charge counted twice.
+   */
+  if (parsed.kind === 'bank_charge') return null;
+
+  // Only a debit can carry one. A credit that mentions a fee is describing a
+  // charge being refunded, which is the reversal path's business, not this one.
+  if (parsed.direction !== 'debit') return null;
+
+  const fee = extractItemisedFee(parsed.raw);
+  if (!fee) return null;
+
+  /*
+   * Guard against the fee reading as the transaction itself.
+   *
+   * If a loose label match ever captured the main amount, the "fee" would equal
+   * the parent and double the spend. Equal amounts are far more likely to be
+   * that misread than a genuine fee that happens to match the withdrawal.
+   */
+  if (fee.amountMinor >= parsed.amountMinor) return null;
+
+  return {
+    ...parsed,
+    kind: 'bank_charge',
+    amountMinor: fee.amountMinor,
+    currency: fee.currency ?? parsed.currency,
+    merchant: feeMerchant(parsed.merchant),
+    /*
+     * Just "fee", not the bank's "Txn Fee".
+     *
+     * The pair reads "HNB ATM Withdrawal" and "HNB ATM Withdrawal — fee",
+     * which says everything the user needs — which transaction this belongs
+     * to, and that it is the charge rather than a second withdrawal — in the
+     * least width. The bank's own label adds a word without adding meaning,
+     * and the row is competing for space with the amount beside it.
+     */
+    detail: 'fee',
+    raw: `${parsed.raw}${FEE_MARKER}${fee.label}`,
+  };
+}
+
+/**
+ * What the fee row calls itself.
+ *
+ * The PARENT's name, unchanged — "HNB ATM Withdrawal" — with the qualifier
+ * carried separately in `detail` so the card reads "HNB ATM Withdrawal — Txn
+ * Fee". That split matters beyond presentation: the merchant is what learned
+ * rules key on and what the categoriser scores, so appending "fee" here would
+ * make the charge a different merchant from the withdrawal it came from and
+ * teach the learning table a name no future message will ever repeat.
+ *
+ * Falls back to a plain "Bank fee" when the parent has no name to borrow, since
+ * a row needs something to show.
+ */
+function feeMerchant(parentMerchant: string): string {
+  const parent = clean(parentMerchant ?? '');
+  return parent.length === 0 ? 'Bank fee' : parent;
+}
+
 const MONTHS: Record<string, string> = {
   jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
   jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
@@ -401,6 +626,24 @@ function extractMerchant(text: string): string {
   const loan = text.match(/Reason\s*:\s*(?:MB:)?(loan-[A-Z0-9]+)/i);
   if (loan) return clean(loan[1]);
 
+  /*
+   * A receipt TITLE outranks a Location field.
+   *
+   * On a POS alert `Location:` is the payee ("KEELLS SUPER") and belongs here.
+   * On an ATM receipt it is where the MACHINE stood — "ICBS", "DFCC bank" —
+   * which is an operator code the user has never heard of, printed where they
+   * expect to read what happened. Three of the user's real withdrawals reached
+   * the review queue titled "ICBS , LKA" and "DFCC bank , LKA", while the
+   * message's own first line said "HNB ATM Withdrawal e-Receipt" all along.
+   *
+   * `receiptTitle` only fires on a first line that names a transaction type, so
+   * a POS alert (which has no such heading) still falls through to Location
+   * below and keeps its real merchant. The location is not discarded — it moves
+   * to `detail` and shows after the name.
+   */
+  const title = receiptTitle(text);
+  if (title) return title;
+
   // "Location:KEELLS SUPER - SINHARAMUL, LK," — up to the amount/next label.
   const location = text.match(/Location\s*:\s*(.+?)\s*,?\s*(?:Amount|Av\.?Bal|Term ID|$)/i);
   if (location) return clean(location[1]);
@@ -454,6 +697,60 @@ function extractMerchant(text: string): string {
   }
 
   return '';
+}
+
+
+/**
+ * The human-readable title at the top of a receipt-style message, or ''.
+ *
+ * Deliberately narrow. It only accepts a FIRST line that names a transaction
+ * type, so an ordinary alert whose opening words happen to be a sentence is not
+ * mistaken for a heading — the test is that the line describes the transaction
+ * ("Withdrawal", "Transfer", "Purchase", "e-Receipt") and carries no amount of
+ * its own.
+ */
+function receiptTitle(text: string): string {
+  const [line = ''] = text.split('\n');
+  const heading = clean(line);
+
+  // A heading is short and label-like; a sentence is not.
+  if (heading.length === 0 || heading.length > 60) return '';
+
+  // If it states an amount it is the transaction line, not a title.
+  if (/\d[\d,]*\.\d{2}/.test(heading)) return '';
+
+  /*
+   * A title stands ALONE on its line.
+   *
+   * Both of the user's HNB formats open with the word "PURCHASE" or
+   * "Withdrawal", so naming a transaction type is not enough to tell them
+   * apart:
+   *
+   *   "HNB ATM Withdrawal e-Receipt\nAmt(Approx.): ..."      <- a heading
+   *   "HNB SMS ALERT: PURCHASE, Debit account:1380***4150,Location:SPAR..."
+   *
+   * The second is one long comma-separated run carrying the entire
+   * transaction, and treating its opening words as a title retitled every
+   * KEELLS and SPAR purchase with the bank's letterhead. A comma or a labelled
+   * field on the same line means the message started reporting immediately, so
+   * this is not a heading.
+   */
+  if (/[,;]/.test(heading)) return '';
+  if (/\b(?:account|a\/c|amount|location|bal)\b\s*[:.]/i.test(heading)) return '';
+
+  const namesTransaction =
+    /\b(?:e-?receipt|withdrawal|withdrawl|deposit|transfer|purchase|payment|transaction)\b/i.test(
+      heading,
+    );
+  if (!namesTransaction) return '';
+
+  /*
+   * "e-Receipt" is dropped from the end.
+   *
+   * "HNB ATM Withdrawal" is what the user recognises; "e-Receipt" is the
+   * bank's word for the format, and it only makes the row longer.
+   */
+  return clean(heading.replace(/\s*e-?receipt\s*$/i, ''));
 }
 
 function firstMatch(patterns: RegExp[], text: string): boolean {
@@ -563,6 +860,49 @@ function classifyKind(text: string, direction: SmsDirection): SmsKind {
 }
 
 /**
+ * Whether a message looks CUT SHORT rather than genuinely unparseable.
+ *
+ * The known cause is a Shortcut whose deep link lacks a **URL Encode** action:
+ * iOS truncates the URL at the first unencoded space, so the app receives a
+ * fragment. That is invisible from the outside — the message simply never
+ * appears — and it hits hardest on formats with long runs of spaces inside
+ * them. HNB's POS alert pads its Location field ("BEN FOODS" followed by 16
+ * spaces), which is exactly the shape that gets clipped.
+ *
+ * Detected so the intake can SAY "this arrived cut short" instead of silently
+ * discarding it, which is the difference between a fixable setup problem and a
+ * transaction that vanishes with no trace.
+ *
+ * Deliberately conservative: it requires the message to open like a real alert
+ * AND to stop before reaching anything a complete one always has.
+ */
+export function looksTruncated(input: string): boolean {
+  if (typeof input !== 'string') return false;
+  const text = input.trim();
+
+  // Too short to be any real alert, but long enough to be a fragment of one.
+  if (text.length < 12) return false;
+
+  // It must LOOK like a bank alert started.
+  const startsLikeAlert =
+    /\b(?:SMS\s+ALERT|debited|credited|withdrawal|purchase)\b/i.test(text) ||
+    /^(?:LKR|USD|Rs\.?)\s*[\d,]/i.test(text);
+  if (!startsLikeAlert) return false;
+
+  /*
+   * A complete alert always states an AMOUNT. A fragment clipped at the first
+   * space usually stops before it — "HNB SMS ALERT: PURCHASE," and nothing
+   * else. If a figure is present the message got far enough to be worth
+   * parsing, so it is not treated as truncated however odd it looks.
+   */
+  const hasAmount = /(?:LKR|USD|EUR|GBP|Rs\.?)\s*[\d,]+|[\d,]+(?:\.\d{2})?\s*(?:LKR|USD)/i.test(
+    text,
+  );
+
+  return !hasAmount;
+}
+
+/**
  * Whether a message was DELIBERATELY rejected as noise, rather than merely not
  * understood.
  *
@@ -647,7 +987,7 @@ export function parseSms(input: string): ParsedSms | null {
   const amount = extractAmount(text);
   if (amount === null || amount.amountMinor <= 0) return null;
 
-  return {
+  const base: ParsedSms = {
     direction,
     kind: classifyKind(text, direction),
     amountMinor: amount.amountMinor,
@@ -658,4 +998,42 @@ export function parseSms(input: string): ParsedSms | null {
     time: extractTime(text),
     raw: text,
   };
+
+  /*
+   * A message marked as the FEE half of a receipt reads as the fee, not the
+   * transaction.
+   *
+   * The queue re-parses `raw` on every load, so without this a stored fee row
+   * comes back as its parent: the 30-rupee ATM charge redisplayed as a second
+   * 85,000 withdrawal, doubling the very transaction this split exists to keep
+   * accurate. The marker is only ever written by `splitItemisedFee`, and it is
+   * checked LAST so a real message that happens to end in a dash line is still
+   * parsed normally unless it also itemises a matching fee.
+   */
+  const marked = markedFeeLabel(text);
+  if (marked) {
+    const fee = extractItemisedFee(text);
+    if (fee && fee.amountMinor > 0 && fee.amountMinor < base.amountMinor) {
+      return {
+        ...base,
+        kind: 'bank_charge',
+        amountMinor: fee.amountMinor,
+        currency: fee.currency ?? base.currency,
+        /*
+         * Named after the PARENT, exactly as `splitItemisedFee` names it.
+         *
+         * `base.merchant` was read from the receipt body, so it is the
+         * withdrawal's own label — "HNB ATM Withdrawal" — and reusing it here
+         * keeps a stored fee row identical to a freshly split one. Using the
+         * marker's raw text instead would show the bank's "Txn Fee" again
+         * after a reload, so the row would rename itself on restart.
+         */
+        merchant: feeMerchant(base.merchant),
+        // Matches `splitItemisedFee`, so a reload cannot rename the row.
+        detail: 'fee',
+      };
+    }
+  }
+
+  return base;
 }

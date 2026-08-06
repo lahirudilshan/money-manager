@@ -23,6 +23,22 @@ export const HINTS = [
   'atm',
   'income',
   'bank_charge',
+  /*
+   * The wider categories the device's message scorer can read.
+   *
+   * No keyword patterns infer these — `merchantSignals` concludes them from a
+   * merchant name ("NAWALOKA HOSPITALS" is unmistakably health) and needs a tag
+   * to carry the answer in. Listed here so a client sending one is not rejected
+   * as an unknown hint.
+   */
+  'health',
+  'dining',
+  'clothing',
+  'education',
+  'transport',
+  'entertainment',
+  'household',
+  'insurance',
 ] as const;
 
 export type Hint = (typeof HINTS)[number];

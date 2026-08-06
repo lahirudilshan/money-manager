@@ -124,7 +124,7 @@
         "direction": "debit",
         "kind": "atm",
         "amountMinor": 8500000,
-        "merchant": "NSB MAKOLA ATM LK , LKA",
+        "merchant": "HNB ATM Withdrawal",
         "account": "4150",
         "date": "2026-07-14"
       }

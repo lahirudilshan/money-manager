@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import React from 'react';
 import { Alert, Pressable, Switch, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -33,6 +34,7 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 export default function SmsAutomationGuide() {
   const { colors, radius, space } = useTheme();
   const closeModal = useModalClose();
+  const router = useRouter();
 
   const waiting = useAppStore((s) => s.smsInboxWaiting);
   const drainSmsInbox = useAppStore((s) => s.drainSmsInbox);
@@ -452,15 +454,23 @@ export default function SmsAutomationGuide() {
               Choose <Tap>New Blank Automation</Tap> → <Tap>Add Action</Tap>, and search{' '}
               <Tap>Append to Text File</Tap>.
             </Step>
+            {/*
+              The Text box is shown as a PICTURE rather than described inline.
+              
+              This step chained several `Code` and `Chip` fragments mid-sentence
+              — "{" then a chip then "}" — and those pill backgrounds cannot
+              break across lines, so the sentence ran past the screen edge. It
+              also read as a puzzle. What the user needs is to see the finished
+              box, so `TextBoxPreview` draws it.
+            */}
             <Step
               n={6}
               warn="Insert the chip, don’t type it — tap and hold Text, then pick Shortcut Input."
+              preview={<TextBoxPreview />}
             >
-              In <Tap>Text</Tap>, type <Code>{'{'}</Code>, then tap and hold and pick{' '}
-              <Chip>Shortcut Input</Chip>, then type <Code>{'}'}</Code> — so the box reads{' '}
-              <Code>{'{'}</Code>
-              <Chip>Shortcut Input</Chip>
-              <Code>{'}'}</Code>. Then under <Tap>File Path</Tap>, paste the path you copied above.
+              In <Tap>Text</Tap>, make the box look like this: type the braces yourself, and insert{' '}
+              <Chip>Shortcut Input</Chip> between them. Then under <Tap>File Path</Tap>, paste the
+              path you copied above.
             </Step>
             {/*
               The separator earns a step of its own, and a warning rather than a
@@ -479,11 +489,35 @@ export default function SmsAutomationGuide() {
               code={'{message}'}
               warn="Both braces matter. They mark where each message starts AND ends, so two alerts arriving together can never be read as one wrong amount."
             >
-              That is the whole format: every message wrapped in <Code>{'{'}</Code> and{' '}
-              <Code>{'}'}</Code>. Spaces and new lines around them are fine. If your Shortcut
-              already ends messages with three dashes, that still works.
+              That is the whole format — every message wrapped in curly braces. Spaces and new
+              lines around them are fine. If your Shortcut already ends messages with three
+              dashes, that still works too.
             </Step>
           </Surface>
+
+          {/*
+            The history, linked from here because this is where someone lands
+            when a message did not appear. Its most useful signal is a message
+            being ABSENT — that points at the automation, not the app.
+          */}
+          <Pressable
+            onPress={() => router.push('/settings/sms-history')}
+            accessibilityRole="button"
+            style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+          >
+            <Surface>
+              <Row gap={space.sm}>
+                <Ionicons name="pulse-outline" size={19} color={colors.accent} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text variant="bodyStrong">Detection log</Text>
+                  <Text variant="caption" tone="muted">
+                    What was detected, skipped, or went wrong
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+              </Row>
+            </Surface>
+          </Pressable>
 
           {/* Test, as a gradient button: it is the one action on this screen and
               the only way to find out whether any of the above worked. */}
@@ -700,6 +734,7 @@ function Step({
   code,
   warn,
   note,
+  preview,
   last,
 }: {
   n: number;
@@ -708,6 +743,14 @@ function Step({
   warn?: string;
   /** A quieter aside under the step — an optional extra, not a correction. */
   note?: string;
+  /**
+   * An illustration of the result, for a step whose outcome is easier to SHOW.
+   *
+   * Step 6 asks the user to build a Text box out of two typed braces and an
+   * inserted variable chip. Spelling that out inline meant a sentence full of
+   * pill-shaped fragments that could not wrap and overflowed the screen.
+   */
+  preview?: React.ReactNode;
   last?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
@@ -732,6 +775,7 @@ function Step({
           <Text variant="body" style={{ lineHeight: 22 }}>
             {children}
           </Text>
+          {preview ?? null}
           {code ? <CodeBlock>{code}</CodeBlock> : null}
           {warn ? <Warn>{warn}</Warn> : null}
           {note ? (
@@ -777,31 +821,6 @@ function Tap({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * A literal character the user must TYPE, inline in prose.
- *
- * Distinct from `Chip` (a Shortcuts variable they insert) and `Tap` (a control
- * they press), because the brace format only works if those three are not
- * confused: a typed `{`, an inserted Shortcut Input, and a typed `}` are three
- * different gestures in the same text box.
- */
-function Code({ children }: { children: React.ReactNode }) {
-  const { colors, radius } = useTheme();
-  return (
-    <Text
-      variant="small"
-      color={colors.ink}
-      style={{
-        fontWeight: '700',
-        backgroundColor: colors.canvas,
-        borderRadius: radius.sm,
-      }}
-    >
-      {` ${children} `}
-    </Text>
-  );
-}
-
 /** A Shortcuts variable chip, shown inline in prose. */
 function Chip({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
@@ -809,6 +828,59 @@ function Chip({ children }: { children: React.ReactNode }) {
     <Text variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
       {`[${children}]`}
     </Text>
+  );
+}
+
+/**
+ * What the Shortcuts Text box should end up looking like.
+ *
+ * A picture of the finished state, because the alternative — describing a brace,
+ * a variable chip and another brace inside a sentence — produced a line that
+ * could not wrap and read like a riddle. Laid out as a row so each piece keeps
+ * its own shape, and the row wraps if the label ever grows.
+ */
+function TextBoxPreview() {
+  const { colors, radius, space } = useTheme();
+
+  return (
+    <View style={{ gap: 6 }}>
+      <Text variant="caption" tone="muted">
+        The Text box should read:
+      </Text>
+      <View
+        style={{
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 4,
+          backgroundColor: colors.surfaceSunken,
+          borderWidth: 1,
+          borderColor: colors.hairlineStrong,
+          borderRadius: radius.sm,
+          paddingHorizontal: space.md,
+          paddingVertical: 10,
+        }}
+      >
+        <Text variant="body" style={{ fontFamily: 'Courier', fontWeight: '700' }}>
+          {'{'}
+        </Text>
+        <View
+          style={{
+            paddingHorizontal: space.sm,
+            paddingVertical: 3,
+            borderRadius: 999,
+            backgroundColor: colors.accentSoft,
+          }}
+        >
+          <Text variant="caption" color={colors.accent} style={{ fontWeight: '800' }}>
+            Shortcut Input
+          </Text>
+        </View>
+        <Text variant="body" style={{ fontFamily: 'Courier', fontWeight: '700' }}>
+          {'}'}
+        </Text>
+      </View>
+    </View>
   );
 }
 

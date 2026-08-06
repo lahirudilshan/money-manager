@@ -26,6 +26,9 @@ import { Share } from 'react-native';
 /** The slice of expo-clipboard used here, so the lazy require stays typed. */
 interface ClipboardModule {
   setStringAsync: (text: string) => Promise<boolean>;
+  getStringAsync: () => Promise<string>;
+  /** Whether the pasteboard holds text — does NOT read it, so no prompt. */
+  hasStringAsync: () => Promise<boolean>;
 }
 
 /**
@@ -59,5 +62,43 @@ async function shareFallback(text: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Read the clipboard, or null when it holds nothing usable.
+ *
+ * Used by the paste screen to offer what the user has almost certainly just
+ * copied. Never throws and never prompts: on iOS 16+ reading the pasteboard can
+ * show a "allow paste?" banner, which is why this is called ONCE when the
+ * screen opens rather than polled — a repeated prompt would be worse than
+ * making the user paste by hand.
+ */
+export async function readClipboard(): Promise<string | null> {
+  try {
+    // Same lazy require as `copyToClipboard` — an older binary without the
+    // native module simply returns null rather than throwing at import.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const clipboard = require('expo-clipboard') as ClipboardModule;
+
+    /*
+     * Ask whether there is text BEFORE reading it.
+     *
+     * On iOS 16+ `getStringAsync` shows a system "allow paste?" dialog, and
+     * that prompt is the whole cost of this feature — it appears before the
+     * user has seen anything, on a screen they may have opened for another
+     * reason. `hasStringAsync` inspects the pasteboard without reading it and
+     * raises no prompt, so an empty clipboard costs nothing at all.
+     *
+     * It cannot tell us whether the text is a bank message, so a prompt still
+     * appears when something IS copied. That is the irreducible part: iOS will
+     * not let an app look at clipboard contents unasked.
+     */
+    if (!(await clipboard.hasStringAsync())) return null;
+
+    const text = await clipboard.getStringAsync();
+    return typeof text === 'string' && text.trim().length > 0 ? text : null;
+  } catch {
+    return null;
   }
 }

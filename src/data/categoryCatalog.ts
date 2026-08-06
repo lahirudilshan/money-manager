@@ -104,6 +104,16 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
       { id: 'groceries', name: 'Groceries', icon: 'basket-outline', dueDay: 1, common: true },
       { id: 'dining', name: 'Eating out', icon: 'restaurant-outline' },
       { id: 'household', name: 'Household items', icon: 'cube-outline' },
+      /*
+       * Cash taken out, as its own line.
+       *
+       * ATM withdrawals were being proposed against "Household items", which
+       * is wrong twice over: the money has not been spent on anything yet, and
+       * lumping it there makes that line's total meaningless. Cash in hand is a
+       * real category people track — this is where a withdrawal belongs until
+       * they say otherwise.
+       */
+      { id: 'cash', name: 'Cash / pocket money', icon: 'cash-outline' },
       { id: 'clothing', name: 'Clothing', icon: 'shirt-outline' },
       { id: 'personal-care', name: 'Personal care', icon: 'cut-outline' },
       { id: 'mobile', name: 'Mobile / phone bill', icon: 'phone-portrait-outline', dueDay: 5, common: true },

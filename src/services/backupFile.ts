@@ -89,6 +89,8 @@ export interface StoredBackup {
    * backup is visible and deletable rather than silently missing.
    */
   summary: string;
+  /** The user's own name for it, when they gave one. */
+  label?: string;
 }
 
 /**
@@ -114,7 +116,7 @@ export function listBackups(): StoredBackup[] {
         size: file.size ?? 0,
         // "money-manager-2026-08-04T12-00-00.json" -> the timestamp portion.
         createdAt: name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
-        summary: summarise(file),
+        ...readMeta(file),
       });
     }
 
@@ -131,12 +133,17 @@ export function listBackups(): StoredBackup[] {
  * can see it exists and delete it, rather than vanishing from the screen and
  * leaving them wondering where it went.
  */
-function summarise(file: File): string {
+function readMeta(file: File): { summary: string; label?: string } {
   try {
     const snapshot = parseSnapshot(file.textSync());
-    return snapshot ? describeSnapshot(snapshot) : '';
+    if (!snapshot) return { summary: '' };
+
+    return {
+      summary: describeSnapshot(snapshot),
+      ...(snapshot.label ? { label: snapshot.label } : {}),
+    };
   } catch {
-    return '';
+    return { summary: '' };
   }
 }
 

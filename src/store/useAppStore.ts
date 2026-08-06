@@ -27,8 +27,14 @@ import {
 } from '../core/planning';
 import { suggestCategoryIcon } from '../data/categoryIcons';
 import { groupColors } from '../theme';
-import { isRejectedAsNoise, parseSms, type ParsedSms } from '../core/smsParser';
-import { reconcileSms, type SmsDraft } from '../core/smsReconcile';
+import {
+  isRejectedAsNoise,
+  looksTruncated,
+  parseSms,
+  splitItemisedFee,
+  type ParsedSms,
+} from '../core/smsParser';
+import { orderDraftsWithFees, reconcileSms, type SmsDraft } from '../core/smsReconcile';
 import { merchantKey, planRuleUpsert, type MerchantRule } from '../core/merchantRules';
 import { observationsFrom, planCatalogMerge } from '../core/catalogSync';
 import {
@@ -69,6 +75,7 @@ import {
   merchantRuleRepo,
   settingsRepo,
   smsInboxRepo,
+  smsLogRepo,
   stateRepo,
   subcategoryRepo,
   vehicleRepo,
@@ -867,7 +874,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const draft = get().smsDrafts.find((candidate) => candidate.id === draftId);
     if (!draft) return null;
 
-    const proposal = proposalForHint(draft.hint);
+    /*
+     * Fall back to the message-wide read when the narrow hint is null.
+     *
+     * `draft.hint` only names the ten buckets the shared catalog votes on, so a
+     * hospital, pharmacy or restaurant produced no proposal and the user was
+     * offered nothing — even though the merchant name said exactly what it was.
+     * `guesses` is the wider read (see core/merchantSignals.ts); taking its
+     * best entry means "create the line for me" works for those too.
+     */
+    const category = draft.hint ?? draft.guesses[0]?.category ?? null;
+
+    const proposal = proposalForHint(category);
     if (!proposal) return null;
 
     /*
@@ -880,7 +898,7 @@ export const useAppStore = create<AppState>((set, get) => ({
      *   2. an existing group with the catalog's name, so a new line lands in the
      *      user's own "Housing" instead of creating a second one.
      */
-    const existing = findLineForHint(draft.hint, get().subcategories, get().categories);
+    const existing = findLineForHint(category, get().subcategories, get().categories);
     if (existing) {
       get().confirmDraft(draftId, {
         subcategoryId: existing.id,
@@ -1352,6 +1370,40 @@ export const useAppStore = create<AppState>((set, get) => ({
     // a cold-start link, so the second delivery always lands here).
     if (!inserted) return 'duplicate';
 
+    /*
+     * A receipt that itemises a fee produces a SECOND row for it.
+     *
+     * An ATM e-receipt states two movements — "Amt(Approx.): 85000.00" and
+     * "Txn Fee: 30.00" — and only the first used to survive. The fee was read
+     * by `extractAmount`, recognised as not-the-transaction, and discarded, so
+     * the account fell by 85,030 while the board recorded 85,000 and nothing
+     * explained the gap.
+     *
+     * Queued, never auto-filed, exactly like the CEFTS charge: `reconcileSms`
+     * sorts it onto the Bank charges line and the user confirms it. Inserted
+     * directly rather than through a recursive `ingestSmsText` call, because
+     * the synthetic text is not something `parseSms` should have to accept as
+     * input — it is a movement this function already holds.
+     *
+     * Failure here is deliberately non-fatal: the withdrawal is the important
+     * row, and losing the fee is far better than losing both.
+     */
+    const fee = splitItemisedFee(parsed);
+    if (fee) {
+      smsInboxRepo.add({
+        raw: fee.raw,
+        fingerprint: fingerprintMessage(fee.raw),
+        direction: fee.direction,
+        kind: fee.kind,
+        amountMinor: fee.amountMinor,
+        currency: fee.currency,
+        merchant: fee.merchant,
+        account: fee.account,
+        occurredOn: fee.date,
+        occurredAt: fee.time,
+      });
+    }
+
     // Rebuild from the table so the rows the user sees are exactly the rows
     // that are stored — no path where the two can drift apart.
     get().loadSmsDrafts();
@@ -1448,6 +1500,40 @@ export const useAppStore = create<AppState>((set, get) => ({
         account: fresh.account,
         occurredOn: fresh.date,
         occurredAt: fresh.time,
+      });
+    }
+
+    /*
+     * Recover fees from receipts ALREADY sitting in the queue.
+     *
+     * The split runs during ingest, so without this it only ever helps messages
+     * that arrive from now on — the user's existing ATM withdrawal would keep
+     * showing 85,000 with its 30-rupee charge missing, and nothing would ever
+     * revisit it. Same reasoning as the re-parse above: improving the parser
+     * has to reach the rows already on the dashboard.
+     *
+     * Idempotent by construction. The fee row's own fingerprint blocks a second
+     * insert, and `splitItemisedFee` refuses to split a row that is already a
+     * fee, so repeated launches add nothing.
+     */
+    for (const row of smsInboxRepo.pending()) {
+      const parsedRow = parseSms(row.raw);
+      if (!parsedRow) continue;
+
+      const fee = splitItemisedFee(parsedRow);
+      if (!fee) continue;
+
+      smsInboxRepo.add({
+        raw: fee.raw,
+        fingerprint: fingerprintMessage(fee.raw),
+        direction: fee.direction,
+        kind: fee.kind,
+        amountMinor: fee.amountMinor,
+        currency: fee.currency,
+        merchant: fee.merchant,
+        account: fee.account,
+        occurredOn: fee.date,
+        occurredAt: fee.time,
       });
     }
 
@@ -1584,7 +1670,15 @@ export const useAppStore = create<AppState>((set, get) => ({
      * now sorts by when the money moved, so reversing here would put the OLDEST
      * transaction on top.
      */
-    const next = drafts;
+    /*
+     * ...except a fee, which follows the transaction it was charged for.
+     *
+     * A fee split out of an ATM receipt carries its parent's date and time, so
+     * the query's date/time keys tie and arrival order decides — putting the
+     * LKR 30.00 charge above the LKR 85,000.00 withdrawal that caused it. The
+     * user recognises the withdrawal; the fee only makes sense beneath it.
+     */
+    const next = orderDraftsWithFees(drafts);
 
     /*
      * Publish only when the QUEUE changed, not on every call.
@@ -1717,6 +1811,27 @@ export const useAppStore = create<AppState>((set, get) => ({
          */
         for (const raw of unreadable) {
           const key = fingerprintMessage(raw);
+          // Persisted every time (the repo upserts by fingerprint); the
+          // in-memory panel is the thing that must not be spammed.
+          /*
+           * A message cut short is reported as SUCH, not as unreadable.
+           *
+           * The two need opposite responses from the user: a truncated message
+           * means the Shortcut is missing its URL Encode action (a setup fix),
+           * while an unreadable one is a parser gap they can do nothing about.
+           * Collapsing them sent people looking in the wrong place.
+           */
+          const truncated = looksTruncated(raw);
+
+          smsLogRepo.record({
+            raw,
+            fingerprint: key,
+            outcome: truncated ? 'truncated' : 'unreadable',
+            reason: truncated
+              ? 'Arrived cut short — add a URL Encode step to your Shortcut'
+              : 'Looks like a transaction, but could not be read',
+          });
+
           if (loggedUnreadable.has(key)) continue;
           loggedUnreadable.add(key);
           logSmsIntake('parser-rejected', raw);
@@ -1732,6 +1847,13 @@ export const useAppStore = create<AppState>((set, get) => ({
          */
         for (const raw of noise) {
           const key = fingerprintMessage(raw);
+          smsLogRepo.record({
+            raw,
+            fingerprint: key,
+            outcome: 'ignored',
+            reason: 'Not a transaction — OTP, promo, or no money movement',
+          });
+
           if (loggedUnreadable.has(key)) continue;
           loggedUnreadable.add(key);
           logSmsIntake('noise-discarded', raw);
@@ -1772,12 +1894,45 @@ export const useAppStore = create<AppState>((set, get) => ({
         // feature exists to remove.
         internalTransfers += afterReversals.length - surviving.length;
 
+        // Both halves of a cancelled pair are logged, so "where did my transfer
+        // go?" has an answer. They are dropped deliberately, not lost.
+        for (const entry of movements) {
+          if (keep.has(entry.sms)) continue;
+          smsLogRepo.record({
+            raw: entry.raw,
+            fingerprint: fingerprintMessage(entry.raw),
+            outcome: 'skipped',
+            reason: 'Own-account transfer — not income or spend',
+            amountMinor: entry.sms.amountMinor,
+            merchant: entry.sms.merchant,
+            kind: entry.sms.kind,
+            occurredOn: entry.sms.date,
+          });
+        }
+
         for (const entry of movements) {
           // A charge cancelled by its reversal — and the reversal itself — are
           // both dropped: no row, no draft, nothing for the user to dismiss.
           if (!keep.has(entry.sms)) continue;
 
           const result = get().ingestSmsText(entry.raw);
+
+          smsLogRepo.record({
+            raw: entry.raw,
+            fingerprint: fingerprintMessage(entry.raw),
+            outcome: result === 'duplicate' ? 'duplicate' : result === null ? 'ignored' : 'queued',
+            reason:
+              result === 'duplicate'
+                ? 'Already imported earlier'
+                : result === null
+                  ? 'Not recognised as a transaction'
+                  : null,
+            amountMinor: entry.sms.amountMinor,
+            merchant: entry.sms.merchant,
+            kind: entry.sms.kind,
+            occurredOn: entry.sms.date,
+          });
+
           if (result === 'duplicate') duplicates++;
           else if (result === null) ignored++;
           else {

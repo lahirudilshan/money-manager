@@ -2,14 +2,19 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import Constants from 'expo-constants';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, View } from 'react-native';
-import { BottomSheet, Divider, Label, Row, Surface, Text } from '../../src/components/ui';
+import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
+import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import {
-  describeScope,
+  ALL_PARTS,
+  BACKUP_PARTS,
+  describeParts,
+  partsOf,
   serialiseSnapshot,
+  SETUP_PARTS,
+  summariseSnapshot,
   snapshotFilename,
   validateSnapshot,
-  type RestoreScope,
+  type BackupPartKey,
   type Snapshot,
 } from '../../src/core/backup';
 import { exportSnapshot, restoreSnapshot } from '../../src/db/backupRepo';
@@ -58,6 +63,46 @@ export default function BackupScreen() {
   const [backups, setBackups] = useState<StoredBackup[]>([]);
   const [signedIn, setSignedIn] = useState(false);
   const [busy, setBusy] = useState<'drive' | 'local' | 'signin' | null>(null);
+  /**
+   * What the app is doing right now, in the user's words.
+   *
+   * A bare spinner labelled "Working…" left the user watching an indeterminate
+   * animation with no idea whether it was talking to Google, reading their
+   * board, or uploading — and an upload that finished instantly looked
+   * identical to one that had not started. Naming the step makes a slow
+   * network legible rather than alarming.
+   */
+  const [progress, setProgress] = useState<string | null>(null);
+  /**
+   * Which parts the NEXT backup will include, and what to call it.
+   *
+   * Held on the screen rather than persisted: the selection is a decision about
+   * this one backup, and silently reusing last month's choice is how someone
+   * ends up with a file missing their transactions without having asked for
+   * that.
+   */
+  const [parts, setParts] = useState<BackupPartKey[]>(ALL_PARTS);
+  const [label, setLabel] = useState('');
+  const [picking, setPicking] = useState<null | 'backup' | { restore: StoredBackup; snapshot: Snapshot }>(null);
+  /**
+   * The restore selection, kept apart from the backup one.
+   *
+   * They answer different questions — "what should I save?" versus "what should
+   * I bring back?" — and sharing one list meant opening the restore picker
+   * silently rewrote the backup choice the user had just made.
+   */
+  const [restoreParts, setRestoreParts] = useState<BackupPartKey[]>(ALL_PARTS);
+  /**
+   * The backup whose contents are being inspected, or null.
+   *
+   * Separate from `picking` because looking is not choosing: the row is now
+   * tappable to answer "what is in this file?" without committing to the
+   * restore flow, which previously was the only way to find out — and it opened
+   * with a destructive action already in reach.
+   */
+  const [inspecting, setInspecting] = useState<
+    null | { backup: StoredBackup; snapshot: Snapshot | null }
+  >(null);
   const [lastCloud, setLastCloud] = useState<string | null>(null);
   const [lastLocal, setLastLocal] = useState<string | null>(null);
 
@@ -77,7 +122,18 @@ export default function BackupScreen() {
   }, [reload]);
 
   async function runDriveBackup() {
-    const snapshot = exportSnapshot(appVersion);
+    /*
+     * Each stage is announced BEFORE it starts.
+     *
+     * `exportSnapshot` reads every table synchronously, so on a large board the
+     * UI is blocked for a moment — without a message first, that pause reads as
+     * a frozen screen. The upload that follows is the slow part on a poor
+     * connection, and naming it is what stops the user tapping again.
+     */
+    setProgress('Preparing your data…');
+    const snapshot = exportSnapshot(appVersion, { parts, label: label.trim() || undefined });
+
+    setProgress('Uploading to Google Drive…');
     const result = await uploadBackup(
       snapshotFilename(new Date(snapshot.createdAt)),
       serialiseSnapshot(snapshot),
@@ -89,6 +145,7 @@ export default function BackupScreen() {
     }
 
     settingsRepo.set(SETTINGS_KEYS.lastCloudBackupAt, result.uploadedAt ?? new Date().toISOString());
+    setProgress('Done');
     reload();
   }
 
@@ -101,6 +158,7 @@ export default function BackupScreen() {
    */
   async function handleConnect() {
     setBusy('signin');
+    setProgress('Opening Google…');
     try {
       const result = await signIn();
 
@@ -116,7 +174,19 @@ export default function BackupScreen() {
       await runDriveBackup();
     } finally {
       setBusy(null);
+      setProgress(null);
     }
+  }
+
+  /** Whichever destination the user last chose, run after the picker closes. */
+  const [pendingDestination, setPendingDestination] = useState<'drive' | 'local'>('local');
+
+  async function handleDriveOrLocal() {
+    if (pendingDestination === 'drive') {
+      await handleDriveBackup();
+      return;
+    }
+    handleLocalBackup();
   }
 
   async function handleDriveBackup() {
@@ -125,13 +195,16 @@ export default function BackupScreen() {
       await runDriveBackup();
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   }
 
   function handleLocalBackup() {
     setBusy('local');
     try {
-      const result = saveBackup(exportSnapshot(appVersion));
+      const result = saveBackup(
+        exportSnapshot(appVersion, { parts, label: label.trim() || undefined }),
+      );
 
       if (!result.ok) {
         Alert.alert('Could not save', result.error ?? 'The file could not be written.');
@@ -142,6 +215,7 @@ export default function BackupScreen() {
       reload();
     } finally {
       setBusy(null);
+      setProgress(null);
     }
   }
 
@@ -179,25 +253,24 @@ export default function BackupScreen() {
       return;
     }
 
-    Alert.alert(
-      'What should we restore?',
-      `Setup only — ${describeScope(snapshot, 'setup')}.\n\n` +
-        `Everything — ${describeScope(snapshot, 'everything')}.\n\n` +
-        'Either way, what is on your board now will be replaced.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Setup only', onPress: () => confirmRestore(snapshot, 'setup') },
-        {
-          text: 'Everything',
-          style: 'destructive',
-          onPress: () => confirmRestore(snapshot, 'everything'),
-        },
-      ],
-    );
+    /*
+     * Opens the SAME picker the backup flow uses, pre-ticked with whatever the
+     * file actually holds.
+     *
+     * The old two-button alert could only offer "setup" or "everything", so a
+     * user who wanted their categories but not last year's transactions had no
+     * way to say that. Reusing the picker also means the restore screen states
+     * plainly what a partial backup contains, instead of presenting it as if it
+     * were complete.
+     */
+    // Pre-ticked with what the file ACTUALLY holds — offering to restore
+    // transactions from a backup that has none would be a lie.
+    setRestoreParts(partsOf(snapshot));
+    setPicking({ restore: backup, snapshot });
   }
 
-  function confirmRestore(snapshot: Snapshot, scope: RestoreScope) {
-    const result = restoreSnapshot(snapshot, scope);
+  function confirmRestore(snapshot: Snapshot, chosen: readonly BackupPartKey[]) {
+    const result = restoreSnapshot(snapshot, chosen);
 
     if (!result.ok) {
       // One transaction, so a failure leaves the board exactly as it was —
@@ -213,9 +286,9 @@ export default function BackupScreen() {
     refresh();
     Alert.alert(
       'Restored',
-      scope === 'setup'
-        ? 'Your accounts, houses and budget lines are back. No transactions were added.'
-        : 'Your board has been replaced with the backup.',
+      chosen.includes('history')
+        ? 'Your board has been replaced with the backup.'
+        : 'Your setup is back. No transactions were added.',
     );
   }
 
@@ -259,26 +332,48 @@ export default function BackupScreen() {
           gap: space.sm,
           padding: space.lg,
           borderRadius: radius.lg,
-          backgroundColor: lastAny ? colors.completedSoft : colors.pendingSoft,
+          backgroundColor: busy
+            ? colors.accentSoft
+            : lastAny
+              ? colors.completedSoft
+              : colors.pendingSoft,
         }}
       >
         <Row gap={space.sm}>
-          <Ionicons
-            name={lastAny ? 'shield-checkmark' : 'alert-circle'}
-            size={26}
-            color={lastAny ? colors.completed : colors.pending}
-          />
+          {/*
+            The hero doubles as the progress indicator.
+
+            A spinner buried in a row further down is easy to miss, and this is
+            the element the eye is already on — so a backup in flight replaces
+            the shield here rather than animating somewhere else.
+          */}
+          {busy ? (
+            <ActivityIndicator size="small" color={colors.accent} />
+          ) : (
+            <Ionicons
+              name={lastAny ? 'shield-checkmark' : 'alert-circle'}
+              size={26}
+              color={lastAny ? colors.completed : colors.pending}
+            />
+          )}
           <View style={{ flex: 1, gap: 2 }}>
             <Text variant="heading">
-              {lastAny ? `Backed up ${relativeTime(lastAny)}` : 'Not backed up yet'}
+              {busy
+                ? 'Backing up…'
+                : lastAny
+                  ? `Backed up ${relativeTime(lastAny)}`
+                  : 'Not backed up yet'}
             </Text>
             <Text variant="small" tone="secondary">
-              {lastAny
-                ? absoluteTime(lastAny)
-                : 'Everything you have recorded exists only on this phone.'}
+              {busy
+                ? (progress ?? 'Working…')
+                : lastAny
+                  ? absoluteTime(lastAny)
+                  : 'Everything you have recorded exists only on this phone.'}
             </Text>
           </View>
         </Row>
+
       </View>
 
       {/*
@@ -339,7 +434,13 @@ export default function BackupScreen() {
                 icon="cloud-upload-outline"
                 label="Back up to Drive now"
                 busy={busy === 'drive'}
-                onPress={() => void handleDriveBackup()}
+                busyLabel={progress}
+                // Choose WHAT first. Firing straight into an upload gave the
+                // user no say in what left their phone.
+                onPress={() => {
+                  setPendingDestination('drive');
+                  setPicking('backup');
+                }}
                 emphasis
               />
             </>
@@ -393,13 +494,23 @@ export default function BackupScreen() {
           <ActionRow
             icon="phone-portrait-outline"
             label="Save a file on this phone"
-            sublabel={
-              lastLocal
-                ? `Last saved ${relativeTime(lastLocal)}`
-                : 'Also share it to Drive or AirDrop from Files'
-            }
+            /*
+             * Says what this option IS, not when it last ran.
+             *
+             * "Last saved 1 day ago" repeated the hero banner three rows above
+             * it, so the screen stated the same fact twice and neither told the
+             * user the thing that actually matters here: a file on this phone
+             * does not survive losing this phone. That caveat is the reason
+             * Drive carries the recommendation, and it belongs on the row it
+             * qualifies.
+             */
+            sublabel="Share it to Drive or AirDrop from the Files app"
             busy={busy === 'local'}
-            onPress={handleLocalBackup}
+            busyLabel={progress}
+            onPress={() => {
+              setPendingDestination('local');
+              setPicking('backup');
+            }}
           />
         </Surface>
       </View>
@@ -423,24 +534,78 @@ export default function BackupScreen() {
             {backups.map((backup, index) => (
               <View key={backup.filename}>
                 {index > 0 ? <Divider /> : null}
-                <View
-                  style={{
+                {/*
+                  The row body opens the file's contents.
+
+                  Tapping a list row to see more is what every other list in the
+                  app does, and here it fills a real gap: the only way to learn
+                  what a backup held was to start restoring it, which put a
+                  board-replacing action in reach of someone who was still
+                  deciding. The Restore chip and the trash keep their own
+                  handlers, so opening details cannot be mistaken for either.
+                */}
+                <Pressable
+                  onPress={() => setInspecting({ backup, snapshot: readBackup(backup.filename) })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Details for ${backup.label || readableStamp(backup.createdAt)}`}
+                  style={({ pressed }) => ({
+                    backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: space.md,
                     paddingHorizontal: space.lg,
                     paddingVertical: space.md,
-                  }}
+                  })}
                 >
-                  <Ionicons name="document-text-outline" size={20} color={colors.inkMuted} />
+                  {/*
+                    A tinted chip rather than a grey outline glyph.
+
+                    Every row on this screen was a white card with a hairline
+                    border, so nothing carried any weight and the eye had no
+                    entry point. Giving the file icon the same soft tint the
+                    rest of the app uses for grouped rows makes each backup read
+                    as an object you can act on.
+                  */}
+                  <View
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: radius.sm,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.accentSoft,
+                    }}
+                  >
+                    <Ionicons name="document-text-outline" size={17} color={colors.accent} />
+                  </View>
                   <View style={{ flex: 1, gap: 2 }}>
+                    {/* The user's own name leads when they gave one — that is
+                        what makes a list of backups tellable apart. */}
                     <Text variant="bodyStrong" numberOfLines={1}>
-                      {readableStamp(backup.createdAt)}
+                      {backup.label || readableStamp(backup.createdAt)}
                     </Text>
+                    {/*
+                      CONTENTS lead the second line, with the date after.
+
+                      "10 bills · 142 transactions" is what distinguishes two
+                      restore points; the timestamp was already the row's title
+                      when unnamed, so leading with it again said nothing twice
+                      and pushed the counts to the end of the line where they
+                      truncate first.
+                    */}
                     <Text variant="caption" tone="muted" numberOfLines={1}>
                       {backup.summary || 'Could not read this file'}
+                      {backup.label ? ` · ${readableStamp(backup.createdAt)}` : ''}
                     </Text>
                   </View>
+                  {/*
+                    Filled, not outlined.
+
+                    Restore is what the section is FOR, but a hairline pill next
+                    to a plain trash glyph made the two look equally weighted —
+                    and the destructive one is the easier tap to make by
+                    accident. A tinted chip states which action the row expects.
+                  */}
                   <Pressable
                     onPress={() => handleRestore(backup)}
                     accessibilityRole="button"
@@ -448,13 +613,12 @@ export default function BackupScreen() {
                     style={({ pressed }) => ({
                       opacity: pressed ? 0.6 : 1,
                       paddingHorizontal: space.md,
-                      paddingVertical: 6,
+                      paddingVertical: 7,
                       borderRadius: radius.pill,
-                      borderWidth: 1,
-                      borderColor: colors.hairline,
+                      backgroundColor: colors.accentSoft,
                     })}
                   >
-                    <Text variant="caption" color={colors.accent}>
+                    <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
                       Restore
                     </Text>
                   </Pressable>
@@ -465,9 +629,9 @@ export default function BackupScreen() {
                     hitSlop={8}
                     style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                   >
-                    <Ionicons name="trash-outline" size={18} color={colors.inkMuted} />
+                    <Ionicons name="trash-outline" size={17} color={colors.inkFaint} />
                   </Pressable>
-                </View>
+                </Pressable>
               </View>
             ))}
           </Surface>
@@ -500,21 +664,421 @@ export default function BackupScreen() {
             Moving to a new phone
           </Text>
         </Row>
-        <Text variant="small" tone="secondary">
-          Put the backup file into {BACKUP_FILES_LOCATION} with the Files app —
-          from Drive, AirDrop, or anywhere else — and it appears under Restore
-          above.
-        </Text>
-        <Divider />
-        <Row gap={space.sm}>
-          <Ionicons name="eye-off-outline" size={16} color={colors.inkMuted} />
-          <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-            Bank messages waiting for review are never included in a backup.
-          </Text>
-        </Row>
+        {/*
+          Numbered steps, not a paragraph.
+
+          This was one sentence carrying three separate actions — get the file,
+          put it in a named folder, then look under Restore — with the folder
+          name buried mid-sentence. A person following instructions on a device
+          they just set up needs to see where they are up to, which a wall of
+          grey text cannot show.
+        */}
+        <View style={{ gap: 7 }}>
+          {[
+            `Open the Files app and go to ${BACKUP_FILES_LOCATION}`,
+            'Copy your backup file there — from Drive, AirDrop, anywhere',
+            'It appears under Restore above, ready to bring back',
+          ].map((step, index) => (
+            <Row key={step} gap={space.sm} style={{ alignItems: 'flex-start' }}>
+              <View
+                style={{
+                  width: 18,
+                  height: 18,
+                  borderRadius: 9,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: colors.surfaceSunken,
+                  marginTop: 1,
+                }}
+              >
+                <Text variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
+                  {index + 1}
+                </Text>
+              </View>
+              <Text variant="small" tone="secondary" style={{ flex: 1 }}>
+                {step}
+              </Text>
+            </Row>
+          ))}
+        </View>
       </Surface>
 
+      {/*
+        The privacy note stands alone.
+
+        It was a divider inside the "moving phones" card, which made a fact
+        about EVERY backup look like a footnote to one specific task. It
+        belongs to the whole screen, so it reads as the screen's closing line.
+      */}
+      <Row gap={space.sm} style={{ paddingHorizontal: space.xs, alignItems: 'flex-start' }}>
+        <Ionicons name="eye-off-outline" size={15} color={colors.inkMuted} style={{ marginTop: 1 }} />
+        <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+          Bank messages waiting for review are never included in a backup.
+        </Text>
+      </Row>
+
+      <BackupPicker
+        mode={picking}
+        parts={picking && typeof picking === 'object' ? restoreParts : parts}
+        label={label}
+        onLabel={setLabel}
+        onToggle={(key: BackupPartKey) => {
+          const setter = picking && typeof picking === 'object' ? setRestoreParts : setParts;
+          setter((current) =>
+            current.includes(key)
+              ? current.filter((entry) => entry !== key)
+              : [...current, key],
+          );
+        }}
+        onClose={() => setPicking(null)}
+        onConfirm={() => {
+          const target = picking;
+          setPicking(null);
+          if (target === 'backup') {
+            void handleDriveOrLocal();
+          } else if (target && typeof target === 'object') {
+            confirmRestore(target.snapshot, restoreParts);
+          }
+        }}
+      />
+
+      <BackupDetails
+        entry={inspecting}
+        onClose={() => setInspecting(null)}
+        onRestore={(backup) => {
+          setInspecting(null);
+          handleRestore(backup);
+        }}
+      />
     </BottomSheet>
+  );
+}
+
+/**
+ * What is actually inside a backup file.
+ *
+ * Exists because the restore list could only say "10 bills · 142 transactions"
+ * — enough to tell two very different files apart, useless for two taken a day
+ * apart. Restoring REPLACES the board, so the decision deserves the real
+ * contents, and the only way to see them used to be to start the restore
+ * itself.
+ *
+ * Reads the file when opened rather than at list time: parsing every backup on
+ * every render to fill a panel most people never open is work for nothing, and
+ * `listBackups` already pays that cost once for the summary line.
+ */
+function BackupDetails({
+  entry,
+  onClose,
+  onRestore,
+}: {
+  entry: null | { backup: StoredBackup; snapshot: Snapshot | null };
+  onClose: () => void;
+  onRestore: (backup: StoredBackup) => void;
+}) {
+  const { colors, space, radius } = useTheme();
+  if (!entry) return null;
+
+  const { backup, snapshot } = entry;
+  const summary = snapshot ? summariseSnapshot(snapshot) : [];
+
+  return (
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title={backup.label || readableStamp(backup.createdAt)}
+      icon="document-text-outline"
+    >
+      {/*
+        The file's own facts, before its contents.
+
+        The date is shown here only when the title is the user's own NAME for
+        the backup — an unnamed one is already titled by its timestamp, and
+        repeating it immediately underneath says the same thing twice, which is
+        what the first draft of this panel did.
+      */}
+      <Row gap={space.sm} style={{ paddingHorizontal: space.xs }}>
+        <Ionicons name="time-outline" size={15} color={colors.inkMuted} />
+        <Text variant="small" tone="secondary" style={{ flex: 1 }}>
+          {backup.label ? readableStamp(backup.createdAt) : 'What this backup holds'}
+        </Text>
+        <Text variant="caption" tone="muted">
+          {formatSize(backup.size)}
+        </Text>
+      </Row>
+
+      {snapshot === null ? (
+        /* A corrupt file still LISTS so it can be deleted — see `listBackups`.
+           Saying so plainly beats an empty panel that looks like a bug. */
+        <Surface style={{ gap: space.xs }}>
+          <Text variant="bodyStrong">This file cannot be read</Text>
+          <Text variant="small" tone="secondary">
+            It may have been copied incompletely, or written by a much newer
+            version of the app. Delete it and take a fresh backup.
+          </Text>
+        </Surface>
+      ) : (
+        <Surface padded={false} style={{ overflow: 'hidden' }}>
+          {summary.map((part, index) => (
+            <View key={part.key}>
+              {index > 0 ? <Divider /> : null}
+              <Row
+                gap={space.sm}
+                style={{ paddingHorizontal: space.lg, paddingVertical: 11 }}
+              >
+                {/*
+                  A tick or a dash, not a hidden row.
+
+                  Parts the file does NOT carry are the most important thing
+                  about a selective backup — "this one has no transactions" is
+                  exactly what someone needs before restoring it over a board
+                  that does. Omitting those rows would leave them to notice an
+                  absence, which nobody does reliably.
+                */}
+                <Ionicons
+                  name={part.included ? 'checkmark-circle' : 'remove-circle-outline'}
+                  size={17}
+                  color={part.included ? colors.completed : colors.inkFaint}
+                />
+                <Text
+                  variant="small"
+                  tone={part.included ? undefined : 'muted'}
+                  style={{ flex: 1 }}
+                >
+                  {part.label}
+                </Text>
+                <Text
+                  variant="caption"
+                  tone={part.included ? 'secondary' : 'muted'}
+                  style={{ fontWeight: part.included ? '700' : '400' }}
+                >
+                  {part.included ? part.count.toLocaleString() : 'Not included'}
+                </Text>
+              </Row>
+            </View>
+          ))}
+        </Surface>
+      )}
+
+      {/* The action the panel exists to inform. Only offered when the file is
+          actually readable — restoring a corrupt snapshot cannot work. */}
+      {snapshot ? (
+        <GradientButton label="Restore this backup" onPress={() => onRestore(backup)} />
+      ) : null}
+    </BottomSheet>
+  );
+}
+
+/** Bytes as something a person can read — files here run KB to a few MB. */
+function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Choose what a backup contains, or what a restore brings back.
+ *
+ * One component for both, because they are the same question asked twice and
+ * two near-identical sheets would inevitably drift apart. What differs is the
+ * verb and whether a name field is shown — you name a backup, you do not name a
+ * restore.
+ *
+ * Every part states what it IS in the user's words ("Categories & bills"), not
+ * the table it maps to. Someone deciding what to keep cannot reason about
+ * `subcategory_states`.
+ */
+function BackupPicker({
+  mode,
+  parts,
+  label,
+  onLabel,
+  onToggle,
+  onClose,
+  onConfirm,
+}: {
+  mode: null | 'backup' | { restore: StoredBackup; snapshot: Snapshot };
+  parts: readonly BackupPartKey[];
+  label: string;
+  onLabel: (next: string) => void;
+  onToggle: (key: BackupPartKey) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  if (!mode) return null;
+
+  const isRestore = typeof mode === 'object';
+  const snapshot = isRestore ? mode.snapshot : null;
+
+  /** What the file holds — parts it lacks cannot be restored, so they are off. */
+  const available = snapshot ? partsOf(snapshot) : ALL_PARTS;
+
+  return (
+    <BottomSheet
+      visible
+      onClose={onClose}
+      title={isRestore ? 'Restore what?' : 'Back up what?'}
+      icon={isRestore ? 'time-outline' : 'cloud-upload-outline'}
+      iconColor={colors.accent}
+      scroll
+      footer={
+        <GradientButton
+          label={isRestore ? 'Restore selected' : 'Back up selected'}
+          icon={isRestore ? 'download-outline' : 'cloud-upload-outline'}
+          onPress={onConfirm}
+          disabled={parts.length === 0}
+        />
+      }
+    >
+      <Text variant="small" tone="secondary">
+        {isRestore
+          ? 'Everything you tick replaces what is on your board now. Anything left unticked is left exactly as it is.'
+          : 'Tick what this backup should include. Leaving history out makes a small file you can reuse as a starting plan.'}
+      </Text>
+
+      {/* Two presets, because most people want one of exactly these. */}
+      {!isRestore ? (
+        <Row gap={space.sm}>
+          <Preset
+            label="Everything"
+            active={parts.length === ALL_PARTS.length}
+            onPress={() => {
+              for (const key of ALL_PARTS) if (!parts.includes(key)) onToggle(key);
+            }}
+          />
+          <Preset
+            label="Setup only"
+            active={parts.length === SETUP_PARTS.length && !parts.includes('history')}
+            onPress={() => {
+              if (parts.includes('history')) onToggle('history');
+              for (const key of SETUP_PARTS) if (!parts.includes(key)) onToggle(key);
+            }}
+          />
+        </Row>
+      ) : null}
+
+      <Surface padded={false} style={{ overflow: 'hidden' }}>
+        {BACKUP_PARTS.map((part, index) => {
+          const missing = !available.includes(part.key);
+          const ticked = parts.includes(part.key) && !missing;
+          const locked = part.required || missing;
+
+          return (
+            <View key={part.key}>
+              {index > 0 ? <Divider /> : null}
+              <Pressable
+                onPress={() => {
+                  if (locked) return;
+                  onToggle(part.key);
+                }}
+                disabled={locked}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: ticked, disabled: locked }}
+                accessibilityLabel={part.label}
+                style={({ pressed }) => ({
+                  opacity: pressed && !locked ? 0.6 : missing ? 0.45 : 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: space.md,
+                  paddingHorizontal: space.lg,
+                  paddingVertical: space.md,
+                })}
+              >
+                <Ionicons
+                  name={
+                    missing
+                      ? 'remove-circle-outline'
+                      : ticked
+                        ? 'checkmark-circle'
+                        : 'ellipse-outline'
+                  }
+                  size={22}
+                  color={ticked ? colors.accent : colors.inkMuted}
+                />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text variant="bodyStrong">{part.label}</Text>
+                  <Text variant="caption" tone="muted">
+                    {missing ? 'Not in this backup' : part.required ? 'Always included' : part.hint}
+                  </Text>
+                </View>
+              </Pressable>
+            </View>
+          );
+        })}
+      </Surface>
+
+      {/* Naming, so a list of backups is readable a month later. */}
+      {!isRestore ? (
+        <View style={{ gap: space.sm }}>
+          <Label>NAME THIS BACKUP (OPTIONAL)</Label>
+          <TextInput
+            value={label}
+            onChangeText={onLabel}
+            placeholder="e.g. before 2027 reset"
+            placeholderTextColor={colors.inkMuted}
+            accessibilityLabel="Backup name"
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderColor: colors.hairline,
+              paddingHorizontal: space.md,
+              paddingVertical: 13,
+              fontSize: 15,
+              letterSpacing: 0,
+              color: colors.ink,
+            }}
+          />
+        </View>
+      ) : (
+        snapshot && (
+          <Text variant="caption" tone="muted">
+            This backup holds {describeParts(snapshot, available)}.
+          </Text>
+        )
+      )}
+    </BottomSheet>
+  );
+}
+
+/** A preset chip — the two selections almost everybody wants. */
+function Preset({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const { colors, radius, space } = useTheme();
+
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={({ pressed }) => ({
+        opacity: pressed ? 0.7 : 1,
+        flex: 1,
+        alignItems: 'center',
+        paddingVertical: 9,
+        borderRadius: radius.md,
+        backgroundColor: active ? colors.accent : colors.surface,
+        borderWidth: 1,
+        borderColor: active ? colors.accent : colors.hairline,
+      })}
+    >
+      <Text
+        variant="caption"
+        color={active ? colors.inkInverse : colors.inkSecondary}
+        style={{ fontWeight: '700' }}
+      >
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -524,6 +1088,7 @@ function ActionRow({
   label,
   sublabel,
   busy,
+  busyLabel,
   onPress,
   emphasis = false,
 }: {
@@ -531,6 +1096,8 @@ function ActionRow({
   label: string;
   sublabel?: string;
   busy: boolean;
+  /** What is happening, replacing the label while `busy`. */
+  busyLabel?: string | null;
   onPress: () => void;
   /** Tint the row, for the one action a section is really offering. */
   emphasis?: boolean;
@@ -560,7 +1127,7 @@ function ActionRow({
       )}
       <View style={{ flex: 1, gap: 2 }}>
         <Text variant="bodyStrong" color={emphasis ? colors.accent : undefined}>
-          {busy ? 'Working…' : label}
+          {busy ? (busyLabel ?? 'Working…') : label}
         </Text>
         {sublabel && !busy ? (
           <Text variant="caption" tone="muted">

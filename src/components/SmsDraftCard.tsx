@@ -127,7 +127,7 @@ export function SmsDraftCard({
       <Pressable
         onPress={onOpen}
         accessibilityRole="button"
-        accessibilityLabel={`${kindLabel}, ${parsed.merchant || 'transaction'}, ${figure}${accountLabel ? `, ${accountLabel}` : ''}. Tap for details.`}
+        accessibilityLabel={`${kindLabel}, ${parsed.merchant || 'transaction'}${parsed.detail ? ` ${parsed.detail}` : ''}, ${figure}${accountLabel ? `, ${accountLabel}` : ''}. Tap for details.`}
         style={({ pressed }) => ({
           paddingHorizontal: space.md,
           paddingTop: space.md,
@@ -158,9 +158,19 @@ export function SmsDraftCard({
 
           <View style={{ flex: 1, gap: 3 }}>
             {/* The merchant gets the whole line — the amount lives in the
-                suggestion band below, paired with the category. */}
+                suggestion band below, paired with the category.
+
+                A `detail` follows it in a lighter weight: an ATM receipt yields
+                two rows sharing one name, and "HNB ATM Withdrawal — Txn Fee"
+                says which half this is. Same Text so the qualifier wraps and
+                truncates with the name rather than being clipped separately. */}
             <Text variant="bodyStrong" numberOfLines={1}>
               {parsed.merchant || kindLabel}
+              {parsed.detail ? (
+                <Text variant="bodyStrong" tone="muted" style={{ fontWeight: '500' }}>
+                  {` — ${parsed.detail}`}
+                </Text>
+              ) : null}
             </Text>
 
             {/* Provenance. Deliberately the quietest line on the card: facts to
@@ -388,40 +398,112 @@ function MatchChip({
           label: billName ?? 'a suggestion',
         };
 
+  /*
+   * Category and amount on ONE row — but the category wraps rather than being
+   * cut.
+   *
+   * The original band capped the label at a single line so it could never push
+   * the figure off the right edge. That protected the layout by sacrificing the
+   * words: "Phone / Internet bill" and any user-named bill of normal length
+   * arrived truncated, and a suggestion the user cannot fully read is not one
+   * they can accept.
+   *
+   * The fix is not to stack them but to let the label take a second LINE inside
+   * its own column. `flex: 1` on the text group plus `flexShrink: 0` on the
+   * figure is what makes that work: the figure claims exactly the width it
+   * needs, the label gets the rest, and when the rest is too narrow it wraps
+   * downward instead of eating into the amount.
+   *
+   * `alignItems: 'flex-start'` so a wrapped label grows downward while the
+   * figure stays level with the first line, rather than both drifting to a
+   * shared centre.
+   */
   return (
     <View
       style={{
         flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
+        alignItems: 'flex-start',
+        gap: 8,
         paddingHorizontal: space.sm,
         paddingVertical: 7,
         borderRadius: radius.sm,
         backgroundColor: bg,
       }}
     >
-      <Ionicons name={icon} size={15} color={fg} />
       {/* The prefix is the quiet half; the name it points at carries the weight,
           since that is the word the user is being asked to accept or replace.
-          Both sit in a flex group so a long bill name truncates rather than
-          pushing the amount off the band's right edge.
 
           Sized one step above the provenance line and one below the amount: this
           is the decision the card is asking for, so it should not read as small
           print, but it must not out-shout the figure either. */}
-      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+      {/*
+        The category name moves to the next line WHOLE.
+
+        Three arrangements were tried against real labels, and only this one
+        reads right:
+
+          - one flex row, label capped at a line: "Phone / Internet bill" was
+            truncated, and a suggestion you cannot read is not one you can
+            accept;
+          - prefix and label as separate wrapping children: the break landed
+            BETWEEN them, orphaning "Looks like" alone above the category;
+          - both in a single Text run: the break landed mid-phrase — "Health &"
+            on one line, "medicine" on the next — splitting the very name the
+            user is being asked to judge.
+
+        So the label is its own block with `flexWrap` on the container: it sits
+        beside the prefix while it fits, and drops entire to the next line when
+        it does not. `flexBasis: 'auto'` with no shrink is what forces the whole
+        move rather than a squeeze — the name is either on this line or the one
+        below, never halved.
+      */}
+      <View
+        style={{
+          flex: 1,
+          flexDirection: 'row',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          columnGap: 5,
+          rowGap: 1,
+        }}
+      >
+        <Ionicons name={icon} size={15} color={fg} />
         <Text variant="small" color={fg} style={{ opacity: 0.8 }}>
           {prefix}
         </Text>
-        <Text variant="small" color={fg} numberOfLines={1} style={{ flexShrink: 1, fontWeight: '800' }}>
+        {/*
+          Never shrunk, so "too long to sit beside the prefix" means it moves
+          to its own line rather than being squeezed on this one.
+
+          Two lines, not one. A name that does not fit BESIDE the prefix wraps
+          below and usually fits there — but a user-named bill can be longer
+          than a whole line ("Internet and telephone monthly bill" clipped to
+          "Internet and telephone mon…" on test), and capping it at one line
+          reintroduced the truncation this whole layout exists to remove. Two
+          lines is still bounded, so a runaway name cannot grow the card without
+          limit.
+        */}
+        <Text
+          variant="small"
+          color={fg}
+          numberOfLines={2}
+          style={{ flexShrink: 0, fontWeight: '800' }}
+        >
           {label}
         </Text>
       </View>
 
       {/* The amount is the one thing in the band that is not a suggestion, so it
           carries the heaviest weight here — against a tinted ground the default
-          figure weight read as washed out next to the bold category name. */}
-      <Text variant="figureLarge" color={figureColor} style={{ fontSize: 16 }}>
+          figure weight read as washed out next to the bold category name.
+
+          `flexShrink: 0` is what protects it: the figure is never abbreviated,
+          so the label is the side that gives way. */}
+      <Text
+        variant="figureLarge"
+        color={figureColor}
+        style={{ fontSize: 16, flexShrink: 0 }}
+      >
         {figure}
       </Text>
     </View>

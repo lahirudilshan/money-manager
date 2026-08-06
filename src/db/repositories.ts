@@ -6,7 +6,7 @@ import {
 } from '../core/merchantRules';
 import { SEED_MERCHANT_PATTERNS } from '../core/smsCategoryHints';
 import type { CatalogPlan } from '../core/catalogSync';
-import { db } from './client';
+import { db, expoDb } from './client';
 import {
   cards,
   categories,
@@ -848,6 +848,117 @@ export const smsInboxRepo = {
   },
 };
 
+/**
+ * The durable record of every message the intake has seen.
+ *
+ * Separate from `smsInboxRepo`, which is the pending REVIEW QUEUE and empties
+ * as the user acts. This never empties (beyond pruning), because its whole
+ * purpose is answering "what happened to the message from Tuesday?" long after
+ * the queue has moved on.
+ *
+ * Raw SQL rather than Drizzle: the table is diagnostics, deliberately absent
+ * from schema.ts and from backups, so it has no generated model.
+ */
+export const smsLogRepo = {
+  /** Record an outcome. Same fingerprint twice updates rather than duplicates. */
+  record(entry: {
+    raw: string;
+    fingerprint: string;
+    outcome: string;
+    reason?: string | null;
+    source?: string;
+    amountMinor?: number | null;
+    merchant?: string | null;
+    kind?: string | null;
+    occurredOn?: string | null;
+  }): void {
+    try {
+      /*
+       * Keyed by fingerprint, so a message re-delivered by the automation
+       * updates its row instead of filling the log with copies. The LATEST
+       * outcome wins — a message that failed and later succeeded should read as
+       * succeeded.
+       */
+      expoDb.runSync(
+        `INSERT INTO sms_log (id, raw, fingerprint, outcome, reason, source, amount_minor, merchant, kind, occurred_on, seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(fingerprint) DO UPDATE SET
+           outcome = excluded.outcome,
+           reason = excluded.reason,
+           amount_minor = excluded.amount_minor,
+           merchant = excluded.merchant,
+           kind = excluded.kind,
+           seen_at = excluded.seen_at`,
+        [
+          createId(),
+          entry.raw,
+          entry.fingerprint,
+          entry.outcome,
+          entry.reason ?? null,
+          entry.source ?? 'file',
+          entry.amountMinor ?? null,
+          entry.merchant ?? null,
+          entry.kind ?? null,
+          entry.occurredOn ?? null,
+          Date.now(),
+        ],
+      );
+    } catch {
+      // Diagnostics must never break intake. A log write that fails is a lost
+      // log line; a throw here would lose the transaction itself.
+    }
+  },
+
+  /** Newest first. `outcome` filters to one bucket for the segmented view. */
+  recent(limit = 200, outcome?: string): SmsLogRow[] {
+    try {
+      return expoDb.getAllSync(
+        outcome
+          ? `SELECT * FROM sms_log WHERE outcome = ? ORDER BY seen_at DESC LIMIT ?`
+          : `SELECT * FROM sms_log ORDER BY seen_at DESC LIMIT ?`,
+        outcome ? [outcome, limit] : [limit],
+      ) as SmsLogRow[];
+    } catch {
+      return [];
+    }
+  },
+
+  /** How many of each outcome, for the summary chips. */
+  counts(): Record<string, number> {
+    try {
+      const rows = expoDb.getAllSync(
+        `SELECT outcome, count(*) AS n FROM sms_log GROUP BY outcome`,
+      ) as { outcome: string; n: number }[];
+
+      return Object.fromEntries(rows.map((row) => [row.outcome, row.n]));
+    } catch {
+      return {};
+    }
+  },
+
+  clear(): void {
+    try {
+      expoDb.execSync('DELETE FROM sms_log;');
+    } catch {
+      // Nothing to clear.
+    }
+  },
+};
+
+export interface SmsLogRow {
+  id: string;
+  raw: string;
+  fingerprint: string;
+  outcome: string;
+  reason: string | null;
+  source: string;
+  amount_minor: number | null;
+  merchant: string | null;
+  kind: string | null;
+  occurred_on: string | null;
+  seen_at: number;
+}
+
 /** Vehicles for the fuel mini-app. Empty on a device that never enables it. */
 export const vehicleRepo = {
   all(): Vehicle[] {
@@ -1051,4 +1162,13 @@ export const SETTINGS_KEYS = {
   lastCloudBackupAt: 'last_cloud_backup_at',
   /** ISO timestamp of the last local backup file written. */
   lastLocalBackupAt: 'last_local_backup_at',
+
+  /** Whether the app refreshes the USD rate on its own — see core/exchangeRate.ts. */
+  rateAutoFetch: 'rate_auto_fetch',
+  /** Which figure the board converts with: 'live' | 'average' | 'safe'. */
+  rateMode: 'rate_mode',
+  /** JSON list of recent readings, newest first. */
+  rateHistory: 'rate_history',
+  /** ISO timestamp of the last successful fetch, for the daily cadence. */
+  rateFetchedAt: 'rate_fetched_at',
 } as const;
