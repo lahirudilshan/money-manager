@@ -2,18 +2,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
 import { SmartDetectBadge } from '../../src/components/SmartDetectBadge';
 import { SmsDraftCard } from '../../src/components/SmsDraftCard';
 import { UpgradeSheet } from '../../src/components/UpgradeSheet';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import { Divider, Empty, GradientCard, Label, Row, Stat, Surface, Text } from '../../src/components/ui';
+import { BottomSheet, Divider, Empty, GradientCard, Glyph, Label, Row, Stat, Surface, Text } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
 import { canUse } from '../../src/core/plans';
-import { enabledMiniApps } from '../../src/core/miniApps';
+import { enabledMiniApps, MINI_APPS, parseEnabled } from '../../src/core/miniApps';
 import { HEALTH_VISUALS, shadeHex } from '../../src/theme';
 import { accountLabel, resolveBrand } from '../../src/data/banks';
 import {
@@ -64,6 +64,9 @@ export default function DashboardScreen() {
   const reminders = useMemo(() => selectReminders(state), [state]);
   const loanViews = useMemo(() => selectLoanViews(state), [state]);
   const miniApps = useMemo(() => enabledMiniApps(state.miniApps), [state.miniApps]);
+  /** Which add-ons are on, for the picker's switches. */
+  const enabledAddOns = useMemo(() => parseEnabled(state.miniApps), [state.miniApps]);
+  const [addOnsOpen, setAddOnsOpen] = useState(false);
 
   /** Whether the current plan includes Smart Detect. */
   const smartDetect = canUse(state.plan, 'smartDetect');
@@ -253,10 +256,18 @@ export default function DashboardScreen() {
 
       {/* Quick actions — unique shortcuts NOT reachable from the bottom tabs. */}
       <Row gap={space.sm}>
+        {/*
+          Add-ons, where "Transaction" used to be.
+
+          Adding a transaction by hand already has a permanent home — the + in
+          the tab bar — so this tile was a second door to the same room. The
+          add-on catalogue had no door at all: it lived several screens deep in
+          Settings, which is where features go to be undiscovered.
+        */}
         <QuickAction
-          icon="add-circle-outline"
-          label="Transaction"
-          onPress={() => router.push('/transaction/new')}
+          icon="grid-outline"
+          label="Add-ons"
+          onPress={() => setAddOnsOpen(true)}
         />
         <QuickAction
           icon="chatbox-ellipses-outline"
@@ -283,7 +294,11 @@ export default function DashboardScreen() {
       */}
       {miniApps.length > 0 ? (
         <View style={{ gap: space.sm }}>
-          <Label>ADD-ONS</Label>
+          {/* "YOUR TOOLS", not "ADD-ONS" — the tile above is now called
+              Add-ons and opens the catalogue, so repeating the word here made
+              one heading look like a label for the other. These are the ones
+              already switched on. */}
+          <Label>YOUR TOOLS</Label>
           <Surface padded={false}>
             {miniApps.map((app, index) => (
               <View key={app.id}>
@@ -462,11 +477,16 @@ export default function DashboardScreen() {
         />
       ) : null}
 
-      {/* Needs attention — the reason the app exists. */}
+      {/* Coming up — the reason the app exists.
+
+          Titled "COMING UP" rather than "NEEDS ATTENTION": the section is
+          mostly bills that are simply next, and framing every one of them as a
+          problem makes a normal month read as a pile of trouble. Anything
+          genuinely late still says so, in the overdue chip and on its own row. */}
       {actionable.length > 0 ? (
         <View style={{ gap: space.sm }}>
           <Row justify="space-between" align="center">
-            <Label>NEEDS ATTENTION</Label>
+            <Label>COMING UP</Label>
             {overdue.length > 0 ? (
               <View
                 style={{
@@ -476,8 +496,10 @@ export default function DashboardScreen() {
                   backgroundColor: colors.dangerSoft,
                 }}
               >
+                {/* "late", not "overdue" — the same word the rows now use, so
+                    the chip and the list are plainly about one thing. */}
                 <Text variant="caption" color={colors.danger} style={{ fontWeight: '800' }}>
-                  {overdue.length} overdue
+                  {overdue.length} late
                 </Text>
               </View>
             ) : null}
@@ -699,6 +721,95 @@ export default function DashboardScreen() {
         feature="smartDetect"
         onClose={() => setUpgradeOpen(false)}
       />
+
+      {/*
+        The add-on catalogue, one tap from the dashboard.
+
+        It only ever existed inside Settings, several screens deep — so the one
+        thing that makes the app fit a particular person was the hardest thing
+        to find. Same registry, same store action; the sheet just puts it where
+        someone would look for it.
+      */}
+      {addOnsOpen ? (
+        <BottomSheet
+          visible
+          scroll
+          onClose={() => setAddOnsOpen(false)}
+          title="Add-ons"
+          icon="grid-outline"
+        >
+          <Text variant="small" tone="secondary">
+            Extras for the things you track beyond bills. Switch one on and it
+            appears on your dashboard; switch it off and the app forgets it was
+            ever there.
+          </Text>
+
+          <Surface padded={false} style={{ overflow: 'hidden' }}>
+            {MINI_APPS.map((app, index) => {
+              const on = enabledAddOns.has(app.id);
+
+              return (
+                <View key={app.id}>
+                  {index > 0 ? <Divider /> : null}
+                  {/*
+                    The row is a switch, not a link.
+
+                    Tapping anywhere on it flips the add-on, because that is the
+                    only decision this sheet asks for. Opening the feature is
+                    what the dashboard card below is for, once it exists.
+                  */}
+                  <Pressable
+                    onPress={() => state.setMiniAppEnabled(app.id, !on)}
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: on }}
+                    accessibilityLabel={app.name}
+                    style={({ pressed }) => ({
+                      opacity: pressed ? 0.7 : 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: space.md,
+                      paddingHorizontal: space.lg,
+                      paddingVertical: space.md,
+                    })}
+                  >
+                    <Glyph icon={app.icon} color={app.color} />
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text variant="bodyStrong">{app.name}</Text>
+                      <Text variant="caption" tone="muted">
+                        {app.description}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={on}
+                      onValueChange={(next) => state.setMiniAppEnabled(app.id, next)}
+                      accessibilityLabel={`${app.name}, ${on ? 'on' : 'off'}`}
+                    />
+                  </Pressable>
+                </View>
+              );
+            })}
+          </Surface>
+
+          {/*
+            Says what is coming without promising a date.
+
+            An add-on list of one reads like a broken screen; saying the list
+            grows explains that it is deliberate.
+          */}
+          <Row gap={space.sm} style={{ alignItems: 'flex-start', paddingHorizontal: space.xs }}>
+            <Ionicons
+              name="sparkles-outline"
+              size={15}
+              color={colors.inkMuted}
+              style={{ marginTop: 1 }}
+            />
+            <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+              More add-ons arrive with app updates. Anything you switch on keeps
+              its data even if you turn it off later.
+            </Text>
+          </Row>
+        </BottomSheet>
+      ) : null}
     </View>
   );
 }
@@ -851,11 +962,23 @@ function ReminderRow({
 
   const overdue = reminder.urgency === 'overdue';
   const accent = overdue ? colors.danger : colors.pending;
+  /*
+   * Plain words, the way a person would say it out loud.
+   *
+   * "Due in 3 days" and "3 days overdue" are the language of an invoice, not of
+   * someone glancing at their phone. The day count is the useful part — how
+   * soon, or how late — so it leads, and the rest gets out of its way.
+   */
+  const days = Math.abs(reminder.daysUntil);
   const when = overdue
-    ? `${Math.abs(reminder.daysUntil)} day${Math.abs(reminder.daysUntil) === 1 ? '' : 's'} overdue`
+    ? days === 1
+      ? 'Late by a day'
+      : `Late by ${days} days`
     : reminder.daysUntil === 0
-      ? 'Due today'
-      : `Due in ${reminder.daysUntil} day${reminder.daysUntil === 1 ? '' : 's'}`;
+      ? 'Today'
+      : reminder.daysUntil === 1
+        ? 'Tomorrow'
+        : `In ${days} days`;
 
   return (
     <Pressable

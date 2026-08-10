@@ -22,12 +22,18 @@
  * A declared, versioned document is inspectable, diffable, and can be migrated
  * on READ — which is what makes a two-year-old backup restorable at all.
  *
- * ## What is deliberately excluded
+ * ## The Smart Detect queue is OPT-IN
  *
- * `sms_inbox` is not backed up. It is a queue of unreviewed bank messages, not
- * user data: restoring it would re-present drafts the user already resolved on
- * their old phone, and it holds raw message text, which is the most sensitive
- * thing this app touches and has no business in a cloud file.
+ * `sms_inbox` was excluded outright for two reasons: restoring it would
+ * re-present drafts already resolved on the old phone, and it holds raw bank
+ * message text — the most sensitive thing this app touches.
+ *
+ * Both still hold, but excluding it silently loses real work: a reinstall threw
+ * away every message still awaiting review, and nothing else on the device kept
+ * a copy. So it is a part the user ticks, defaulting OFF for a backup (the
+ * sensitive-text argument) and offered on restore only when the file has one.
+ * The re-presenting problem is answered by only carrying rows still PENDING —
+ * a confirmed or dismissed message is a decision already made.
  *
  * Everything here is pure — no database, no network — so the format is fully
  * testable and the same functions serve export, cloud sync and any future
@@ -52,7 +58,7 @@ export const SNAPSHOT_VERSION = 1;
  * restore that fails halfway and leaves a half-populated board, which is worse
  * than not restoring at all.
  *
- * `sms_inbox` is absent on purpose — see the module comment.
+ * `sms_inbox` sits LAST and is opt-in — see the `sms` part in `BACKUP_PARTS`.
  */
 export const SNAPSHOT_TABLES = [
   // No dependencies.
@@ -76,6 +82,15 @@ export const SNAPSHOT_TABLES = [
   'vehicle_services',
   // References vehicle_services.
   'service_items',
+  /*
+   * The Smart Detect queue — messages waiting for review.
+   *
+   * Last in the list because nothing references it, and it is the only table a
+   * user might reasonably want to leave OUT (see the `sms` part below): it
+   * carries raw bank message text, which is the most sensitive thing this app
+   * holds.
+   */
+  'sms_inbox',
 ] as const;
 
 export type SnapshotTable = (typeof SNAPSHOT_TABLES)[number];
@@ -399,6 +414,16 @@ export interface BackupPart {
    * broken board.
    */
   required?: boolean;
+  /**
+   * Whether this part carries something that should never leave the phone by
+   * default.
+   *
+   * Only `sms` so far: the review queue holds raw bank message text. It is
+   * still offered — losing it on a reinstall is real data loss — but a user has
+   * to tick it deliberately, so a cloud upload never carries their SMS because
+   * nobody thought about it.
+   */
+  sensitive?: boolean;
 }
 
 export type BackupPartKey =
@@ -408,7 +433,8 @@ export type BackupPartKey =
   | 'loans'
   | 'vehicles'
   | 'rules'
-  | 'history';
+  | 'history'
+  | 'sms';
 
 export const BACKUP_PARTS: readonly BackupPart[] = [
   {
@@ -444,14 +470,42 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
     hint: 'Every payment recorded, month by month',
     tables: ['transactions', 'subcategory_states', 'category_states', 'fundings', 'fuel_entries'],
   },
+  {
+    key: 'sms',
+    label: 'Messages awaiting review',
+    hint: 'Smart Detect rows you have not confirmed yet',
+    tables: ['sms_inbox'],
+    sensitive: true,
+  },
 ];
 
-/** Everything — the default for a backup, where leaving data out is the odd case. */
+/**
+ * Every part there is — what a RESTORE offers, and what an old backup implies.
+ *
+ * Not the backup default: see `DEFAULT_BACKUP_PARTS`.
+ */
 export const ALL_PARTS: BackupPartKey[] = BACKUP_PARTS.map((part) => part.key);
 
-/** Structure without history — the "reuse this plan" selection. */
+/**
+ * What a new backup ticks by default: everything EXCEPT the sensitive parts.
+ *
+ * Raw bank message text should never leave the phone because a default said so
+ * — that is a decision the user makes deliberately, per backup. Everything else
+ * defaults on, since leaving data out is the odd case.
+ */
+export const DEFAULT_BACKUP_PARTS: BackupPartKey[] = BACKUP_PARTS.filter(
+  (part) => !part.sensitive,
+).map((part) => part.key);
+
+/**
+ * Structure only — the "reuse this plan" selection.
+ *
+ * Excludes the review queue as well as history: someone starting a fresh board
+ * from an old plan wants the shape of their finances, not a list of last
+ * month's unconfirmed bank messages to work through.
+ */
 export const SETUP_PARTS: BackupPartKey[] = BACKUP_PARTS.filter(
-  (part) => part.key !== 'history',
+  (part) => part.key !== 'history' && part.key !== 'sms',
 ).map((part) => part.key);
 
 /**
@@ -480,6 +534,46 @@ export interface SnapshotPartSummary {
   count: number;
   /** Whether the file actually carries this part at all. */
   included: boolean;
+  /**
+   * The individual tables behind the total, each in the user's words.
+   *
+   * A part is a bundle — "Transactions & history" is five tables — so its
+   * single number hides what it is made of. A user deciding whether to restore
+   * it can reasonably ask "142 of what?", and the answer is already in the
+   * file's own counts.
+   */
+  tables: { label: string; count: number }[];
+}
+
+/**
+ * Plain-language names for the tables inside a part.
+ *
+ * Nobody deciding what to restore can reason about `subcategory_states`. Any
+ * table missing here falls back to its own name with the underscores removed,
+ * so a new table is readable before anyone remembers to name it.
+ */
+const TABLE_LABELS: Record<string, string> = {
+  settings: 'Preferences',
+  cards: 'Accounts & cards',
+  categories: 'Category groups',
+  subcategories: 'Bills & lines',
+  incomes: 'Income sources',
+  houses: 'Houses',
+  loans: 'Loans',
+  vehicles: 'Vehicles',
+  vehicle_services: 'Service visits',
+  service_items: 'Service items',
+  merchant_rules: 'Learned merchants',
+  transactions: 'Transactions',
+  subcategory_states: 'Monthly bill states',
+  category_states: 'Monthly group states',
+  fundings: 'Funding moves',
+  fuel_entries: 'Fuel fill-ups',
+  sms_inbox: 'Messages awaiting review',
+};
+
+function tableLabel(table: string): string {
+  return TABLE_LABELS[table] ?? table.replace(/_/g, ' ');
 }
 
 /**
@@ -505,6 +599,10 @@ export function summariseSnapshot(snapshot: Snapshot): SnapshotPartSummary[] {
     count: part.tables.reduce((total, table) => total + (snapshot.counts?.[table] ?? 0), 0),
     // `required` parts travel with every selection, so they are always present.
     included: part.required === true || included.has(part.key),
+    tables: part.tables.map((table) => ({
+      label: tableLabel(table),
+      count: snapshot.counts?.[table] ?? 0,
+    })),
   }));
 }
 

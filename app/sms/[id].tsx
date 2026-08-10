@@ -394,15 +394,6 @@ export default function SmsDraftModal() {
             categoryName={categoryNameOf(state, suggested.id)}
             icon={(hintMeta?.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
             onManage={() => setManageOpen(true)}
-            /*
-             * WHY this category was chosen, in the message's own words.
-             *
-             * The app knew "hospital" was the deciding word and never said so,
-             * which makes a suggestion feel like a guess the user has to audit
-             * by re-reading the SMS. Naming the evidence turns it into a claim
-             * they can check at a glance — and disagree with confidently.
-             */
-            because={draft.guesses[0]?.reasons.slice(0, 2) ?? []}
           />
         ) : null}
 
@@ -707,22 +698,6 @@ function DetectedCategoryCard({
         ) : null}
       </Row>
 
-      {/*
-        The evidence, shown only when the app INFERRED the category.
-
-        A learned rule ("you confirmed this before") needs no justification —
-        the user made that call themselves. A fresh guess does, and quoting the
-        matched words is the difference between "trust me" and "because the
-        name says HOSPITAL".
-      */}
-      {!isExact && because.length > 0 ? (
-        <Row gap={5}>
-          <Ionicons name="search-outline" size={12} color={tint} />
-          <Text variant="caption" color={tint} style={{ flex: 1 }} numberOfLines={1}>
-            matched “{because.join('”, “')}”
-          </Text>
-        </Row>
-      ) : null}
     </View>
   );
 }

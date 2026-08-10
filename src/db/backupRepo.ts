@@ -64,7 +64,21 @@ export function exportSnapshot(
 
   for (const table of SNAPSHOT_TABLES) {
     if (!wanted.has(table) || !tableExists(table)) continue;
-    tables[table] = expoDb.getAllSync(`SELECT * FROM ${table}`) as TableRows;
+
+    /*
+     * The review queue carries only rows still PENDING.
+     *
+     * A confirmed or dismissed message is a decision the user already made —
+     * carrying it would re-present drafts they resolved on the old phone, which
+     * is the original reason this table was excluded from backups entirely.
+     * Filtering keeps what is genuinely unfinished and drops what is not.
+     *
+     * Their fingerprints are lost with them, so a resolved message could be
+     * re-imported later. That is the right trade: a duplicate the user can
+     * dismiss beats a queue of decisions they must make twice.
+     */
+    const where = table === 'sms_inbox' ? " WHERE status = 'pending'" : '';
+    tables[table] = expoDb.getAllSync(`SELECT * FROM ${table}${where}`) as TableRows;
   }
 
   return buildSnapshot(tables, { appVersion, parts, label: options.label });
@@ -142,6 +156,22 @@ export function restoreSnapshot(
 
     for (const table of [...tables].reverse()) {
       if (!tableExists(table)) continue;
+
+      /*
+       * The review queue MERGES; it does not replace.
+       *
+       * Every other table is structure or history the snapshot is authoritative
+       * about, so clearing and rewriting is right. This one is a live worklist,
+       * and clearing it would do two bad things at once: throw away messages
+       * that arrived on THIS phone since the backup, and delete the
+       * fingerprints of already-resolved rows — which are what stop a resolved
+       * message being re-imported and asked about again.
+       *
+       * The `INSERT OR REPLACE` below then adds the file's pending rows without
+       * disturbing anything already here.
+       */
+      if (table === 'sms_inbox') continue;
+
       expoDb.execSync(`DELETE FROM ${table};`);
     }
 

@@ -6,8 +6,8 @@ import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-nati
 import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import {
   ALL_PARTS,
+  DEFAULT_BACKUP_PARTS,
   BACKUP_PARTS,
-  describeParts,
   partsOf,
   serialiseSnapshot,
   SETUP_PARTS,
@@ -29,13 +29,16 @@ import {
   type StoredBackup,
 } from '../../src/services/backupFile';
 import {
+  deleteDriveBackup,
   driveBlocker,
   isDriveAvailable,
   isSignedIn,
+  listDriveBackups,
   signIn,
   signOut,
   uploadBackup,
 } from '../../src/services/googleDrive';
+import { formatSize as formatDriveSize, type DriveFile } from '../../src/core/driveSync';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
@@ -81,9 +84,17 @@ export default function BackupScreen() {
    * ends up with a file missing their transactions without having asked for
    * that.
    */
-  const [parts, setParts] = useState<BackupPartKey[]>(ALL_PARTS);
+  const [parts, setParts] = useState<BackupPartKey[]>(DEFAULT_BACKUP_PARTS);
   const [label, setLabel] = useState('');
-  const [picking, setPicking] = useState<null | 'backup' | { restore: StoredBackup; snapshot: Snapshot }>(null);
+  /**
+   * Whether the "what should this backup include?" sheet is open.
+   *
+   * A plain boolean now. It used to also carry a restore target, because one
+   * component served both questions — but a restore is chosen inside the
+   * backup's own panel (see `BackupDetails`), where the counts being chosen
+   * against are visible. Only the backup direction still needs a picker.
+   */
+  const [picking, setPicking] = useState(false);
   /**
    * The restore selection, kept apart from the backup one.
    *
@@ -103,6 +114,17 @@ export default function BackupScreen() {
   const [inspecting, setInspecting] = useState<
     null | { backup: StoredBackup; snapshot: Snapshot | null }
   >(null);
+  /**
+   * What is actually in the Drive folder, and whether it is being fetched.
+   *
+   * Null means "not looked yet" — distinct from an empty array, which means
+   * "looked, and there is nothing there". Collapsing the two would show
+   * "No backups in Drive" during the fetch, which is a lie for the second or
+   * two it takes.
+   */
+  const [driveFiles, setDriveFiles] = useState<DriveFile[] | null>(null);
+  const [driveOpen, setDriveOpen] = useState(false);
+  const [driveBusy, setDriveBusy] = useState(false);
   const [lastCloud, setLastCloud] = useState<string | null>(null);
   const [lastLocal, setLastLocal] = useState<string | null>(null);
 
@@ -219,6 +241,56 @@ export default function BackupScreen() {
     }
   }
 
+  /**
+   * Open the Drive folder listing, fetching it each time.
+   *
+   * Deliberately not cached: the folder is shared with every other device the
+   * user signs in from, and a stale list would offer a Restore for a file
+   * somebody already deleted elsewhere.
+   */
+  async function openDriveFiles() {
+    setDriveOpen(true);
+    setDriveBusy(true);
+    try {
+      setDriveFiles(await listDriveBackups());
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
+  /**
+   * Delete one file from Drive, after asking.
+   *
+   * A Drive backup may be the ONLY copy — the local folder is on the phone this
+   * protects against — so this confirms even though the row already required a
+   * deliberate tap.
+   */
+  function handleDriveDelete(file: DriveFile) {
+    Alert.alert(
+      'Delete from Drive?',
+      `"${file.name}" will be removed from your Google Drive. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              const result = await deleteDriveBackup(file.id);
+              if (!result.ok) {
+                Alert.alert('Could not delete', result.error ?? 'Please try again.');
+                return;
+              }
+              // Re-fetch rather than splicing locally: the folder may have
+              // changed on another device while this sheet was open.
+              setDriveFiles(await listDriveBackups());
+            })();
+          },
+        },
+      ],
+    );
+  }
+
   function handleDisconnect() {
     Alert.alert(
       'Disconnect Google?',
@@ -239,11 +311,23 @@ export default function BackupScreen() {
    * which runs BEFORE anything is deleted so a corrupt file cannot destroy a
    * good board.
    */
-  function handleRestore(backup: StoredBackup) {
+  /**
+   * Open a backup's panel: what is in it, and what to bring back.
+   *
+   * Validation happens HERE rather than on the restore button, so a damaged
+   * file is caught when the user opens it — not after they have read a list of
+   * contents and chosen from it. A file that cannot be parsed at all still
+   * opens the panel (which says so plainly and offers deletion); one that parses
+   * but fails its integrity check is refused outright, because its counts would
+   * be a lie to choose against.
+   */
+  function openBackup(backup: StoredBackup) {
     const snapshot = readBackup(backup.filename);
 
     if (!snapshot) {
-      Alert.alert('Cannot read that file', 'It may be damaged or not a backup.');
+      // Unreadable: the panel says so and offers deletion, which is the only
+      // useful action left.
+      setInspecting({ backup, snapshot: null });
       return;
     }
 
@@ -253,20 +337,10 @@ export default function BackupScreen() {
       return;
     }
 
-    /*
-     * Opens the SAME picker the backup flow uses, pre-ticked with whatever the
-     * file actually holds.
-     *
-     * The old two-button alert could only offer "setup" or "everything", so a
-     * user who wanted their categories but not last year's transactions had no
-     * way to say that. Reusing the picker also means the restore screen states
-     * plainly what a partial backup contains, instead of presenting it as if it
-     * were complete.
-     */
     // Pre-ticked with what the file ACTUALLY holds — offering to restore
     // transactions from a backup that has none would be a lie.
     setRestoreParts(partsOf(snapshot));
-    setPicking({ restore: backup, snapshot });
+    setInspecting({ backup, snapshot });
   }
 
   function confirmRestore(snapshot: Snapshot, chosen: readonly BackupPartKey[]) {
@@ -430,6 +504,22 @@ export default function BackupScreen() {
                 </Pressable>
               </View>
               <Divider />
+              {/*
+                What is already UP there.
+
+                Until now the screen could upload to Drive and never show what
+                was in it — so a folder filling with backups was invisible from
+                inside the app, and the only way to clear one out was the Drive
+                app itself.
+              */}
+              <ActionRow
+                icon="folder-open-outline"
+                label="Backups in Drive"
+                sublabel="See what is stored, or remove one"
+                busy={false}
+                onPress={() => void openDriveFiles()}
+              />
+              <Divider />
               <ActionRow
                 icon="cloud-upload-outline"
                 label="Back up to Drive now"
@@ -439,7 +529,7 @@ export default function BackupScreen() {
                 // user no say in what left their phone.
                 onPress={() => {
                   setPendingDestination('drive');
-                  setPicking('backup');
+                  setPicking(true);
                 }}
                 emphasis
               />
@@ -509,7 +599,7 @@ export default function BackupScreen() {
             busyLabel={progress}
             onPress={() => {
               setPendingDestination('local');
-              setPicking('backup');
+              setPicking(true);
             }}
           />
         </Surface>
@@ -545,7 +635,7 @@ export default function BackupScreen() {
                   handlers, so opening details cannot be mistaken for either.
                 */}
                 <Pressable
-                  onPress={() => setInspecting({ backup, snapshot: readBackup(backup.filename) })}
+                  onPress={() => openBackup(backup)}
                   accessibilityRole="button"
                   accessibilityLabel={`Details for ${backup.label || readableStamp(backup.createdAt)}`}
                   style={({ pressed }) => ({
@@ -599,29 +689,16 @@ export default function BackupScreen() {
                     </Text>
                   </View>
                   {/*
-                    Filled, not outlined.
+                    No "Restore" chip on the row.
 
-                    Restore is what the section is FOR, but a hairline pill next
-                    to a plain trash glyph made the two look equally weighted —
-                    and the destructive one is the easier tap to make by
-                    accident. A tinted chip states which action the row expects.
+                    The chip and the row body now lead to the SAME sheet, so
+                    offering both invited the reading that they differ — and a
+                    button labelled Restore implies it restores, when it opens a
+                    panel to choose from. A chevron says "there is more here",
+                    which is what tapping actually does. Restoring is confirmed
+                    inside, next to what is being replaced.
                   */}
-                  <Pressable
-                    onPress={() => handleRestore(backup)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Restore ${backup.filename}`}
-                    style={({ pressed }) => ({
-                      opacity: pressed ? 0.6 : 1,
-                      paddingHorizontal: space.md,
-                      paddingVertical: 7,
-                      borderRadius: radius.pill,
-                      backgroundColor: colors.accentSoft,
-                    })}
-                  >
-                    <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
-                      Restore
-                    </Text>
-                  </Pressable>
+                  <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
                   <Pressable
                     onPress={() => handleDelete(backup)}
                     accessibilityRole="button"
@@ -718,36 +795,317 @@ export default function BackupScreen() {
       </Row>
 
       <BackupPicker
-        mode={picking}
-        parts={picking && typeof picking === 'object' ? restoreParts : parts}
+        open={picking}
+        parts={parts}
         label={label}
         onLabel={setLabel}
-        onToggle={(key: BackupPartKey) => {
-          const setter = picking && typeof picking === 'object' ? setRestoreParts : setParts;
-          setter((current) =>
+        onToggle={(key: BackupPartKey) =>
+          setParts((current) =>
             current.includes(key)
               ? current.filter((entry) => entry !== key)
               : [...current, key],
-          );
-        }}
-        onClose={() => setPicking(null)}
+          )
+        }
+        onClose={() => setPicking(false)}
         onConfirm={() => {
-          const target = picking;
-          setPicking(null);
-          if (target === 'backup') {
-            void handleDriveOrLocal();
-          } else if (target && typeof target === 'object') {
-            confirmRestore(target.snapshot, restoreParts);
-          }
+          setPicking(false);
+          void handleDriveOrLocal();
         }}
       />
 
+      {/*
+        ONE sheet for a backup file, not two.
+
+        Tapping a row opened a details panel listing seven parts with their
+        counts; tapping its Restore button closed that and opened a picker
+        listing the same seven parts with the same counts, now with tickboxes.
+        The user read the identical list twice to do one thing, and the second
+        sheet threw away the context of the first.
+
+        So the details sheet IS the picker: the counts are the information, the
+        ticks are the decision, and they belong on the same rows.
+      */}
+      {/*
+        The Drive folder, listed.
+
+        Read-only apart from delete: restoring FROM Drive would mean
+        downloading and validating a file the app has never seen, and the Files
+        route already covers that — drop it into the money-manager folder and
+        it appears under Restore with the same panel as everything else. This
+        sheet answers "what is up there, and can I clear some out?", which is
+        what was missing.
+      */}
+      {driveOpen ? (
+        <BottomSheet
+          visible
+          scroll
+          onClose={() => setDriveOpen(false)}
+          title="Backups in Drive"
+          icon="folder-open-outline"
+        >
+          {driveBusy ? (
+            /*
+              Skeleton rows, not a spinner on a line.
+
+              A lone spinner says "something is happening" and nothing else, so
+              the sheet appears empty until it resolves and then jumps as rows
+              push in. Placeholders in the shape of the real list say what is
+              coming and keep the layout still, which makes a slow network feel
+              slow rather than broken.
+            */
+            <View style={{ gap: space.sm }}>
+              {/* A placeholder for the count/size header, so the whole sheet
+                  holds its shape rather than only the list part. */}
+              <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
+                <View
+                  style={{
+                    height: 10,
+                    width: 96,
+                    borderRadius: 4,
+                    backgroundColor: colors.surfaceSunken,
+                  }}
+                />
+                <View style={{ flex: 1 }} />
+                <View
+                  style={{
+                    height: 10,
+                    width: 64,
+                    borderRadius: 4,
+                    backgroundColor: colors.surfaceSunken,
+                  }}
+                />
+              </Row>
+
+              <Surface padded={false} style={{ overflow: 'hidden' }}>
+              {/* Enough rows to reach the bottom of the sheet — five filled
+                  only the top third, which looked like a short list that had
+                  finished loading rather than a page still arriving. */}
+              {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((row) => (
+                <View key={row}>
+                  {row > 0 ? <Divider /> : null}
+                  <Row
+                    gap={space.md}
+                    style={{
+                      paddingHorizontal: space.lg,
+                      paddingVertical: space.md,
+                      alignItems: 'center',
+                      /*
+                       * Fades gently down the page rather than to nothing.
+                       *
+                       * Five rows fill the sheet, so a steep fade would leave
+                       * the last two invisible and the page looking half-drawn.
+                       * A shallow one reads as "more below", which is what a
+                       * folder of backups usually has.
+                       */
+                      opacity: 1 - row * 0.075,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 34,
+                        height: 34,
+                        borderRadius: radius.sm,
+                        backgroundColor: colors.surfaceSunken,
+                      }}
+                    />
+                    <View style={{ flex: 1, gap: 6 }}>
+                      <View
+                        style={{
+                          height: 11,
+                          width: '55%',
+                          borderRadius: 4,
+                          backgroundColor: colors.surfaceSunken,
+                        }}
+                      />
+                      <View
+                        style={{
+                          height: 9,
+                          width: '35%',
+                          borderRadius: 4,
+                          backgroundColor: colors.surfaceSunken,
+                        }}
+                      />
+                    </View>
+                  </Row>
+                </View>
+              ))}
+              </Surface>
+            </View>
+          ) : driveFiles === null || driveFiles.length === 0 ? (
+            <Surface style={{ gap: space.xs }}>
+              <Text variant="bodyStrong">Nothing in Drive yet</Text>
+              <Text variant="small" tone="secondary">
+                Back up to Drive and the file appears here, in a folder called
+                money-manager.
+              </Text>
+            </Surface>
+          ) : (
+            <>
+              {/*
+                What the folder amounts to, before the rows.
+
+                A bare list answers "which files" but not "how much is up
+                there" — and the folder keeps the last few backups, so knowing
+                it holds 5 files at 20 KB is what tells someone whether to
+                bother clearing any out.
+              */}
+              <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
+                <Label>
+                  {driveFiles.length} BACKUP{driveFiles.length === 1 ? '' : 'S'}
+                </Label>
+                <View style={{ flex: 1 }} />
+                <Text variant="caption" tone="muted">
+                  {formatDriveSize(
+                    String(
+                      driveFiles.reduce(
+                        (total, file) => total + (Number(file.size) || 0),
+                        0,
+                      ),
+                    ),
+                  )}{' '}
+                  in total
+                </Text>
+              </Row>
+
+              <Surface padded={false} style={{ overflow: 'hidden' }}>
+                {driveFiles.map((file, index) => (
+                  <View key={file.id}>
+                    {index > 0 ? <Divider /> : null}
+                    <Row
+                      gap={space.md}
+                      style={{
+                        paddingHorizontal: space.lg,
+                        paddingVertical: space.md,
+                        alignItems: 'center',
+                        /*
+                         * No tinted band on the newest row.
+                         *
+                         * The solid green icon and the LATEST tag already mark
+                         * it twice; a third signal shaded the whole row and
+                         * made the list look like two different kinds of thing
+                         * rather than one list with a current entry.
+                         */
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 34,
+                          height: 34,
+                          borderRadius: radius.sm,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          // Solid on the highlighted row — a soft chip on a
+                          // soft band disappears into it.
+                          backgroundColor: index === 0 ? colors.completed : colors.accentSoft,
+                        }}
+                      >
+                        <Ionicons
+                          name={index === 0 ? 'cloud-done' : 'cloud-outline'}
+                          size={17}
+                          color={index === 0 ? colors.inkInverse : colors.accent}
+                        />
+                      </View>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Row gap={6}>
+                          <Text variant="bodyStrong" numberOfLines={1} style={{ flexShrink: 1 }}>
+                            {readableStamp(
+                              file.name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
+                            )}
+                          </Text>
+                          {/*
+                            The newest one is marked.
+
+                            `listBackupsRequest` orders newest-first, so this is
+                            the file someone would actually restore — and with
+                            five near-identical rows, "which is the latest?" is
+                            otherwise a date-comparison exercise.
+                          */}
+                          {index === 0 ? (
+                            /*
+                              Its own tag, not the shared blue `Badge`.
+
+                              On a green band a blue pill fights the row it sits
+                              in, and `Badge` is used elsewhere for other things.
+                              A solid green chip with a tick reads as one idea
+                              with the band and the icon: this is the current one.
+                            */
+                            <Row
+                              gap={3}
+                              style={{
+                                paddingLeft: 5,
+                                paddingRight: 7,
+                                paddingVertical: 2,
+                                borderRadius: 999,
+                                backgroundColor: colors.completed,
+                                alignItems: 'center',
+                              }}
+                            >
+                              <Ionicons name="checkmark" size={10} color={colors.inkInverse} />
+                              <Text
+                                variant="caption"
+                                color={colors.inkInverse}
+                                style={{ fontWeight: '800', fontSize: 10 }}
+                              >
+                                LATEST
+                              </Text>
+                            </Row>
+                          ) : null}
+                        </Row>
+                        <Text variant="caption" tone="muted" numberOfLines={1}>
+                          {formatDriveSize(file.size)}
+                          {file.modifiedTime ? ` · ${relativeTime(file.modifiedTime)}` : ''}
+                        </Text>
+                      </View>
+                      <Pressable
+                        onPress={() => handleDriveDelete(file)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete ${file.name} from Drive`}
+                        hitSlop={8}
+                        style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+                      >
+                        {/* Red: this deletes from Drive, which for a backup
+                            uploaded off a lost phone may be the only copy. The
+                            theme reserves `danger` for exactly this. */}
+                        <Ionicons name="trash-outline" size={17} color={colors.danger} />
+                      </Pressable>
+                    </Row>
+                  </View>
+                ))}
+              </Surface>
+
+              {/* Says how to get one BACK, since this sheet cannot do it. */}
+              <Row gap={space.sm} style={{ alignItems: 'flex-start', paddingHorizontal: space.xs }}>
+                <Ionicons
+                  name="information-circle-outline"
+                  size={15}
+                  color={colors.inkMuted}
+                  style={{ marginTop: 1 }}
+                />
+                <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+                  To restore one, save it from the Drive app into{' '}
+                  {BACKUP_FILES_LOCATION} — it then appears under Restore.
+                </Text>
+              </Row>
+            </>
+          )}
+        </BottomSheet>
+      ) : null}
+
       <BackupDetails
         entry={inspecting}
+        parts={restoreParts}
+        onToggle={(key: BackupPartKey) =>
+          setRestoreParts((current) =>
+            current.includes(key)
+              ? current.filter((entry) => entry !== key)
+              : [...current, key],
+          )
+        }
+        onPreset={setRestoreParts}
         onClose={() => setInspecting(null)}
-        onRestore={(backup) => {
+        onRestore={(snapshot) => {
           setInspecting(null);
-          handleRestore(backup);
+          confirmRestore(snapshot, restoreParts);
         }}
       />
     </BottomSheet>
@@ -769,44 +1127,93 @@ export default function BackupScreen() {
  */
 function BackupDetails({
   entry,
+  parts,
+  onToggle,
+  onPreset,
   onClose,
   onRestore,
 }: {
   entry: null | { backup: StoredBackup; snapshot: Snapshot | null };
+  parts: readonly BackupPartKey[];
+  onToggle: (key: BackupPartKey) => void;
+  onPreset: (keys: BackupPartKey[]) => void;
   onClose: () => void;
-  onRestore: (backup: StoredBackup) => void;
+  onRestore: (snapshot: Snapshot) => void;
 }) {
   const { colors, space, radius } = useTheme();
+  /** Which part is showing its table breakdown — one at a time. */
+  const [expanded, setExpanded] = useState<BackupPartKey | null>(null);
   if (!entry) return null;
 
   const { backup, snapshot } = entry;
   const summary = snapshot ? summariseSnapshot(snapshot) : [];
+  /** Parts this file carries — the only ones that can be ticked. */
+  const available = summary.filter((part) => part.included).map((part) => part.key);
+  const chosen = parts.filter((key) => available.includes(key));
 
   return (
     <BottomSheet
       visible
       onClose={onClose}
+      /*
+       * `scroll` for the PADDING as much as the scrolling.
+       *
+       * The sheet's non-scroll path renders children with no insets at all, so
+       * every bare heading sat flush against the screen edge while the cards
+       * below carried their own — a ragged left margin down the whole panel.
+       * The scroll variant applies the standard padding and gap, and a long
+       * enough backup (seven parts plus four file facts) genuinely needs to
+       * scroll on a smaller phone anyway.
+       */
+      scroll
       title={backup.label || readableStamp(backup.createdAt)}
       icon="document-text-outline"
+      footer={
+        snapshot ? (
+          <View style={{ gap: space.sm }}>
+        {/*
+          The warning sits with the BUTTON, not at the top of the sheet.
+
+          A caution read on arrival is forgotten by the time the user has scrolled
+          seven rows and made a decision; next to the action it qualifies, it is
+          read at the moment it matters.
+        */}
+        {snapshot ? (
+          <Row
+            gap={space.sm}
+            style={{
+              alignItems: 'flex-start',
+              padding: space.md,
+              borderRadius: radius.md,
+              backgroundColor: colors.pendingSoft,
+            }}
+          >
+            <Ionicons name="alert-circle" size={17} color={colors.pending} style={{ marginTop: 1 }} />
+            <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
+              What you tick <Text variant="caption" style={{ fontWeight: '700' }}>replaces</Text> that
+              part of your board. Anything unticked stays exactly as it is.
+            </Text>
+          </Row>
+        ) : null}
+
+        {/* The action the panel exists to inform. Only offered when the file is
+            actually readable — restoring a corrupt snapshot cannot work. */}
+        {snapshot ? (
+          <GradientButton
+            label={
+              chosen.length === available.length
+                ? 'Restore everything'
+                : `Restore ${chosen.length} of ${available.length}`
+            }
+            icon="arrow-undo-outline"
+            disabled={chosen.length === 0}
+            onPress={() => onRestore(snapshot)}
+          />
+        ) : null}
+          </View>
+        ) : null
+      }
     >
-      {/*
-        The file's own facts, before its contents.
-
-        The date is shown here only when the title is the user's own NAME for
-        the backup — an unnamed one is already titled by its timestamp, and
-        repeating it immediately underneath says the same thing twice, which is
-        what the first draft of this panel did.
-      */}
-      <Row gap={space.sm} style={{ paddingHorizontal: space.xs }}>
-        <Ionicons name="time-outline" size={15} color={colors.inkMuted} />
-        <Text variant="small" tone="secondary" style={{ flex: 1 }}>
-          {backup.label ? readableStamp(backup.createdAt) : 'What this backup holds'}
-        </Text>
-        <Text variant="caption" tone="muted">
-          {formatSize(backup.size)}
-        </Text>
-      </Row>
-
       {snapshot === null ? (
         /* A corrupt file still LISTS so it can be deleted — see `listBackups`.
            Saying so plainly beats an empty panel that looks like a bug. */
@@ -817,17 +1224,79 @@ function BackupDetails({
             version of the app. Delete it and take a fresh backup.
           </Text>
         </Surface>
-      ) : (
+      ) : null}
+
+      {snapshot === null ? null : (
+        <View style={{ gap: space.sm }}>
+          {/* `paddingRight` so the shortcut clears the sheet edge — without it
+              "Setup only" was clipped mid-word. */}
+          <Row style={{ alignItems: 'center', paddingRight: space.xs }}>
+            <Label>WHAT TO BRING BACK</Label>
+            <View style={{ flex: 1 }} />
+            {/* One tap for the two selections people actually want, rather
+                than seven taps to clear history off a full backup. */}
+            <Pressable
+              onPress={() =>
+                onPreset(
+                  chosen.length === available.length
+                    ? available.filter((key) => key !== 'history')
+                    : [...available],
+                )
+              }
+              accessibilityRole="button"
+              hitSlop={8}
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                {chosen.length === available.length ? 'Setup only' : 'Select all'}
+              </Text>
+            </Pressable>
+          </Row>
         <Surface padded={false} style={{ overflow: 'hidden' }}>
-          {summary.map((part, index) => (
+          {summary.map((part, index) => {
+            const ticked = part.included && parts.includes(part.key);
+            // `core` travels with every restore, so it cannot be unticked.
+            const locked = !part.included || part.key === 'core';
+
+            const open = expanded === part.key;
+
+            return (
             <View key={part.key}>
               {index > 0 ? <Divider /> : null}
-              <Row
-                gap={space.sm}
-                style={{ paddingHorizontal: space.lg, paddingVertical: 11 }}
+              {/*
+                Two targets in one row: the TICK decides, the row EXPANDS.
+
+                They are different questions — "bring this back?" versus "what
+                is in it?" — and binding both to one tap meant a user who wanted
+                to look first had to toggle their own selection to find out.
+              */}
+              <Pressable
+                onPress={() => setExpanded(open ? null : part.key)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: open }}
+                accessibilityLabel={`${part.label} details`}
+                style={({ pressed }) => ({
+                  opacity: pressed ? 0.6 : 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: space.sm,
+                  paddingHorizontal: space.lg,
+                  paddingVertical: 12,
+                })}
               >
+                <Pressable
+                  onPress={() => {
+                    if (!locked) onToggle(part.key);
+                  }}
+                  disabled={locked}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: ticked, disabled: locked }}
+                  accessibilityLabel={part.label}
+                  hitSlop={10}
+                  style={({ pressed }) => ({ opacity: pressed && !locked ? 0.5 : 1 })}
+                >
                 {/*
-                  A tick or a dash, not a hidden row.
+                  A tick, an empty ring, or a dash.
 
                   Parts the file does NOT carry are the most important thing
                   about a selective backup — "this one has no transactions" is
@@ -836,10 +1305,23 @@ function BackupDetails({
                   absence, which nobody does reliably.
                 */}
                 <Ionicons
-                  name={part.included ? 'checkmark-circle' : 'remove-circle-outline'}
-                  size={17}
-                  color={part.included ? colors.completed : colors.inkFaint}
+                  name={
+                    !part.included
+                      ? 'remove-circle-outline'
+                      : ticked
+                        ? 'checkmark-circle'
+                        : 'ellipse-outline'
+                  }
+                  size={20}
+                  color={
+                    !part.included
+                      ? colors.inkFaint
+                      : ticked
+                        ? colors.accent
+                        : colors.inkMuted
+                  }
                 />
+                </Pressable>
                 <Text
                   variant="small"
                   tone={part.included ? undefined : 'muted'}
@@ -854,17 +1336,49 @@ function BackupDetails({
                 >
                   {part.included ? part.count.toLocaleString() : 'Not included'}
                 </Text>
-              </Row>
+                <Ionicons
+                  name={open ? 'chevron-up' : 'chevron-down'}
+                  size={13}
+                  color={colors.inkFaint}
+                />
+              </Pressable>
+
+              {/*
+                What the part is actually MADE OF.
+
+                A part is a bundle — "Transactions & history" is five tables —
+                so its single number hides its contents. "142 of what?" is a
+                fair question when the answer decides whether to overwrite a
+                board, and the file's own counts already hold it.
+              */}
+              {open ? (
+                <View
+                  style={{
+                    paddingLeft: space.lg + 28,
+                    paddingRight: space.lg,
+                    paddingBottom: 12,
+                    gap: 5,
+                  }}
+                >
+                  {part.tables.map((table) => (
+                    <Row key={table.label} gap={space.sm}>
+                      <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+                        {table.label}
+                      </Text>
+                      <Text variant="caption" tone="secondary">
+                        {table.count.toLocaleString()}
+                      </Text>
+                    </Row>
+                  ))}
+                </View>
+              ) : null}
             </View>
-          ))}
+            );
+          })}
         </Surface>
+        </View>
       )}
 
-      {/* The action the panel exists to inform. Only offered when the file is
-          actually readable — restoring a corrupt snapshot cannot work. */}
-      {snapshot ? (
-        <GradientButton label="Restore this backup" onPress={() => onRestore(backup)} />
-      ) : null}
     </BottomSheet>
   );
 }
@@ -890,7 +1404,7 @@ function formatSize(bytes: number): string {
  * `subcategory_states`.
  */
 function BackupPicker({
-  mode,
+  open,
   parts,
   label,
   onLabel,
@@ -898,7 +1412,7 @@ function BackupPicker({
   onClose,
   onConfirm,
 }: {
-  mode: null | 'backup' | { restore: StoredBackup; snapshot: Snapshot };
+  open: boolean;
   parts: readonly BackupPartKey[];
   label: string;
   onLabel: (next: string) => void;
@@ -907,57 +1421,60 @@ function BackupPicker({
   onConfirm: () => void;
 }) {
   const { colors, radius, space } = useTheme();
-  if (!mode) return null;
+  if (!open) return null;
 
-  const isRestore = typeof mode === 'object';
-  const snapshot = isRestore ? mode.snapshot : null;
-
-  /** What the file holds — parts it lacks cannot be restored, so they are off. */
-  const available = snapshot ? partsOf(snapshot) : ALL_PARTS;
+  /** A backup is taken from the live board, so every part is available. */
+  const available = ALL_PARTS;
 
   return (
     <BottomSheet
       visible
       onClose={onClose}
-      title={isRestore ? 'Restore what?' : 'Back up what?'}
-      icon={isRestore ? 'time-outline' : 'cloud-upload-outline'}
+      title="Back up what?"
+      icon="cloud-upload-outline"
       iconColor={colors.accent}
       scroll
       footer={
         <GradientButton
-          label={isRestore ? 'Restore selected' : 'Back up selected'}
-          icon={isRestore ? 'download-outline' : 'cloud-upload-outline'}
+          label="Back up selected"
+          icon="cloud-upload-outline"
           onPress={onConfirm}
           disabled={parts.length === 0}
         />
       }
     >
       <Text variant="small" tone="secondary">
-        {isRestore
-          ? 'Everything you tick replaces what is on your board now. Anything left unticked is left exactly as it is.'
-          : 'Tick what this backup should include. Leaving history out makes a small file you can reuse as a starting plan.'}
+        Tick what this backup should include. Leaving history out makes a small
+        file you can reuse as a starting plan.
       </Text>
 
-      {/* Two presets, because most people want one of exactly these. */}
-      {!isRestore ? (
-        <Row gap={space.sm}>
-          <Preset
-            label="Everything"
-            active={parts.length === ALL_PARTS.length}
-            onPress={() => {
-              for (const key of ALL_PARTS) if (!parts.includes(key)) onToggle(key);
-            }}
-          />
-          <Preset
-            label="Setup only"
-            active={parts.length === SETUP_PARTS.length && !parts.includes('history')}
-            onPress={() => {
-              if (parts.includes('history')) onToggle('history');
-              for (const key of SETUP_PARTS) if (!parts.includes(key)) onToggle(key);
-            }}
-          />
-        </Row>
-      ) : null}
+      {/*
+        Presets on BOTH sheets.
+
+        They were backup-only, so choosing "just my setup" on a restore meant
+        seven individual taps — the one flow where the user is most likely to
+        want exactly that, moving a plan to a new phone without last year's
+        transactions. The same two shortcuts serve both questions.
+      */}
+      <Row gap={space.sm}>
+        <Preset
+          label="Everything"
+          active={available.every((key) => parts.includes(key))}
+          onPress={() => {
+            for (const key of available) if (!parts.includes(key)) onToggle(key);
+          }}
+        />
+        <Preset
+          label="Setup only"
+          active={!parts.includes('history') && parts.length > 0}
+          onPress={() => {
+            if (parts.includes('history')) onToggle('history');
+            for (const key of SETUP_PARTS) {
+              if (available.includes(key) && !parts.includes(key)) onToggle(key);
+            }
+          }}
+        />
+      </Row>
 
       <Surface padded={false} style={{ overflow: 'hidden' }}>
         {BACKUP_PARTS.map((part, index) => {
@@ -1010,8 +1527,7 @@ function BackupPicker({
       </Surface>
 
       {/* Naming, so a list of backups is readable a month later. */}
-      {!isRestore ? (
-        <View style={{ gap: space.sm }}>
+      <View style={{ gap: space.sm }}>
           <Label>NAME THIS BACKUP (OPTIONAL)</Label>
           <TextInput
             value={label}
@@ -1031,14 +1547,7 @@ function BackupPicker({
               color: colors.ink,
             }}
           />
-        </View>
-      ) : (
-        snapshot && (
-          <Text variant="caption" tone="muted">
-            This backup holds {describeParts(snapshot, available)}.
-          </Text>
-        )
-      )}
+      </View>
     </BottomSheet>
   );
 }

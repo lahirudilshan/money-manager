@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ALL_PARTS,
+  DEFAULT_BACKUP_PARTS,
   buildSnapshot,
   describeParts,
   partsOf,
@@ -46,13 +47,17 @@ describe('buildSnapshot', () => {
     expect(snapshot.counts.cards).toBe(2);
   });
 
-  it('never includes the SMS queue', () => {
+  it('carries the SMS queue, but never by default', () => {
     /*
      * `sms_inbox` holds raw bank message text — the most sensitive thing the
-     * app touches — and restoring it would re-present drafts already resolved
-     * on the old phone.
+     * app touches — so it must not leave the phone because a default said so.
+     * It IS carried, though: excluding it outright meant a reinstall silently
+     * threw away every message still awaiting review.
      */
-    expect(SNAPSHOT_TABLES).not.toContain('sms_inbox');
+    expect(SNAPSHOT_TABLES).toContain('sms_inbox');
+    expect(DEFAULT_BACKUP_PARTS).not.toContain('sms');
+    // Still offered — the user ticks it deliberately.
+    expect(ALL_PARTS).toContain('sms');
   });
 
   it('stamps the version and time', () => {
@@ -379,5 +384,87 @@ describe('summariseSnapshot', () => {
     delete (legacy as { parts?: unknown }).parts;
 
     expect(summariseSnapshot(legacy).every((part) => part.included)).toBe(true);
+  });
+});
+
+describe('summariseSnapshot table breakdown', () => {
+  /*
+   * A part is a BUNDLE — "Transactions & history" is five tables — so its
+   * single number hides what it is made of. "142 of what?" is a fair question
+   * when the answer decides whether to overwrite a board, and the file's own
+   * counts already hold it.
+   */
+  it('breaks a part down into its tables', () => {
+    const snapshot = buildSnapshot(
+      { transactions: [{ id: 't1' }, { id: 't2' }], fuel_entries: [{ id: 'f1' }] },
+      META,
+    );
+
+    const history = summariseSnapshot(snapshot).find((part) => part.key === 'history');
+
+    expect(history?.count).toBe(3);
+    expect(history?.tables).toEqual(
+      expect.arrayContaining([
+        { label: 'Transactions', count: 2 },
+        { label: 'Fuel fill-ups', count: 1 },
+      ]),
+    );
+  });
+
+  it('names tables in the user\'s words, never the schema\'s', () => {
+    // Nobody deciding what to restore can reason about `subcategory_states`.
+    const labels = summariseSnapshot(buildSnapshot({}, META))
+      .flatMap((part) => part.tables)
+      .map((table) => table.label);
+
+    expect(labels).toContain('Monthly bill states');
+    expect(labels.join(' ')).not.toMatch(/_/);
+  });
+
+  it('lists a table with no rows rather than omitting it', () => {
+    // A zero explains why restoring that part would change nothing; a missing
+    // row just looks like the app forgot about it.
+    const history = summariseSnapshot(buildSnapshot({}, META)).find(
+      (part) => part.key === 'history',
+    );
+
+    expect(history?.tables).toHaveLength(5);
+    expect(history?.tables.every((table) => table.count === 0)).toBe(true);
+  });
+});
+
+describe('the Smart Detect queue as a backup part', () => {
+  /*
+   * Excluding `sms_inbox` outright meant a reinstall silently threw away every
+   * message still awaiting review — the user's own device DB was the only copy.
+   * It is carried now, but never by accident.
+   */
+  it('is offered on a restore', () => {
+    expect(ALL_PARTS).toContain('sms');
+  });
+
+  it('is left OUT of a new backup unless ticked', () => {
+    // Raw bank message text must not leave the phone because a default said so.
+    expect(DEFAULT_BACKUP_PARTS).not.toContain('sms');
+    expect(DEFAULT_BACKUP_PARTS).toContain('history');
+  });
+
+  it('is left out of "Setup only" too', () => {
+    /*
+     * Someone reusing an old plan on a fresh board wants the SHAPE of their
+     * finances, not last month's unconfirmed bank messages to work through.
+     */
+    expect(SETUP_PARTS).not.toContain('sms');
+    expect(SETUP_PARTS).not.toContain('history');
+    expect(SETUP_PARTS).toContain('plan');
+  });
+
+  it('maps to the sms_inbox table when ticked', () => {
+    expect(tablesForParts(['sms'])).toContain('sms_inbox');
+  });
+
+  it('does not drag sms_inbox in when unticked', () => {
+    // `core` is required and folds in regardless; the queue must not.
+    expect(tablesForParts(DEFAULT_BACKUP_PARTS)).not.toContain('sms_inbox');
   });
 });

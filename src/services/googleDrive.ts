@@ -27,6 +27,7 @@ import {
 import {
   createFolderRequest,
   findFolderRequest,
+  deleteBackupRequest,
   listBackupsRequest,
   parseFileList,
   parseFolderId,
@@ -387,4 +388,33 @@ export async function listDriveBackups(): Promise<DriveFile[]> {
   if (!folder) return [];
 
   return parseFileList(await send(listBackupsRequest(token, folder)));
+}
+
+/**
+ * Delete one backup from Drive.
+ *
+ * Reports a reason rather than throwing, exactly like `uploadBackup`: the
+ * caller shows it, and a delete that silently fails leaves the user staring at
+ * a row they just removed.
+ *
+ * The `drive.file` scope only reaches files this app created, so this can never
+ * touch anything else in the user's Drive — which is the whole reason that
+ * scope was chosen.
+ */
+export async function deleteDriveBackup(fileId: string): Promise<{ ok: boolean; error?: string }> {
+  const token = await accessToken();
+  if (!token) return { ok: false, error: 'Sign in to Google again to manage backups.' };
+
+  const result = await send(deleteBackupRequest(token, fileId));
+
+  /*
+   * `send` already distinguishes the two cases this needs.
+   *
+   * A successful DELETE returns 204 with an empty body, which would parse as
+   * nothing — so `send` maps 204 to `{}` and reserves `null` for a real
+   * failure. Without that, every successful delete would report as an error.
+   */
+  return result === null
+    ? { ok: false, error: 'Could not delete it from Drive. Check your connection.' }
+    : { ok: true };
 }
