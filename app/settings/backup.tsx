@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import Constants from 'expo-constants';
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
 import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
@@ -41,6 +42,23 @@ import {
 import { formatSize as formatDriveSize, type DriveFile } from '../../src/core/driveSync';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '../../src/theme/ThemeProvider';
+
+/**
+ * Google Drive's brand colours, used on the connected card so the section is
+ * recognisably about Drive rather than generically "the cloud".
+ */
+const DRIVE_BLUE = '#0066DA';
+const DRIVE_GREEN = '#00AC47';
+const DRIVE_YELLOW = '#FFBA00';
+
+/**
+ * Width of the gradient frame around the connected Drive card.
+ *
+ * Named because two places must agree on it: the gradient's padding, and the
+ * inner radius that has to be smaller by exactly this much for the corners to
+ * stay concentric.
+ */
+const DRIVE_BORDER = 2;
 
 /**
  * Backup & restore.
@@ -382,6 +400,24 @@ export default function BackupScreen() {
 
   const lastAny = newest(lastCloud, lastLocal);
 
+  /**
+   * How safe the data actually is, in three states rather than two.
+   *
+   * The banner used to be green for ANY past backup, so a copy from a fortnight
+   * ago looked as reassuring as one from this morning — while a fortnight of
+   * transactions sat on the phone alone. "Backed up" is not a fact about the
+   * past, it is a claim about now, and the screen was making it falsely.
+   *
+   * A week is the threshold because this app is fed by bank messages arriving
+   * daily: after seven days a backup is missing enough that restoring it would
+   * visibly lose work.
+   */
+  const daysSinceBackup = lastAny
+    ? Math.floor((Date.now() - new Date(lastAny).getTime()) / 86_400_000)
+    : null;
+  const safety: 'none' | 'stale' | 'safe' =
+    daysSinceBackup === null ? 'none' : daysSinceBackup >= 7 ? 'stale' : 'safe';
+
   return (
     <BottomSheet
       visible
@@ -408,7 +444,7 @@ export default function BackupScreen() {
           borderRadius: radius.lg,
           backgroundColor: busy
             ? colors.accentSoft
-            : lastAny
+            : safety === 'safe'
               ? colors.completedSoft
               : colors.pendingSoft,
         }}
@@ -425,25 +461,29 @@ export default function BackupScreen() {
             <ActivityIndicator size="small" color={colors.accent} />
           ) : (
             <Ionicons
-              name={lastAny ? 'shield-checkmark' : 'alert-circle'}
+              name={safety === 'safe' ? 'shield-checkmark' : 'alert-circle'}
               size={26}
-              color={lastAny ? colors.completed : colors.pending}
+              color={safety === 'safe' ? colors.completed : colors.pending}
             />
           )}
           <View style={{ flex: 1, gap: 2 }}>
             <Text variant="heading">
               {busy
                 ? 'Backing up…'
-                : lastAny
-                  ? `Backed up ${relativeTime(lastAny)}`
-                  : 'Not backed up yet'}
+                : safety === 'safe'
+                  ? `Backed up ${relativeTime(lastAny!)}`
+                  : safety === 'stale'
+                    ? 'Your backup is out of date'
+                    : 'Not backed up yet'}
             </Text>
             <Text variant="small" tone="secondary">
               {busy
                 ? (progress ?? 'Working…')
-                : lastAny
-                  ? absoluteTime(lastAny)
-                  : 'Everything you have recorded exists only on this phone.'}
+                : safety === 'safe'
+                  ? absoluteTime(lastAny!)
+                  : safety === 'stale'
+                    ? `Last saved ${relativeTime(lastAny!)} — anything since then exists only on this phone.`
+                    : 'Everything you have recorded exists only on this phone.'}
             </Text>
           </View>
         </Row>
@@ -467,7 +507,48 @@ export default function BackupScreen() {
           subtitle="Keep a copy somewhere that survives this phone"
         />
 
-        <Surface padded={false} style={{ overflow: 'hidden' }}>
+        <Label>ONLINE — GOOGLE DRIVE</Label>
+
+        {/*
+          The gradient WRAPS the card while connected.
+
+          React Native has no gradient border, so the gradient is the outer
+          layer and the card sits inside it inset by a hairline — the same
+          trick the Smart Detect section uses. A band across the top alone left
+          three plain edges and read as a decorative stripe rather than as the
+          section being live.
+        */}
+        <LinearGradient
+          colors={
+            signedIn
+              ? [DRIVE_BLUE, DRIVE_GREEN, DRIVE_YELLOW]
+              : [colors.hairline, colors.hairline]
+          }
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ borderRadius: radius.lg, padding: signedIn ? DRIVE_BORDER : 0 }}
+        >
+        {/*
+          The inner radius is the outer MINUS the border width.
+        
+          Concentric corners only look right when the inner curve is tighter by
+          exactly the gap between them. Leaving both at `radius.lg` let the
+          square inner corner cut across the rounded outer one, so the gradient
+          bunched into a hard right angle at each corner — the card looked like
+          a sticker peeling off rather than a bordered surface.
+        
+          The Surface's own hairline is dropped while the gradient is showing:
+          two borders 2px apart read as a double line, not a frame.
+        */}
+        <Surface
+          padded={false}
+          style={{
+            overflow: 'hidden',
+            ...(signedIn
+              ? { borderRadius: radius.lg - DRIVE_BORDER, borderWidth: 0 }
+              : null),
+          }}
+        >
           {signedIn ? (
             <>
               <View
@@ -479,7 +560,9 @@ export default function BackupScreen() {
                   paddingVertical: space.md,
                 }}
               >
-                <GoogleMark />
+                {/* Drive's own logo, not the sign-in "G" — once connected the
+                    row is about the folder, not the account. */}
+                <DriveMark />
                 <View style={{ flex: 1, gap: 2 }}>
                   <Row gap={6}>
                     <Text variant="bodyStrong">Google Drive</Text>
@@ -491,16 +574,33 @@ export default function BackupScreen() {
                       : 'Uploads to your "money-manager" folder'}
                   </Text>
                 </View>
+                {/*
+                  An icon, not the word.
+
+                  "Disconnect" spelled out competed with the account name beside
+                  it for a control almost nobody uses. A close glyph in a quiet
+                  circle stays legible without arguing for attention — and
+                  `handleDisconnect` already confirms before signing out, so a
+                  mistaken tap costs nothing.
+                */}
                 <Pressable
                   onPress={handleDisconnect}
                   accessibilityRole="button"
-                  accessibilityLabel="Disconnect Google"
-                  hitSlop={8}
-                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+                  accessibilityLabel="Disconnect Google Drive"
+                  hitSlop={10}
+                  style={({ pressed }) => ({
+                    opacity: pressed ? 0.55 : 1,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.dangerSoft,
+                  })}
                 >
-                  <Text variant="caption" tone="muted">
-                    Disconnect
-                  </Text>
+                  {/* Red: disconnecting stops every future cloud backup, which
+                      is the one destructive thing this row can do. */}
+                  <Ionicons name="close" size={15} color={colors.danger} />
                 </Pressable>
               </View>
               <Divider />
@@ -577,9 +677,12 @@ export default function BackupScreen() {
             </Pressable>
           )}
         </Surface>
+        </LinearGradient>
 
         {/* Always works — no account, no network, no rebuild. But it is a copy
             on the phone the backup protects against, hence the caveat. */}
+        <View style={{ height: space.xs }} />
+        <Label>ON THIS PHONE</Label>
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <ActionRow
             icon="phone-portrait-outline"
@@ -620,6 +723,10 @@ export default function BackupScreen() {
             title="Restore"
             subtitle="Replace what is on your board with a saved copy"
           />
+          {/* Mirrors the backup section's split, so "where is it saved?" and
+              "where do I restore from?" are answered by the same two words in
+              the same order. */}
+          <Label>ON THIS PHONE</Label>
           <Surface padded={false} style={{ overflow: 'hidden' }}>
             {backups.map((backup, index) => (
               <View key={backup.filename}>
@@ -712,6 +819,30 @@ export default function BackupScreen() {
               </View>
             ))}
           </Surface>
+
+          {/*
+            The Drive half of restoring, in the Restore section.
+
+            "Backups in Drive" also sits under Back up, because that is where
+            you go right after uploading — but someone looking to bring a copy
+            BACK reads this heading, and finding nothing about Drive under it
+            suggested the cloud files were unreachable from here.
+          */}
+          {signedIn ? (
+            <>
+              <View style={{ height: space.xs }} />
+              <Label>ONLINE — GOOGLE DRIVE</Label>
+              <Surface padded={false} style={{ overflow: 'hidden' }}>
+                <ActionRow
+                  icon="folder-open-outline"
+                  label="Backups in Drive"
+                  sublabel="See what is stored, or remove one"
+                  busy={false}
+                  onPress={() => void openDriveFiles()}
+                />
+              </Surface>
+            </>
+          ) : null}
         </View>
       ) : (
         <View style={{ gap: space.sm }}>
@@ -790,7 +921,11 @@ export default function BackupScreen() {
       <Row gap={space.sm} style={{ paddingHorizontal: space.xs, alignItems: 'flex-start' }}>
         <Ionicons name="eye-off-outline" size={15} color={colors.inkMuted} style={{ marginTop: 1 }} />
         <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-          Bank messages waiting for review are never included in a backup.
+          {/* Was "never included", which stopped being true when the review
+              queue became a tickable part. A note that is quietly wrong about
+              privacy is worse than none. */}
+          Bank message text is only included if you tick "Messages awaiting
+          review" when backing up.
         </Text>
       </Row>
 
@@ -1747,6 +1882,26 @@ function GoogleMark({ size = 20 }: { size?: number }) {
         fill="#EA4335"
         d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"
       />
+    </Svg>
+  );
+}
+
+/**
+ * The Google DRIVE triangle, in Drive's own colours.
+ *
+ * Used once connected, where the plain "G" was wrong: the G is a sign-in mark,
+ * and after sign-in the row is no longer about an account — it is about the
+ * folder the backups live in. Drive's logo says which product holds them.
+ */
+function DriveMark({ size = 20 }: { size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 48 48">
+      {/* Left blue arm. */}
+      <Path fill="#0066DA" d="M6.6 39.2 2.3 31.7c-.4-.7-.4-1.6 0-2.3L15.6 6.5l8.6 15L10.9 44.6a2.6 2.6 0 0 1-.9-.9L6.6 39.2z" />
+      {/* Right green arm. */}
+      <Path fill="#00AC47" d="M45.7 29.4 32.4 6.5H15.6l13.3 22.9h16.8z" />
+      {/* Bottom yellow arm. */}
+      <Path fill="#FFBA00" d="M45.7 29.4H19.1l-8.4 14.5c.4.1.8.2 1.2.2h24.2c.9 0 1.7-.5 2.1-1.2l7.5-13.5z" />
     </Svg>
   );
 }
