@@ -7,7 +7,7 @@ import { AccountField } from '../../src/components/AccountPicker';
 import { BankLogo } from '../../src/components/BankLogo';
 import { AppHeader, BottomSheet, Button, Divider, Empty, GradientButton, GradientCard, Glyph, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
 import { useTabBarClearance } from '../../src/components/TabBar';
-import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
+import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
 import {
   selectBoardTotals,
@@ -187,11 +187,13 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
 
   const [name, setName] = useState(existing?.name ?? '');
   const [isForeign, setIsForeign] = useState(Boolean(existing?.foreignAmount));
+  // Seeded through `formatAmountInput` so an existing amount opens grouped
+  // rather than gaining its separators only on the first keystroke.
   const [amount, setAmount] = useState(
     existing
       ? existing.foreignAmount
-        ? String(existing.foreignAmount)
-        : String(existing.amountMinor / 100)
+        ? formatAmountInput(String(existing.foreignAmount))
+        : formatAmountInput(String(existing.amountMinor / 100))
       : '',
   );
   const [rate, setRate] = useState(existing?.foreignRate ? String(existing.foreignRate) : String(state.usdRate));
@@ -266,7 +268,7 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
             value={amount}
             onChangeText={setAmount}
             placeholder="0"
-            keyboardType="numeric"
+            money
           />
           {isForeign ? (
             <>
@@ -279,14 +281,21 @@ function IncomeFormModal({ editId, onClose }: { editId: string | null; onClose: 
               </Surface>
             </>
           ) : null}
-          {state.cards.length > 0 ? (
-            <AccountField
-              label="Paid into"
-              cards={state.cards}
-              selectedId={cardId}
-              onSelect={setCardId}
-            />
-          ) : null}
+          {/*
+            Shown even with NO accounts yet.
+
+            It used to disappear when the list was empty, which hid the one
+            control that could fix that — someone recording their first salary
+            had no way to say where it lands, and no hint that accounts existed.
+            The picker now offers "Add an account", so an empty list is a
+            starting point rather than a dead end.
+          */}
+          <AccountField
+            label="Paid into"
+            cards={state.cards}
+            selectedId={cardId}
+            onSelect={setCardId}
+          />
 
           {editId ? (
             <Button label="Delete income" variant="danger" icon="trash-outline" onPress={confirmDelete} />

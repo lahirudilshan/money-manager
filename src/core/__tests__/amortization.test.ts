@@ -154,9 +154,27 @@ describe('remainingBalance', () => {
 });
 
 describe('paymentsElapsed', () => {
-  it('counts one payment once the first due day passes', () => {
+  /*
+   * The first installment falls a MONTH after drawdown, not on the day the
+   * money arrives — so nothing is paid during the loan's first month.
+   *
+   * This is what made every brand-new loan report one installment already paid:
+   * `loanDraftToInput` dates a new loan today, and the count was credited on the
+   * start date itself.
+   */
+  it('counts nothing during the first month', () => {
     const start = new Date(2025, 0, 15);
-    expect(paymentsElapsed(start, 60, new Date(2025, 0, 20))).toBe(1);
+    expect(paymentsElapsed(start, 60, new Date(2025, 0, 20))).toBe(0);
+  });
+
+  it('counts nothing on the day the loan is taken out', () => {
+    const start = new Date(2025, 0, 15);
+    expect(paymentsElapsed(start, 60, start)).toBe(0);
+  });
+
+  it('counts the first payment once a month has passed', () => {
+    const start = new Date(2025, 0, 15);
+    expect(paymentsElapsed(start, 60, new Date(2025, 1, 15))).toBe(1);
   });
 
   it('counts zero before the first due day', () => {
@@ -166,7 +184,7 @@ describe('paymentsElapsed', () => {
 
   it('counts a full year of payments', () => {
     const start = new Date(2025, 0, 15);
-    expect(paymentsElapsed(start, 60, new Date(2026, 0, 15))).toBe(13);
+    expect(paymentsElapsed(start, 60, new Date(2026, 0, 15))).toBe(12);
   });
 
   it('never exceeds the loan term', () => {

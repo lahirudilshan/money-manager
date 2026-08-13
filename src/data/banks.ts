@@ -2,15 +2,19 @@
  * Catalog of Sri Lankan licensed commercial banks, plus the non-bank wallets
  * and pots people actually keep money in.
  *
- * Each entry carries a brand colour and a short monogram rather than a logo
- * asset: bank marks are trademarked and can't be bundled, and a monogram on
- * the brand colour is instantly recognisable, renders offline, scales to any
- * size, and gives every bank identical visual weight.
+ * Every entry carries a brand colour and a short monogram, and that pair — not
+ * the logo — is the guaranteed rendering: it works offline, scales to any size
+ * and gives every bank identical visual weight. `url` is an upgrade layered on
+ * top, and `BankLogo` drops back to the monogram the moment one fails to load,
+ * so a bank whose artwork is missing, 404s or is offline still looks
+ * deliberate rather than broken.
  *
  * `color` is the brand hue used as the card background, so `onColor` records
  * whether white or dark text stays legible on it — computed once here rather
  * than guessed per render.
  */
+
+import { ImageSourcePropType } from "react-native";
 
 export interface BankBrand {
   id: string;
@@ -24,134 +28,87 @@ export interface BankBrand {
   /** Text/icon colour that stays legible on `color`. */
   onColor: '#FFFFFF' | '#101828';
   kind: 'bank' | 'wallet' | 'savings';
+  /**
+   * The bank's mark. Two forms, deliberately:
+   *
+   *   - `require(...)` once the PNG is sitting in `assets/images/banks/` —
+   *     bundled, instant, works with no network.
+   *   - `{ uri: ... }` until then, pointing at the bank's own site.
+   *
+   * Both are `ImageSourcePropType`, so nothing downstream cares which a given
+   * bank is on, and promoting one to a bundled asset is a one-line edit here.
+   * A `require()` of a file that does not exist is a *bundler* error rather
+   * than a runtime one, which is why the placeholders can't be require lines.
+   */
+  url?: ImageSourcePropType;
 }
 
+/**
+ * Ordered alphabetically by `name`, with the non-bank entries ("Other", "Cash
+ * in hand") deliberately last — they are the fallbacks, and a user scanning for
+ * their bank should not trip over them mid-list. The UI groups on `kind`
+ * anyway, so this only fixes the order *within* each group.
+ */
 export const BANKS: BankBrand[] = [
-  {
-    id: 'boc',
-    name: 'Bank of Ceylon',
-    shortName: 'BOC',
-    monogram: 'BOC',
-    color: '#F5A623',
-    onColor: '#101828',
-    kind: 'bank',
-  },
-  {
-    id: 'peoples',
-    name: "People's Bank",
-    shortName: "People's",
-    monogram: 'PB',
-    color: '#00843D',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'commercial',
-    name: 'Commercial Bank of Ceylon',
-    shortName: 'ComBank',
-    monogram: 'CB',
-    color: '#003883',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'hnb',
-    name: 'Hatton National Bank',
-    shortName: 'HNB',
-    monogram: 'HNB',
-    color: '#8B1A2B',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'sampath',
-    name: 'Sampath Bank',
-    shortName: 'Sampath',
-    monogram: 'SB',
-    color: '#F58220',
-    onColor: '#101828',
-    kind: 'bank',
-  },
-  {
-    id: 'nsb',
-    name: 'National Savings Bank',
-    shortName: 'NSB',
-    monogram: 'NSB',
-    color: '#00539F',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'seylan',
-    name: 'Seylan Bank',
-    shortName: 'Seylan',
-    monogram: 'SL',
-    color: '#00A651',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'ndb',
-    name: 'National Development Bank',
-    shortName: 'NDB',
-    monogram: 'NDB',
-    color: '#005BAA',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'dfcc',
-    name: 'DFCC Bank',
-    shortName: 'DFCC',
-    monogram: 'DF',
-    color: '#00539B',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'nations-trust',
-    name: 'Nations Trust Bank',
-    shortName: 'NTB',
-    monogram: 'NTB',
-    color: '#00AEEF',
-    onColor: '#101828',
-    kind: 'bank',
-  },
-  {
-    id: 'pan-asia',
-    name: 'Pan Asia Bank',
-    shortName: 'Pan Asia',
-    monogram: 'PA',
-    color: '#005DAA',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
-  {
-    id: 'union',
-    name: 'Union Bank',
-    shortName: 'Union',
-    monogram: 'UB',
-    color: '#0067B1',
-    onColor: '#FFFFFF',
-    kind: 'bank',
-  },
   {
     id: 'amana',
     name: 'Amãna Bank',
     shortName: 'Amãna',
     monogram: 'AM',
-    color: '#00A0A0',
+    color: '#055841',
     onColor: '#FFFFFF',
     kind: 'bank',
+    url: require('../../assets/images/banks/AM.png'),
+  },
+  {
+    id: 'boc',
+    name: 'Bank of Ceylon',
+    shortName: 'BOC',
+    monogram: 'BOC',
+    color: '#FCC807',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/BOC.png'),
   },
   {
     id: 'cargills',
     name: 'Cargills Bank',
     shortName: 'Cargills',
     monogram: 'CG',
-    color: '#00713C',
+    color: '#F26E1D',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/CG.png'),
+  },
+  {
+    id: 'commercial',
+    name: 'Commercial Bank of Ceylon',
+    shortName: 'ComBank',
+    monogram: 'CB',
+    color: '#006DB8',
     onColor: '#FFFFFF',
     kind: 'bank',
+    url: require('../../assets/images/banks/CB.png'),
+  },
+  {
+    id: 'dfcc',
+    name: 'DFCC Bank',
+    shortName: 'DFCC',
+    monogram: 'DF',
+    color: '#DB0627',
+    onColor: '#FFFFFF',
+    kind: 'bank',
+    url: require('../../assets/images/banks/DFCC.png'),
+  },
+  {
+    id: 'hnb',
+    name: 'Hatton National Bank',
+    shortName: 'HNB',
+    monogram: 'HNB',
+    color: '#00A6D8',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/HNB.png'),
   },
   {
     id: 'hsbc',
@@ -161,6 +118,78 @@ export const BANKS: BankBrand[] = [
     color: '#DB0011',
     onColor: '#FFFFFF',
     kind: 'bank',
+    url: require('../../assets/images/banks/HS.png'),
+  },
+  {
+    id: 'ndb',
+    name: 'National Development Bank',
+    shortName: 'NDB',
+    monogram: 'NDB',
+    color: '#D0043C',
+    onColor: '#FFFFFF',
+    kind: 'bank',
+    // → assets/images/banks/NDB.png
+    url: { uri: 'https://www.ndbbank.com/images/logo.png' },
+  },
+  {
+    id: 'nsb',
+    name: 'National Savings Bank',
+    shortName: 'NSB',
+    monogram: 'NSB',
+    color: '#EA970B',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/NSB.png'),
+  },
+  {
+    id: 'nations-trust',
+    name: 'Nations Trust Bank',
+    shortName: 'NTB',
+    monogram: 'NTB',
+    color: '#0F93D1',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/NTB.png'),
+  },
+  {
+    id: 'pan-asia',
+    name: 'Pan Asia Bank',
+    shortName: 'Pan Asia',
+    monogram: 'PA',
+    color: '#E90D06',
+    onColor: '#FFFFFF',
+    kind: 'bank',
+    url: require('../../assets/images/banks/PA.png'),
+  },
+  {
+    id: 'peoples',
+    name: "People's Bank",
+    shortName: "People's",
+    monogram: 'PB',
+    color: '#FDAC01',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/PB.png'),
+  },
+  {
+    id: 'sampath',
+    name: 'Sampath Bank',
+    shortName: 'Sampath',
+    monogram: 'SB',
+    color: '#F27A24',
+    onColor: '#101828',
+    kind: 'bank',
+    url: require('../../assets/images/banks/SB.png'),
+  },
+  {
+    id: 'seylan',
+    name: 'Seylan Bank',
+    shortName: 'Seylan',
+    monogram: 'SL',
+    color: '#DF0124',
+    onColor: '#FFFFFF',
+    kind: 'bank',
+    url: require('../../assets/images/banks/SL.png'),
   },
   {
     id: 'standard-chartered',
@@ -170,43 +199,35 @@ export const BANKS: BankBrand[] = [
     color: '#0473EA',
     onColor: '#FFFFFF',
     kind: 'bank',
-  },
-  // Non-bank pots — money lives here too, and the board funds from them.
-  {
-    id: 'ezcash',
-    name: 'eZ Cash',
-    shortName: 'eZ Cash',
-    monogram: 'EZ',
-    color: '#E4002B',
-    onColor: '#FFFFFF',
-    kind: 'wallet',
+    url: require('../../assets/images/banks/SC.png'),
   },
   {
-    id: 'frimi',
-    name: 'FriMi',
-    shortName: 'FriMi',
-    monogram: 'FM',
-    color: '#7A1FA2',
+    id: 'union',
+    name: 'Union Bank',
+    shortName: 'Union',
+    monogram: 'UB',
+    color: '#214893',
     onColor: '#FFFFFF',
-    kind: 'wallet',
+    kind: 'bank',
+    url: require('../../assets/images/banks/UB.png'),
   },
   {
     id: 'cash',
     name: 'Cash in hand',
     shortName: 'Cash',
-    monogram: 'CA',
+    monogram: 'Cash',
     color: '#5B6472',
     onColor: '#FFFFFF',
-    kind: 'wallet',
+    kind: 'wallet'
   },
   {
     id: 'other',
-    name: 'Other account',
+    name: 'Other',
     shortName: 'Other',
-    monogram: '••',
-    color: '#334158',
+    monogram: 'Other',
+    color: '#5B6472',
     onColor: '#FFFFFF',
-    kind: 'bank',
+    kind: 'wallet'
   },
 ];
 

@@ -44,7 +44,13 @@ export type Transport = 'car' | 'bike' | 'none';
 export interface PersonaAnswers {
   /** Multi-select: someone can support both kids and parents. */
   household: Household[];
-  transport: Transport;
+  /**
+   * Multi-select: a household can run a car AND a motorbike, which is common
+   * enough here that forcing the choice made one of the two vehicles invisible
+   * to the plan. `none` is exclusive — it is the ABSENCE of a vehicle — and is
+   * what an empty selection collapses to.
+   */
+  transport: Transport[];
   /** Four-digit year. Null when the user skipped it — nothing depends on it. */
   birthYear: number | null;
 }
@@ -104,12 +110,15 @@ export function suggestedLines(answers: PersonaAnswers): string[] {
   const stage = lifeStageFrom(age);
 
   /*
-   * Housing. Renting is assumed early and ownership later — the single place
-   * age is allowed to pick between two mutually exclusive defaults, because
-   * offering both pre-ticked would double-count the biggest line on the board.
+   * Housing.
+   *
+   * Only rent is suggested. A housing loan used to be pre-ticked for the older
+   * stages, but loans are collected properly in step 5 — with the lender, rate
+   * and term an installment actually needs — and the catalog's Loans category is
+   * no longer offered in step 2 at all. Suggesting a line the picker will not
+   * show is a promise the next screen cannot keep.
    */
   lines.add('rent');
-  if (stage === 'established' || stage === 'pre_retirement') lines.add('housing-loan');
 
   if (answers.household.includes('partner')) {
     lines.add('internet');
@@ -125,21 +134,44 @@ export function suggestedLines(answers: PersonaAnswers): string[] {
   }
 
   if (answers.household.includes('parents')) {
-    // The line a second household's costs actually land on — and the reason
-    // the houses dimension exists. See core/houses.ts.
-    lines.add('parents');
+    /*
+     * A parent's HOUSE, not a "support to parents" line.
+     *
+     * Supporting parents almost always means paying a second household's bills,
+     * and that is what the houses dimension models — the line accumulates
+     * whatever those bills came to instead of a guessed monthly figure. The old
+     * `parents` catalog line has been removed for exactly that reason; see
+     * data/categoryCatalog.ts and core/houses.ts.
+     */
+    lines.add('house-own');
+    lines.add('house-parents');
     lines.add('medicine');
   }
 
-  if (answers.transport === 'car') {
+  /*
+   * Vehicles are additive — a car and a motorbike in the same household share
+   * the fuel and service lines, and the Set collapses the overlap, so these are
+   * independent checks rather than a chain of else-ifs.
+   *
+   * Public transport is added when NO vehicle is owned, which is the honest
+   * reading of "Neither": someone with a car still takes the occasional taxi,
+   * but it is not a line worth pre-ticking for them.
+   */
+  const hasCar = answers.transport.includes('car');
+  const hasBike = answers.transport.includes('bike');
+
+  if (hasCar || hasBike) {
     lines.add('fuel');
     lines.add('vehicle-service');
+  }
+  if (hasCar) {
+    // Insurance and the revenue licence are legally required for a car and are
+    // a big enough annual figure to plan for; a motorbike's are small enough
+    // that pre-ticking them adds noise more often than it helps.
     lines.add('vehicle-insurance');
     lines.add('license');
-  } else if (answers.transport === 'bike') {
-    lines.add('fuel');
-    lines.add('vehicle-service');
-  } else {
+  }
+  if (!hasCar && !hasBike) {
     lines.add('public-transport');
   }
 
@@ -188,8 +220,12 @@ export function describePersona(answers: PersonaAnswers): string {
   else parts.push('single household');
 
   if (answers.household.includes('parents')) parts.push('supporting parents');
-  if (answers.transport === 'car') parts.push('with a car');
-  else if (answers.transport === 'bike') parts.push('with a bike');
+
+  const hasCar = answers.transport.includes('car');
+  const hasBike = answers.transport.includes('bike');
+  if (hasCar && hasBike) parts.push('with a car and a bike');
+  else if (hasCar) parts.push('with a car');
+  else if (hasBike) parts.push('with a bike');
 
   return parts.join(', ');
 }

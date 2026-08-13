@@ -5,6 +5,8 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 /** Onboarding is deliberately outside `(tabs)` — no dock, no back-swipe to the board. */
 export default function OnboardingLayout() {
   const { colors } = useTheme();
+
+
   return (
     <Stack
       screenOptions={{

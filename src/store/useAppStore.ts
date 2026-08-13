@@ -9,6 +9,7 @@ import {
   isFlexibleDueDay,
   isSpend,
   monthlyAmount,
+  nextDueDate,
   savingPlanProgress,
   type SavingPlan,
   type SavingPlanProgress,
@@ -323,6 +324,8 @@ export interface AppState {
   deleteIncome: (id: string) => void;
 
   addLoan: (input: Omit<NewLoan, 'id'>) => void;
+  /** Change a loan's terms; the board line's installment is re-derived. */
+  updateLoan: (id: string, patch: Partial<NewLoan>) => void;
   deleteLoan: (id: string) => void;
 
   /**
@@ -1308,6 +1311,37 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     get().refresh();
   },
+  /**
+   * Change a loan's terms, and re-derive the board line that follows from them.
+   *
+   * The installment is never stored on the loan — it is computed from principal,
+   * rate and term — so editing any of those has to rewrite the subcategory's
+   * `plannedMinor` too. Skipping that would leave the plan quietly funding the
+   * OLD installment, which is the kind of wrong figure nobody notices until the
+   * money is short.
+   */
+  updateLoan(id, patch) {
+    const updated = loanRepo.update(id, patch);
+    if (!updated) return;
+
+    const { installmentMinor } = buildSchedule({
+      principalMinor: updated.principalMinor,
+      annualRatePct: updated.annualRatePct,
+      termMonths: updated.termMonths,
+    });
+
+    // Renaming the loan renames its line as well, so the two never disagree on
+    // the board.
+    for (const sub of get().subcategories.filter((s) => s.loanId === id)) {
+      subcategoryRepo.update(sub.id, {
+        name: updated.name,
+        plannedMinor: installmentMinor,
+      });
+    }
+
+    get().refresh();
+  },
+
   /** Remove a loan and the board line it created, so no orphan bill remains. */
   deleteLoan(id) {
     for (const sub of get().subcategories.filter((s) => s.loanId === id)) {
@@ -2767,7 +2801,21 @@ export function selectReminders(state: AppState, today = new Date()): ReminderVi
       const effectiveDueDay = sub.dueDay ?? category.dueDay;
       if (isFlexibleDueDay(effectiveDueDay)) continue;
 
-      const dueDate = dueDateFor(state.period, effectiveDueDay);
+      /*
+       * The NEXT time this line falls due — not its date in the browsed month.
+       *
+       * `state.period` is whichever month the user is looking at, so anchoring
+       * the reminder to it meant scrolling back to review March made every
+       * unpaid March line report as weeks overdue, and scrolling forward made
+       * next month's bills read as comfortably distant when one is due
+       * tomorrow. "Coming up" is a statement about today, so it is computed
+       * against today: this month's date while it is still ahead, otherwise the
+       * same day next month.
+       *
+       * A line already ticked paid never reaches here (checked above), so a
+       * settled bill cannot roll forward and reappear as upcoming.
+       */
+      const dueDate = nextDueDate(effectiveDueDay, today);
       reminders.push({
         subcategory: sub,
         categoryName: category.name,

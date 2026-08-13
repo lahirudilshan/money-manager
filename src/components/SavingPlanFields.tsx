@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
-import { formatMoney, parseAmount } from '../core/money';
+import { formatAmountInput, formatMoney, parseAmount } from '../core/money';
 import { monthsBetween, savingPlanProgress } from '../core/planning';
 import { useTheme } from '../theme/ThemeProvider';
 import { Field } from './forms';
@@ -46,7 +46,9 @@ export function savingPlanDraftFrom(sub: {
     ...emptySavingPlanDraft,
     enabled: true,
     mode: 'total',
-    totalAmount: String(sub.planTargetMinor / 100),
+    // Grouped on the way in, so an existing target opens formatted rather than
+    // gaining its separators only once the field is touched.
+    totalAmount: formatAmountInput(String(sub.planTargetMinor / 100)),
     dueDate: sub.planDueDate,
   };
 }
@@ -180,7 +182,7 @@ export function SavingPlanFields({
                 value={draft.totalAmount}
                 onChangeText={(totalAmount) => update({ totalAmount })}
                 placeholder="e.g. 144000"
-                keyboardType="numeric"
+                money
               />
               <DueDateField
                 value={draft.dueDate}
@@ -194,7 +196,7 @@ export function SavingPlanFields({
                 value={draft.monthlyAmount}
                 onChangeText={(monthlyAmount) => update({ monthlyAmount })}
                 placeholder="e.g. 12000"
-                keyboardType="numeric"
+                money
               />
               <View style={{ gap: space.sm }}>
                 <Label>FOR HOW MANY MONTHS?</Label>

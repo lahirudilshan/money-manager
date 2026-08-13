@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
 import { buildSchedule } from '../core/amortization';
-import { formatMoney, parseAmount } from '../core/money';
+import { formatAmountInput, formatMoney, parseAmount } from '../core/money';
 import { BANKS, bankById } from '../data/banks';
 import type { NewLoan } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
@@ -72,6 +72,41 @@ export function isLoanDraftValid(draft: LoanDraft): boolean {
       Number.isFinite(years) &&
       years > 0,
   );
+}
+
+/**
+ * Rebuild the form state from a saved loan, so it can be edited rather than
+ * deleted and re-entered.
+ *
+ * The amount is grouped on the way in for the same reason the subcategory
+ * editor does it: a stored figure that only gains its separators after the
+ * first keystroke looks like a different control than the one you typed into.
+ *
+ * `paidInstallments` comes from the stored column rather than being re-derived
+ * from the start date — the loan may have been created before that column
+ * existed, and 0 is the honest answer there.
+ */
+export function loanDraftFrom(loan: {
+  name: string;
+  kind: string;
+  bankId: string | null;
+  principalMinor: number;
+  annualRatePct: number;
+  termMonths: number;
+  paidInstallments: number;
+}): LoanDraft {
+  return {
+    name: loan.name,
+    kind: (loan.kind as LoanKind) ?? 'personal',
+    bankId: loan.bankId,
+    amount: formatAmountInput(String(loan.principalMinor / 100)),
+    rate: String(loan.annualRatePct),
+    // Kept as years, which is what the form's presets and field speak in. A
+    // term that is not a whole number of years still round-trips, because
+    // `loanDraftToInput` multiplies back by 12 and rounds.
+    years: String(loan.termMonths / 12),
+    paidInstallments: String(loan.paidInstallments),
+  };
 }
 
 /** Convert a validated draft into the shape `addLoan` expects. */
@@ -188,7 +223,7 @@ export function LoanForm({
           value={draft.amount}
           onChangeText={(amount) => update({ amount })}
           placeholder="e.g. 7,200,000"
-          keyboardType="numeric"
+          money
         />
 
         <Field
@@ -399,11 +434,22 @@ export function BankPicker({
                   </View>
                 ) : null}
               </View>
+              {/*
+                Two lines, centred.
+
+                The tile is a fixed 72px so the strip scrolls on a predictable
+                rhythm, which left ~64px for the label — narrower than
+                "Cargills Bank" or "Amãna Bank", so those ellipsised to
+                "Cargills…" on the one control whose entire job is naming the
+                lender. Wrapping is the fix rather than a wider tile: it costs
+                a few pixels of height once instead of horizontal room on all
+                sixteen, and every name in the catalog fits inside two lines.
+              */}
               <Text
                 variant="caption"
                 color={selected ? colors.ink : colors.inkMuted}
-                numberOfLines={1}
-                style={{ fontWeight: selected ? '700' : '500' }}
+                numberOfLines={2}
+                style={{ fontWeight: selected ? '700' : '500', textAlign: 'center' }}
               >
                 {brand.shortName}
               </Text>

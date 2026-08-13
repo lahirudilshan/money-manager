@@ -28,6 +28,7 @@ import {
   createFolderRequest,
   findFolderRequest,
   deleteBackupRequest,
+  downloadBackupRequest,
   listBackupsRequest,
   parseFileList,
   parseFolderId,
@@ -388,6 +389,46 @@ export async function listDriveBackups(): Promise<DriveFile[]> {
   if (!folder) return [];
 
   return parseFileList(await send(listBackupsRequest(token, folder)));
+}
+
+/** What a download produced: the file's raw text, or why it failed. */
+export interface DownloadResult {
+  ok: boolean;
+  /** The snapshot JSON exactly as stored, for the caller to parse. */
+  contents?: string;
+  error?: string;
+}
+
+/**
+ * Download one backup's contents from Drive.
+ *
+ * Deliberately returns TEXT rather than going through `send`. That helper calls
+ * `response.json()`, but this request uses `alt=media` and the caller needs the
+ * bytes as written — parsing here and re-serialising would risk a snapshot that
+ * no longer matches its own integrity check. Handing back the raw string lets
+ * `parseSnapshot` and `validateSnapshot` see exactly what was uploaded, which is
+ * the only way the restore gates mean anything.
+ */
+export async function downloadDriveBackup(fileId: string): Promise<DownloadResult> {
+  const token = await accessToken();
+  if (!token) return { ok: false, error: 'Sign in to Google again to restore.' };
+
+  const request = downloadBackupRequest(token, fileId);
+
+  try {
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+    });
+
+    if (!response.ok) {
+      return { ok: false, error: 'Could not download it from Drive. Check your connection.' };
+    }
+
+    return { ok: true, contents: await response.text() };
+  } catch {
+    return { ok: false, error: 'Could not download it from Drive. Check your connection.' };
+  }
 }
 
 /**

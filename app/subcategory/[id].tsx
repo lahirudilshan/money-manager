@@ -12,13 +12,14 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AccountPickerSheet } from '../../src/components/AccountPicker';
 import { Field, FrequencyPicker } from '../../src/components/forms';
 import { BottomSheet, Button, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import { useModalClose } from '../../src/hooks/useModalClose';
 import { DatePickerField } from '../../src/components/DatePickerField';
 import { DueDateCalendar } from '../../src/components/DueDateCalendar';
 import { ImageUploader } from '../../src/components/ImageUploader';
-import { formatMoney, parseAmount } from '../../src/core/money';
+import { formatAmountInput, formatMoney, parseAmount } from '../../src/core/money';
 import {
   dueDateFor,
   formatPeriod,
@@ -64,10 +65,25 @@ export default function SubcategoryScreen() {
     () => state.categories.find((c) => c.id === subcategory?.categoryId),
     [state.categories, subcategory?.categoryId],
   );
+  /**
+   * The funding account, as an UNSAVED edit like every other field here.
+   *
+   * `undefined` means "not touched" — which is distinct from `null`, the
+   * explicit choice to inherit the category's default. Collapsing the two would
+   * make opening the screen and pressing Save silently detach a line from the
+   * account it was already using.
+   */
+  const [cardId, setCardId] = useState<string | null | undefined>(undefined);
+
+  /*
+   * Reads the PENDING choice when there is one, so the row updates as soon as
+   * the picker closes rather than only after Save — the same live-preview
+   * behaviour every other field on this screen has.
+   */
   const fundingCard = useMemo(() => {
-    const cardId = resolveCardId(subcategory?.cardId, category?.cardId);
-    return state.cards.find((c) => c.id === cardId);
-  }, [state.cards, subcategory?.cardId, category?.cardId]);
+    const chosen = cardId === undefined ? subcategory?.cardId : cardId;
+    return state.cards.find((c) => c.id === resolveCardId(chosen, category?.cardId));
+  }, [state.cards, cardId, subcategory?.cardId, category?.cardId]);
 
   // Progress comes from the shared selector so the figure matches everywhere.
   const savedMinor = useMemo(() => {
@@ -78,11 +94,14 @@ export default function SubcategoryScreen() {
   }, [state, id]);
 
   const [name, setName] = useState(subcategory?.name ?? '');
+  // Seeded through `formatAmountInput` so an existing amount opens grouped —
+  // the field formats as you type, and a stored value that only gained its
+  // separators after the first keystroke would look like a different control.
   const [planned, setPlanned] = useState(
-    subcategory ? String(subcategory.plannedMinor / 100) : '',
+    subcategory ? formatAmountInput(String(subcategory.plannedMinor / 100)) : '',
   );
   const [actual, setActual] = useState(
-    stateRow?.actualMinor != null ? String(stateRow.actualMinor / 100) : '',
+    stateRow?.actualMinor != null ? formatAmountInput(String(stateRow.actualMinor / 100)) : '',
   );
   const [note, setNote] = useState(stateRow?.note ?? '');
   const [frequency, setFrequency] = useState<SubcategoryFrequency>(
@@ -94,6 +113,7 @@ export default function SubcategoryScreen() {
     subcategory?.onceInPeriod ?? (subcategory ? periodKey(subcategory.createdAt) : ''),
   );
   const [parentId, setParentId] = useState(subcategory?.categoryId ?? '');
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [categoryQuery, setCategoryQuery] = useState('');
   const [plan, setPlan] = useState<SavingPlanDraft>(() =>
@@ -118,6 +138,23 @@ export default function SubcategoryScreen() {
   /** The entry being edited in the inline sheet, or null when none is open. */
   const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
 
+  // Unplanned lines behave differently: they hold a list of individual
+  // transactions, have no single planned/actual amount, and are never marked
+  // paid as a whole — so several fields below are hidden for them.
+  const unplanned = isUnplanned(frequency);
+  /*
+   * Read ABOVE the "not found" guard, not below it.
+   *
+   * Deleting this subcategory flips that guard on, and a `useMemo` sitting
+   * after it would then not run — React counts fewer hooks than the previous
+   * render and throws, which crashed the app on every subcategory delete. Every
+   * hook on this screen has to be unconditional for that reason.
+   */
+  const transactions = useMemo(
+    () => (id && unplanned ? selectTransactions(state, id) : []),
+    [state, id, unplanned],
+  );
+
   if (!subcategory) {
     return (
       <View
@@ -138,14 +175,6 @@ export default function SubcategoryScreen() {
   // The repo already collapses legacy values, so this is pending/paid.
   const savedStatus: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
 
-  // Unplanned lines behave differently: they hold a list of individual
-  // transactions, have no single planned/actual amount, and are never marked
-  // paid as a whole — so several fields below are hidden for them.
-  const unplanned = isUnplanned(frequency);
-  const transactions = useMemo(
-    () => (id && unplanned ? selectTransactions(state, id) : []),
-    [state, id, unplanned],
-  );
   const unplannedTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
   // The budget these entries draw against, read from the field being edited so
   // the bar responds as the user types a new figure rather than after saving.
@@ -173,6 +202,9 @@ export default function SubcategoryScreen() {
       planTargetMinor: planPatch?.planTargetMinor ?? null,
       planDueDate: planPatch?.planDueDate ?? null,
       planStartDate: planPatch?.planStartDate ?? subcategory!.planStartDate ?? null,
+      // Only when the user actually chose one — `undefined` means untouched, so
+      // spreading nothing leaves the stored account exactly as it was.
+      ...(cardId === undefined ? null : { cardId }),
     });
 
     // Move to a different parent category if the user changed it.
@@ -242,6 +274,10 @@ export default function SubcategoryScreen() {
     frequency !== subcategory.frequency ||
     // Changing only which month a one-time cost lands in is a real edit.
     (frequency === 'one_time' && oncePeriod !== subcategory.onceInPeriod) ||
+    // Untouched (`undefined`) is not a change; picking the same account back is
+    // not either, which is why this compares values rather than just testing
+    // that the picker was opened.
+    (cardId !== undefined && cardId !== (subcategory.cardId ?? null)) ||
     planChanged;
 
   return (
@@ -362,17 +398,43 @@ export default function SubcategoryScreen() {
             </>
           )}
 
-          {fundingCard && brand ? (
-            <>
-              <Divider />
-              <Row gap={space.sm}>
+          {/*
+            The funding account, now CHANGEABLE from here.
+
+            It used to be a read-only line, which meant the one screen that
+            edits everything else about a bill could not answer "this comes off
+            the other card now" — the user had to delete the line and rebuild
+            it, or go hunting in the category's settings for a default that this
+            line may not even be using. Since the row already names the account,
+            making it tappable is the whole fix.
+
+            Shown even when nothing is set yet, so a line inheriting its
+            category's default can be pointed somewhere explicitly rather than
+            offering no control at all.
+          */}
+          <Divider />
+          <Pressable
+            onPress={() => setAccountPickerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={
+              fundingCard ? `Paid from ${fundingCard.name}. Change account` : 'Choose an account'
+            }
+            style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+          >
+            <Row gap={space.sm}>
+              {fundingCard && brand ? (
                 <BankLogo brand={brand} size={26} />
-                <Text variant="small" tone="secondary" style={{ flex: 1 }}>
-                  Paid from {fundingCard.name}
-                </Text>
-              </Row>
-            </>
-          ) : null}
+              ) : (
+                <Ionicons name="card-outline" size={22} color={colors.inkMuted} />
+              )}
+              <Text variant="small" tone="secondary" style={{ flex: 1 }}>
+                {fundingCard ? `Paid from ${fundingCard.name}` : 'Choose an account'}
+              </Text>
+              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                Change
+              </Text>
+            </Row>
+          </Pressable>
         </Surface>
 
         {/* Status toggle — for normal bills only. Unplanned lines are never
@@ -485,7 +547,7 @@ export default function SubcategoryScreen() {
             label={unplanned ? 'Monthly budget' : 'Planned amount'}
             value={planned}
             onChangeText={setPlanned}
-            keyboardType="numeric"
+            money
             placeholder="0"
           />
           {unplanned ? (
@@ -501,7 +563,7 @@ export default function SubcategoryScreen() {
               label="Actual amount (optional)"
               value={actual}
               onChangeText={setActual}
-              keyboardType="numeric"
+              money
               placeholder="Leave empty if it matched the plan"
             />
           ) : null}
@@ -636,6 +698,25 @@ export default function SubcategoryScreen() {
         }}
       />
     ) : null}
+
+    {/*
+      Funding-account picker, the same sheet the rest of the app uses.
+
+      `allowNone` because a line is allowed to fall back to its category's
+      default — that is a real answer here, unlike in onboarding where every
+      line must name its own account.
+    */}
+    <AccountPickerSheet
+      visible={accountPickerOpen}
+      cards={state.cards}
+      selectedId={cardId === undefined ? (subcategory.cardId ?? null) : cardId}
+      allowNone
+      onSelect={(id) => {
+        setCardId(id);
+        setAccountPickerOpen(false);
+      }}
+      onClose={() => setAccountPickerOpen(false)}
+    />
 
     {/* Searchable category picker. */}
     <BottomSheet
@@ -878,7 +959,7 @@ function EditTransactionSheet({
         label="Amount"
         value={amount}
         onChangeText={setAmount}
-        keyboardType="decimal-pad"
+        money
         placeholder="0"
       />
       <DatePickerField label="Date" value={date} onChange={setDate} />

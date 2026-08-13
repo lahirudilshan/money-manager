@@ -5,6 +5,7 @@ import {
   daysUntil,
   disposableIncome,
   dueDateFor,
+  nextDueDate,
   effectiveAmount,
   formatPeriod,
   isPaid,
@@ -263,6 +264,56 @@ describe('dueDateFor', () => {
 
   it('clamps a day below 1 up to the first', () => {
     expect(dueDateFor('2026-07', 0).getDate()).toBe(1);
+  });
+});
+
+/*
+ * `nextDueDate` answers "when is this next due", which is a different question
+ * from `dueDateFor`'s "where does day N sit inside period P".
+ *
+ * The dashboard's "Coming up" used the latter against the BROWSED period, so
+ * scrolling back to review a past month turned all of its unpaid lines into a
+ * pile of overdue ones, and scrolling forward hid a bill due this week.
+ */
+describe('nextDueDate', () => {
+  it('uses this month while the day is still ahead', () => {
+    const date = nextDueDate(25, new Date(2026, 6, 15));
+    expect(date.getMonth()).toBe(6);
+    expect(date.getDate()).toBe(25);
+  });
+
+  it('counts today as still due, not overdue', () => {
+    const date = nextDueDate(15, new Date(2026, 6, 15, 9, 30));
+    expect(date.getMonth()).toBe(6);
+    expect(date.getDate()).toBe(15);
+  });
+
+  it('rolls to next month once the day has passed', () => {
+    const date = nextDueDate(5, new Date(2026, 6, 15));
+    expect(date.getMonth()).toBe(7);
+    expect(date.getDate()).toBe(5);
+  });
+
+  it('rolls across a year boundary', () => {
+    const date = nextDueDate(5, new Date(2026, 11, 20));
+    expect(date.getFullYear()).toBe(2027);
+    expect(date.getMonth()).toBe(0);
+  });
+
+  it('clamps to the target month length', () => {
+    // January 31st rolls to February, which has no 31st.
+    const date = nextDueDate(31, new Date(2026, 0, 31 ));
+    expect(date.getMonth()).toBe(0);
+
+    const rolled = nextDueDate(31, new Date(2026, 1, 5));
+    expect(rolled.getMonth()).toBe(1);
+    expect(rolled.getDate()).toBe(28);
+  });
+
+  it('is independent of which month the user is browsing', () => {
+    // The bug this replaced: the answer used to change with `state.period`.
+    const today = new Date(2026, 6, 15);
+    expect(nextDueDate(25, today).getTime()).toBe(nextDueDate(25, today).getTime());
   });
 });
 

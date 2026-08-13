@@ -1130,6 +1130,12 @@ export const SETTINGS_KEYS = {
   currency: 'currency',
   usdRate: 'usd_rate',
   onboarded: 'onboarded',
+  /**
+   * An in-progress onboarding plan, so closing the app mid-setup does not lose
+   * everything typed so far. Holds the DRAFT only — see core/onboardingDraft.ts
+   * — never the board itself, which is still written on confirm.
+   */
+  onboardingDraft: 'onboarding_draft',
   themeMode: 'theme_mode',
   haptics: 'haptics',
   /** Require Face ID / Touch ID / passcode before the app's contents are shown. */

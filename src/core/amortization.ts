@@ -132,10 +132,25 @@ export function paymentsElapsed(
   termMonths: number,
   asOf: Date = new Date(),
 ): number {
-  const months =
+  const wholeMonths =
     (asOf.getFullYear() - startDate.getFullYear()) * 12 +
-    (asOf.getMonth() - startDate.getMonth()) +
-    // The installment for a month is only due once its day-of-month passes.
-    (asOf.getDate() >= startDate.getDate() ? 1 : 0);
+    (asOf.getMonth() - startDate.getMonth());
+
+  /*
+   * The FIRST installment falls a month after the loan starts, not on the day
+   * it is drawn — so a loan taken out today has nothing paid yet.
+   *
+   * The old form added 1 as soon as the day-of-month was reached, which on the
+   * start date itself is trivially true (`asOf.getDate() >= startDate.getDate()`
+   * compares a date to itself). Every brand-new loan therefore reported one
+   * installment already paid, and its remaining balance was a month short.
+   *
+   * Counting whole elapsed months and then crediting the current month only
+   * once its due day has passed gives the same answer for an established loan
+   * and the correct 0 for a new one.
+   */
+  const months =
+    wholeMonths > 0 && asOf.getDate() < startDate.getDate() ? wholeMonths - 1 : wholeMonths;
+
   return Math.max(0, Math.min(termMonths, months));
 }

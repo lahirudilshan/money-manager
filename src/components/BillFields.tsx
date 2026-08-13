@@ -207,24 +207,31 @@ export function BillFields({
         placeholder="e.g. Rent, Electricity, Netflix"
       />
 
-      {/* Paid from — overrides the category's account for this bill. Null means
-          the bill keeps inheriting. */}
-      {cards.length > 0 ? (
-        <View style={{ gap: 4 }}>
-          <AccountField
-            label="Paid from"
-            cards={cards}
-            selectedId={draft.cardId}
-            onSelect={draft.setCardId}
-            allowNone
-          />
-          <Text variant="caption" tone="muted">
-            {effectiveCardId && effectiveCardId === category?.cardId
+      {/*
+        Paid from — overrides the category's account for this bill. Null means
+        the bill keeps inheriting.
+
+        Shown even with no accounts yet: `AccountField` renders "Add an account"
+        in that case and its picker can now create one in place. Hiding the
+        whole field when the list was empty removed the only route to fixing
+        that, at exactly the moment the user needed it.
+      */}
+      <View style={{ gap: 4 }}>
+        <AccountField
+          label="Paid from"
+          cards={cards}
+          selectedId={draft.cardId}
+          onSelect={draft.setCardId}
+          allowNone
+        />
+        <Text variant="caption" tone="muted">
+          {cards.length === 0
+            ? 'Add the account this bill is paid from — you can rename it later.'
+            : effectiveCardId && effectiveCardId === category?.cardId
               ? `${category?.name}’s account, filled in for you — change it if this bill is paid from another.`
               : 'Change it if this bill is paid from a different account.'}
-          </Text>
-        </View>
-      ) : null}
+        </Text>
+      </View>
 
       <FrequencyPicker
         label="How is it paid?"

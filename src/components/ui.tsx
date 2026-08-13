@@ -284,6 +284,23 @@ function useKeyboardHeight(enabled: boolean): number {
  * steps) whose footer is part of the page rather than a modal; modals get their
  * pinned footer from `BottomSheet`'s `footer` prop instead.
  */
+/**
+ * Bottom padding a scroll view needs so its last item clears `PinnedFooter`.
+ *
+ * The footer is a SIBLING of the scrolling content, not part of it, so it draws
+ * on top: anything within its height of the end of the list is unreachable no
+ * matter how far the user scrolls. Screens were padding by `space.lg` (16pt)
+ * against a footer that is 100–140pt tall, which silently ate the last card on
+ * every onboarding step — including the one naming the plan the user's answers
+ * had just produced.
+ *
+ * Sized for the tallest case (a primary button plus a secondary link above the
+ * home indicator). Over-padding costs a little empty space at the end of a
+ * scroll; under-padding costs content the user cannot reach at all, so this
+ * deliberately errs long.
+ */
+export const FOOTER_CLEARANCE = 140;
+
 export function PinnedFooter({
   children,
   flush = false,
@@ -547,6 +564,8 @@ function SheetChrome({
 }
 
 export function BottomSheet(props: SheetProps) {
+  const { colors } = useTheme();
+
   // Route sheets are already the native sheet (the expo-router 'modal' screen),
   // so they render the chrome directly — one presentation, identical to the
   // inline "add bill" sheet. Inline sheets wrap the chrome in their own native
@@ -565,6 +584,19 @@ export function BottomSheet(props: SheetProps) {
       // pad), where the inset card would clip a fixed-size keypad.
       presentationStyle={props.fullScreen ? 'fullScreen' : 'pageSheet'}
       animationType="slide"
+      /*
+       * The modal's backdrop, which defaults to WHITE.
+       *
+       * `SheetChrome` rounds the sheet's top corners more than iOS rounds a
+       * pageSheet, and the backdrop shows through that difference — four bright
+       * notches at the top of every sheet, glaring against a dark surface.
+       * Painting the backdrop with the same surface colour makes the gap
+       * invisible.
+       *
+       * `transparent` would be the other way to do it, but RN explicitly warns
+       * that it is unsupported alongside a presentationStyle.
+       */
+      backdropColor={colors.surface}
       // Fires for both the swipe-down dismiss and the Android hardware back.
       onRequestClose={props.onClose}
     >
@@ -1276,6 +1308,125 @@ export function AppHeader({
  * grouped list — replaces the per-screen `<Label>` + `<Surface padded={false}>`
  * reimplementations (settings, income, accounts, category/account detail…).
  */
+/**
+ * The header every onboarding step opens with: "STEP N OF 5", a progress bar,
+ * a title and a line of explanation.
+ *
+ * One component rather than the same four elements pasted into five screens —
+ * the bar has to advance in lockstep with the label, and two copies of that
+ * pairing is two chances for a screen to say "step 3" while filling four
+ * segments.
+ *
+ * The bar sits directly under the label because they are the same statement
+ * twice: "STEP 2 OF 5" is a number to parse, the filled bar is a glance. Split
+ * apart — the label above the title and the bar below the description — they
+ * read as two unrelated pieces of chrome.
+ *
+ * ## It is pinned, not scrolled
+ *
+ * This renders as a SIBLING of the step's scroll area rather than its first
+ * child, so "where am I in setup?" stays answerable after the first flick.
+ * Steps 1, 3 and 4 are long enough to scroll the header away entirely, and a
+ * progress bar you have to scroll back up to find is not doing its job.
+ *
+ * Because it sits outside the scroll area it also owns the top safe-area inset
+ * and paints the canvas — content passing underneath must not show through the
+ * notch — which is why each screen's scroll container no longer adds
+ * `insets.top` of its own.
+ *
+ * ## Going back
+ *
+ * `onBack` puts a back control on the step label's row. Onboarding is a forward
+ * push stack with no native header, so without this the ONLY way back was the
+ * iOS edge-swipe — undiscoverable, and unavailable on Android. Steps that have
+ * nowhere to go back to (the first one) simply omit the prop and the row keeps
+ * its layout.
+ */
+export function StepHeader({
+  step,
+  total = 5,
+  title,
+  onBack,
+  children,
+}: {
+  step: number;
+  total?: number;
+  title: string;
+  /** Shows a back control. Omit on the first step, which has no previous one. */
+  onBack?: () => void;
+  /** The line of explanation under the title. */
+  children?: React.ReactNode;
+}) {
+  const { colors, space } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      style={{
+        gap: 2,
+        backgroundColor: colors.canvas,
+        paddingTop: insets.top + space.lg,
+        paddingHorizontal: space.lg,
+        paddingBottom: space.md,
+      }}
+    >
+      {onBack ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.xs }}>
+          {/*
+            Pulled left by its own padding so the arrow's optical edge lines up
+            with the title below it, while the tap target stays a comfortable
+            size rather than shrinking to the glyph.
+          */}
+          <Pressable
+            onPress={onBack}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            hitSlop={8}
+            style={({ pressed }) => ({
+              marginLeft: -space.xs,
+              paddingVertical: 2,
+              paddingHorizontal: space.xs,
+              opacity: pressed ? 0.6 : 1,
+            })}
+          >
+            <Ionicons name="chevron-back" size={18} color={colors.inkMuted} />
+          </Pressable>
+          <Label>{`STEP ${step} OF ${total}`}</Label>
+        </View>
+      ) : (
+        <Label>{`STEP ${step} OF ${total}`}</Label>
+      )}
+
+      <View
+        accessibilityRole="progressbar"
+        accessibilityLabel={`Step ${step} of ${total}`}
+        style={{ flexDirection: 'row', gap: space.xs, paddingVertical: space.xs }}
+      >
+        {Array.from({ length: total }, (_, i) => (
+          <View
+            key={i}
+            style={{
+              flex: 1,
+              height: 4,
+              borderRadius: 2,
+              backgroundColor: i < step ? colors.accent : colors.hairline,
+            }}
+          />
+        ))}
+      </View>
+
+      <Text variant="title">{title}</Text>
+      {typeof children === 'string' ? (
+        <Text variant="small" tone="muted">
+          {children}
+        </Text>
+      ) : (
+        children
+      )}
+    </View>
+  );
+}
+
 export function Section({
   title,
   note,

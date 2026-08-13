@@ -274,7 +274,7 @@ export default function ServicesScreen() {
                 value={itemPrice}
                 onChangeText={setItemPrice}
                 placeholder="0"
-                keyboardType="numeric"
+                money
                 style={{ flex: 1.4 }}
               />
             </Row>

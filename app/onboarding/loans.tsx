@@ -6,16 +6,16 @@ import {
   ScrollView,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
 import {
   emptyLoanDraft,
   isLoanDraftValid,
   LoanForm,
+  loanDraftFrom,
   loanDraftToInput,
   type LoanDraft,
 } from '../../src/components/LoanForm';
-import { BottomSheet, Divider, GradientButton, Label, PinnedFooter, Row, Surface, Text } from '../../src/components/ui';
+import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '../../src/components/ui';
 import { formatMoney } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
 import { selectLoanViews, useAppStore } from '../../src/store/useAppStore';
@@ -37,45 +37,79 @@ const LOAN_KIND_LABEL: Record<string, string> = {
  */
 export default function OnboardingLoansScreen() {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
   const state = useAppStore();
 
   const views = useMemo(() => selectLoanViews(state), [state]);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<LoanDraft>(emptyLoanDraft);
+  /**
+   * Which loan the sheet is editing, or null when it is adding a new one.
+   *
+   * A loan is eight fields of typing, and a rate entered as 11.5 when it should
+   * have been 15.1 previously had to be deleted and rebuilt from scratch — on
+   * the very screen where the user is checking the numbers against their bank's
+   * paperwork. The sheet is the same either way; only what Save does differs.
+   */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const monthly = views.reduce((sum, v) => sum + v.installmentMinor, 0);
 
-  function handleAdd() {
-    if (!isLoanDraftValid(draft)) return;
-    state.addLoan(loanDraftToInput(draft, colors.pending));
+  function openNew() {
+    setEditingId(null);
     setDraft(emptyLoanDraft);
+    setOpen(true);
+  }
+
+  function openEdit(view: (typeof views)[number]) {
+    setEditingId(view.loan.id);
+    setDraft(loanDraftFrom(view.loan));
+    setOpen(true);
+  }
+
+  function handleSave() {
+    if (!isLoanDraftValid(draft)) return;
+
+    const input = loanDraftToInput(draft, colors.pending);
+
+    if (editingId) {
+      state.updateLoan(editingId, input);
+    } else {
+      state.addLoan(input);
+    }
+
+    setDraft(emptyLoanDraft);
+    setEditingId(null);
     setOpen(false);
   }
 
   return (
     <>
       <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+        {/*
+          No back arrow here, deliberately.
+
+          Step 4 commits the plan to the database and calls `draft.reset()`
+          before pushing to this screen, so stepping back would land on an empty
+          plan with its "Build" button disabled — a dead end — and pressing it
+          again would duplicate every category. Loans are addable any time from
+          the Loans tab, so there is nothing here the user is trapped out of.
+        */}
+        <StepHeader step={5} title="Any loans or leases?">
+          Add what you're repaying so the plan knows your commitments. Skip
+          if you have none — you can add them any time.
+        </StepHeader>
+
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={{
-            paddingTop: insets.top + space.lg,
-            paddingBottom: space.xl,
+            // Clears the pinned footer, which overlays this list. See FOOTER_CLEARANCE.
+            paddingBottom: space.xl + FOOTER_CLEARANCE,
             paddingHorizontal: space.lg,
             gap: space.lg,
           }}
           showsVerticalScrollIndicator={false}
         >
-          <View style={{ gap: 2 }}>
-            <Label>STEP 5 OF 5</Label>
-            <Text variant="title">Any loans or leases?</Text>
-            <Text variant="small" tone="muted">
-              Add what you're repaying so the plan knows your commitments. Skip
-              if you have none — you can add them any time.
-            </Text>
-          </View>
-
           {views.length > 0 ? (
             <Surface
               style={{
@@ -95,6 +129,21 @@ export default function OnboardingLoansScreen() {
             return (
               <Surface key={view.loan.id} padded={false} style={{ padding: space.md }}>
                 <Row gap={space.md}>
+                  {/* The row opens the loan for editing — see `openEdit`. The
+                      delete stays its own control so a mis-tap cannot remove a
+                      loan the user only meant to correct. */}
+                  <Pressable
+                    onPress={() => openEdit(view)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Edit ${view.loan.name}`}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: space.md,
+                      opacity: pressed ? 0.7 : 1,
+                    })}
+                  >
                   <BankLogo brand={brand} size={40} />
                   <View style={{ flex: 1 }}>
                     <Text variant="bodyStrong" numberOfLines={1}>
@@ -112,6 +161,7 @@ export default function OnboardingLoansScreen() {
                       / month
                     </Text>
                   </View>
+                  </Pressable>
                   <Pressable
                     onPress={() => state.deleteLoan(view.loan.id)}
                     hitSlop={10}
@@ -128,7 +178,7 @@ export default function OnboardingLoansScreen() {
 
           {/* Add another. */}
           <Pressable
-            onPress={() => setOpen(true)}
+            onPress={openNew}
             accessibilityRole="button"
             accessibilityLabel="Add a loan"
             style={({ pressed }) => ({
@@ -161,19 +211,20 @@ export default function OnboardingLoansScreen() {
         </PinnedFooter>
       </View>
 
-      {/* New-loan sheet, sharing the Loans tab's form. */}
+      {/* One sheet for both adding and editing, sharing the Loans tab's form —
+          the fields are identical, so a second sheet could only drift. */}
       <BottomSheet
         visible={open}
         onClose={() => setOpen(false)}
-        title="New loan"
+        title={editingId ? 'Edit loan' : 'New loan'}
         icon="cash-outline"
         iconColor={colors.pending}
         scroll
         footer={
           <GradientButton
-            label="Add loan"
-            icon="add"
-            onPress={handleAdd}
+            label={editingId ? 'Save changes' : 'Add loan'}
+            icon="checkmark"
+            onPress={handleSave}
             disabled={!isLoanDraftValid(draft)}
           />
         }

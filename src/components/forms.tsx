@@ -22,6 +22,7 @@ export function Field({
   onChangeText,
   placeholder,
   keyboardType = 'default',
+  money = false,
   autoFocus,
   multiline,
   style,
@@ -32,6 +33,24 @@ export function Field({
   onChangeText: (text: string) => void;
   placeholder?: string;
   keyboardType?: 'default' | 'numeric' | 'decimal-pad';
+  /**
+   * Treat this as a money field: reshape every keystroke through
+   * `formatAmountInput`, so thousands separators appear as the figure grows and
+   * nothing but a valid partial number can be typed.
+   *
+   * Opt-in rather than inferred from `keyboardType`, because plenty of numeric
+   * fields are NOT money — an odometer reading, a litre count, a percentage
+   * rate, a term in months — and grouping those would be wrong. The caller
+   * knows which it is; the keyboard does not.
+   *
+   * Implies `decimal-pad`: the numeric pad offers punctuation this field would
+   * only strip again.
+   *
+   * The caller therefore always holds a display-formatted string, and
+   * `parseAmount` strips the separators again on save. It already tolerates
+   * them, so callers need no other change.
+   */
+  money?: boolean;
   autoFocus?: boolean;
   multiline?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -45,15 +64,17 @@ export function Field({
   error?: string | null;
 }) {
   const { colors, radius, space } = useTheme();
+  const handleChange = money ? (next: string) => onChangeText(formatAmountInput(next)) : onChangeText;
+
   return (
     <View style={[{ gap: space.sm }, style]}>
       <Label>{label}</Label>
       <TextInput
         value={value}
-        onChangeText={onChangeText}
+        onChangeText={handleChange}
         placeholder={placeholder}
         placeholderTextColor={colors.inkMuted}
-        keyboardType={keyboardType}
+        keyboardType={money ? 'decimal-pad' : keyboardType}
         autoFocus={autoFocus}
         multiline={multiline}
         accessibilityLabel={label}

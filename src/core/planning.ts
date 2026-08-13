@@ -427,6 +427,37 @@ export function dueDateFor(period: string, dueDay: number): Date {
 }
 
 /**
+ * The next calendar date a recurring due-day falls on, counting from `today`.
+ *
+ * `dueDateFor` answers a different question — "where does day N sit inside
+ * period P" — which is right for a month's plan and wrong for a reminder. A
+ * reminder is about what is coming NEXT, so browsing to a past month must not
+ * turn its lines into a pile of overdue ones, and browsing forward must not
+ * hide a bill that is due this week.
+ *
+ * Today itself counts as due (a bill due on the 5th is due all of the 5th, not
+ * yesterday's problem at one minute past midnight). Anything earlier in the
+ * month rolls to the same day next month, clamped to that month's length so a
+ * "31st" bill resolves in February.
+ */
+export function nextDueDate(dueDay: number, today = new Date()): Date {
+  const day = Math.max(1, dueDay);
+
+  const inMonth = (year: number, month: number) => {
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(day, lastDay));
+  };
+
+  const thisMonth = inMonth(today.getFullYear(), today.getMonth());
+
+  // Compare by date, not by time: a bill due today is not overdue at 09:00.
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (thisMonth >= startOfToday) return thisMonth;
+
+  return inMonth(today.getFullYear(), today.getMonth() + 1);
+}
+
+/**
  * How a still-unpaid line sits relative to today: already overdue, due within
  * the next week, or simply upcoming. Drives the dashboard's reminder list,
  * which is the product's reason to exist — the user forgets whether a payment

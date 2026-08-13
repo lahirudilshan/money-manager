@@ -89,8 +89,8 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     blurb: 'Properties whose bills you pay',
     subcategories: [
       { id: 'house-own', name: 'My home', icon: 'home-outline', frequency: 'unplanned', common: true },
-      { id: 'house-parents', name: "Parents' home", icon: 'home-outline', frequency: 'unplanned' },
-      { id: 'house-second', name: 'Second home', icon: 'business-outline', frequency: 'unplanned' },
+      { id: 'house-parents', name: "Primary parent's home", icon: 'home-outline', frequency: 'unplanned' },
+      { id: 'house-second', name: "Secondary parent's home", icon: 'home-outline', frequency: 'unplanned' },
       { id: 'house-rented-out', name: 'Rented out', icon: 'key-outline', frequency: 'unplanned' },
     ],
   },
@@ -158,7 +158,16 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
       { id: 'school-fees', name: 'School fees', icon: 'school-outline', dueDay: 1 },
       { id: 'tuition', name: 'Tuition / classes', icon: 'book-outline', dueDay: 1 },
       { id: 'childcare', name: 'Childcare', icon: 'happy-outline' },
-      { id: 'parents', name: 'Support to parents', icon: 'heart-outline', dueDay: 1 },
+      /*
+       * "Support to parents" deliberately absent.
+       *
+       * A parent's household is a PROPERTY whose bills the user pays, which is
+       * exactly what the Houses category above models — and a house line
+       * accumulates whatever its bills actually came to, where a single monthly
+       * "support" figure is a guess that the real payments then contradict.
+       * Having both meant the same money could be counted twice, on two lines
+       * that never agreed.
+       */
       { id: 'kids-extras', name: "Children's extras", icon: 'balloon-outline' },
     ],
   },
@@ -249,6 +258,39 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     ],
   },
 ];
+
+/**
+ * Catalog categories the onboarding picker does NOT show.
+ *
+ * Both are still real categories — they are simply not things to *choose* in
+ * step 2:
+ *
+ *   - `loans`: step 5 asks about loans and leases properly, with the lender,
+ *     rate and term that make an installment calculable. Picking "Personal loan"
+ *     here as a bare monthly amount produced a second, dumber copy of the same
+ *     debt, and the user then had to reconcile two lines that disagreed.
+ *   - `bank-fees`: nobody plans their bank charges, and asking them to opt in to
+ *     a line they will certainly incur is a question with one sensible answer.
+ *     It is created automatically instead — see `DEFAULT_CATALOG_IDS`.
+ *
+ * The catalog itself is left whole so the SMS hint catalog, restore, and every
+ * lookup by id keep working; this list only narrows what step 2 renders.
+ */
+export const ONBOARDING_HIDDEN_CATEGORY_IDS = new Set(['loans', 'bank-fees']);
+
+/** The categories onboarding step 2 offers, in catalog order. */
+export const ONBOARDING_CATALOG: CatalogCategory[] = CATEGORY_CATALOG.filter(
+  (category) => !ONBOARDING_HIDDEN_CATEGORY_IDS.has(category.id),
+);
+
+/**
+ * Lines every new board gets without being asked.
+ *
+ * Bank charges arrive whether or not anyone planned for them, and the SMS
+ * parser already routes fees to this line by id (see `hintCatalog.ts`) — so
+ * without it those messages land with nowhere to go.
+ */
+export const DEFAULT_CATALOG_IDS = ['bank-charges'];
 
 /** Flat lookup so step 3 can resolve a picked id back to its definition. */
 export const CATALOG_SUBCATEGORY_BY_ID = new Map<

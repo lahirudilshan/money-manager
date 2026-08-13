@@ -75,18 +75,20 @@ export default function NewCategoryScreen() {
 
         <IconPicker value={icon} onChange={(next) => { setIcon(next); setIconTouched(true); }} accent={colors.accent} />
 
-        {state.cards.length > 0 ? (
-          <AccountField
-            label="Transfer money to"
-            cards={state.cards}
-            selectedId={cardId}
-            onSelect={setCardId}
-          />
-        ) : (
-          <Text variant="small" tone="muted">
-            Add an account first to choose where this category's money goes.
-          </Text>
-        )}
+        {/*
+          Always shown — the picker itself offers "Add an account".
+
+          This used to fall back to a line of grey text saying to add an account
+          first, which named the problem and gave no way to act on it. The
+          picker now routes to the account editor, so the field IS the way
+          forward rather than a message about one.
+        */}
+        <AccountField
+          label="Transfer money to"
+          cards={state.cards}
+          selectedId={cardId}
+          onSelect={setCardId}
+        />
 
         <DayPicker value={dueDay} onChange={setDueDay} />
     </BottomSheet>

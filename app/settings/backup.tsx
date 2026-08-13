@@ -2,13 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
 import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import {
   ALL_PARTS,
   DEFAULT_BACKUP_PARTS,
   BACKUP_PARTS,
+  describeSnapshot,
+  parseSnapshot,
   partsOf,
   serialiseSnapshot,
   SETUP_PARTS,
@@ -31,6 +33,7 @@ import {
 } from '../../src/services/backupFile';
 import {
   deleteDriveBackup,
+  downloadDriveBackup,
   driveBlocker,
   isDriveAvailable,
   isSignedIn,
@@ -47,6 +50,26 @@ import { useTheme } from '../../src/theme/ThemeProvider';
  * Google Drive's brand colours, used on the connected card so the section is
  * recognisably about Drive rather than generically "the cloud".
  */
+/**
+ * One row in the Restore list, from either source.
+ *
+ * A tagged union rather than two lists: the row renders identically whichever
+ * source it came from, and only the tap handler differs — local files are read
+ * off disk, Drive files are downloaded first. Keeping them in one array is what
+ * lets the list sort by age across both, which is the question a user restoring
+ * a phone actually has.
+ */
+type RestoreRow = {
+  key: string;
+  source: 'local' | 'drive';
+  title: string;
+  subtitle: string;
+  /** ISO-ish string; both sources sort correctly as text, newest last. */
+  sortKey: string;
+  backup?: StoredBackup;
+  file?: DriveFile;
+};
+
 const DRIVE_BLUE = '#0066DA';
 const DRIVE_GREEN = '#00AC47';
 const DRIVE_YELLOW = '#FFBA00';
@@ -158,8 +181,32 @@ export default function BackupScreen() {
 
   useEffect(() => {
     reload();
-    void isSignedIn().then(setSignedIn);
+    void isSignedIn().then((yes) => {
+      setSignedIn(yes);
+      /*
+       * Pull the Drive listing straight away when an account is connected.
+       *
+       * The Restore section below lists BOTH sources, and a Drive backup that
+       * only loaded when a separate sheet was opened meant the one place the
+       * user looks to restore showed "no backups on this phone" while their
+       * actual backups sat in Drive. Someone restoring onto a new phone has
+       * nothing local by definition — that is the whole case — so the cloud
+       * copies have to be visible without hunting for them.
+       */
+      if (yes) void refreshDriveFiles();
+    });
   }, [reload]);
+
+  /** Fetch the Drive listing into state; silent on failure, since the Restore
+   *  section simply shows fewer rows when the network is down. */
+  const refreshDriveFiles = useCallback(async () => {
+    setDriveBusy(true);
+    try {
+      setDriveFiles(await listDriveBackups());
+    } finally {
+      setDriveBusy(false);
+    }
+  }, []);
 
   async function runDriveBackup() {
     /*
@@ -190,11 +237,15 @@ export default function BackupScreen() {
   }
 
   /**
-   * Sign in, then upload immediately.
+   * Sign in, and stop there.
    *
-   * Connecting an account and then having to hunt for a second button serves
-   * nobody: someone signing into Google on a backup screen has already decided
-   * they want a backup, so the sign-in produces one.
+   * Connecting an account is NOT a request to upload. The backup's scope — which
+   * parts, what label — is chosen on this screen, so a sign-in that immediately
+   * uploaded sent a snapshot the user had not composed yet, and did it before
+   * they could see what connecting had done. Someone who wants a backup now has
+   * the Back up button right there; someone who only wanted the account linked
+   * (to restore an existing backup, most of all) no longer gets a stray upload
+   * they never asked for.
    */
   async function handleConnect() {
     setBusy('signin');
@@ -211,7 +262,6 @@ export default function BackupScreen() {
       }
 
       setSignedIn(true);
-      await runDriveBackup();
     } finally {
       setBusy(null);
       setProgress(null);
@@ -268,13 +318,47 @@ export default function BackupScreen() {
    */
   async function openDriveFiles() {
     setDriveOpen(true);
-    setDriveBusy(true);
-    try {
-      setDriveFiles(await listDriveBackups());
-    } finally {
-      setDriveBusy(false);
-    }
+    await refreshDriveFiles();
   }
+
+  /*
+   * The Restore list: every backup the user can reach, from either source.
+   *
+   * Merged rather than shown as two sections, because "which copy is newest"
+   * is the question being asked and two separately-sorted lists cannot answer
+   * it. Each row carries where it came from, so the choice is still visible —
+   * it just is not the primary axis.
+   *
+   * Sorted newest-first across both. Local rows date from their filename (see
+   * `listBackups`); Drive rows from `modifiedTime`, which is what Drive orders
+   * its own listing by.
+   */
+  const restoreRows = useMemo((): RestoreRow[] => {
+    const local: RestoreRow[] = backups.map((backup) => ({
+      key: `local:${backup.filename}`,
+      source: 'local',
+      title: backup.label || readableStamp(backup.createdAt),
+      subtitle: backup.summary || 'Could not read this file',
+      sortKey: backup.createdAt,
+      backup,
+    }));
+
+    const drive: RestoreRow[] = (driveFiles ?? []).map((file) => ({
+      key: `drive:${file.id}`,
+      source: 'drive',
+      title: readableStamp(file.name.replace(/^money-manager-/, '').replace(/\.json$/i, '')),
+      // Drive does not tell us what is INSIDE without downloading it, so the
+      // row shows size and age instead of the contents summary a local row
+      // carries. The counts appear in the panel once it is opened.
+      subtitle: [formatDriveSize(file.size), file.modifiedTime ? relativeTime(file.modifiedTime) : '']
+        .filter(Boolean)
+        .join(' · '),
+      sortKey: file.modifiedTime,
+      file,
+    }));
+
+    return [...local, ...drive].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+  }, [backups, driveFiles]);
 
   /**
    * Delete one file from Drive, after asking.
@@ -384,6 +468,64 @@ export default function BackupScreen() {
     );
   }
 
+  /**
+   * Restore straight from a Drive file.
+   *
+   * The sheet used to tell the user to open the Drive app, save the file into
+   * the app's documents folder, and come back — which meant a backup made on a
+   * lost phone was, in practice, not restorable at all. The file is already
+   * reachable with the token this screen holds, so it is downloaded here and
+   * handed to the SAME inspect panel a local backup opens.
+   *
+   * Going through that panel rather than restoring on the spot is what keeps the
+   * two gates: `validateSnapshot` below refuses a corrupt file before anything
+   * is deleted, and the panel is where the user picks what to bring back.
+   */
+  async function openDriveBackup(file: DriveFile) {
+    setDriveBusy(true);
+    try {
+      const result = await downloadDriveBackup(file.id);
+
+      if (!result.ok || !result.contents) {
+        Alert.alert('Could not open it', result.error ?? 'The download did not complete.');
+        return;
+      }
+
+      const snapshot = parseSnapshot(result.contents);
+      if (!snapshot) {
+        Alert.alert('That backup is not usable', 'The file could not be read as a backup.');
+        return;
+      }
+
+      const validation = validateSnapshot(snapshot);
+      if (!validation.ok) {
+        Alert.alert('That backup is not usable', validation.problems.join('\n\n'));
+        return;
+      }
+
+      /*
+       * Adapted into the shape the panel already takes, so a Drive backup and a
+       * local one are inspected and restored by exactly one code path — there is
+       * no second restore flow here that could drift from the local one.
+       *
+       * `size` comes back from Drive as a string and is only ever displayed.
+       */
+      setRestoreParts(partsOf(snapshot));
+      setDriveOpen(false);
+      setInspecting({
+        backup: {
+          filename: file.name,
+          size: Number(file.size) || 0,
+          createdAt: file.modifiedTime,
+          summary: describeSnapshot(snapshot),
+        },
+        snapshot,
+      });
+    } finally {
+      setDriveBusy(false);
+    }
+  }
+
   function handleDelete(backup: StoredBackup) {
     Alert.alert('Delete this backup?', 'This removes the file from this device.', [
       { text: 'Cancel', style: 'cancel' },
@@ -476,13 +618,21 @@ export default function BackupScreen() {
                     ? 'Your backup is out of date'
                     : 'Not backed up yet'}
             </Text>
+            {/*
+              One line, not two.
+
+              A safe backup showed a relative time on top and an absolute one
+              underneath — the same fact twice, in two formats. The exact
+              timestamp is the useful half once you know it is recent, so the
+              headline carries the plain state and this carries the detail.
+            */}
             <Text variant="small" tone="secondary">
               {busy
                 ? (progress ?? 'Working…')
                 : safety === 'safe'
                   ? absoluteTime(lastAny!)
                   : safety === 'stale'
-                    ? `Last saved ${relativeTime(lastAny!)} — anything since then exists only on this phone.`
+                    ? 'Anything since then exists only on this phone.'
                     : 'Everything you have recorded exists only on this phone.'}
             </Text>
           </View>
@@ -506,8 +656,6 @@ export default function BackupScreen() {
           title="Back up"
           subtitle="Keep a copy somewhere that survives this phone"
         />
-
-        <Label>ONLINE — GOOGLE DRIVE</Label>
 
         {/*
           The gradient WRAPS the card while connected.
@@ -681,8 +829,6 @@ export default function BackupScreen() {
 
         {/* Always works — no account, no network, no rebuild. But it is a copy
             on the phone the backup protects against, hence the caveat. */}
-        <View style={{ height: space.xs }} />
-        <Label>ON THIS PHONE</Label>
         <Surface padded={false} style={{ overflow: 'hidden' }}>
           <ActionRow
             icon="phone-portrait-outline"
@@ -697,7 +843,12 @@ export default function BackupScreen() {
              * Drive carries the recommendation, and it belongs on the row it
              * qualifies.
              */
-            sublabel="Share it to Drive or AirDrop from the Files app"
+            /* Was "Share it to Drive or AirDrop from the Files app" — a
+               Files-app workflow the "Moving to a new phone" card below already
+               explains in full. Saying it twice made a one-line row look like
+               it needed instructions. This states the trade-off instead, which
+               is the reason to pick Drive over it. */
+            sublabel="Stays on this phone — lost with it"
             busy={busy === 'local'}
             busyLabel={progress}
             onPress={() => {
@@ -716,20 +867,16 @@ export default function BackupScreen() {
         below refers to a "Restore" heading that is not on screen — which reads
         as an instruction for an app they do not have.
       */}
-      {backups.length > 0 ? (
+      {restoreRows.length > 0 ? (
         <View style={{ gap: space.sm }}>
           <SectionHeading
             icon="time-outline"
             title="Restore"
             subtitle="Replace what is on your board with a saved copy"
           />
-          {/* Mirrors the backup section's split, so "where is it saved?" and
-              "where do I restore from?" are answered by the same two words in
-              the same order. */}
-          <Label>ON THIS PHONE</Label>
           <Surface padded={false} style={{ overflow: 'hidden' }}>
-            {backups.map((backup, index) => (
-              <View key={backup.filename}>
+            {restoreRows.map((row, index) => (
+              <View key={row.key}>
                 {index > 0 ? <Divider /> : null}
                 {/*
                   The row body opens the file's contents.
@@ -742,9 +889,15 @@ export default function BackupScreen() {
                   handlers, so opening details cannot be mistaken for either.
                 */}
                 <Pressable
-                  onPress={() => openBackup(backup)}
+                  onPress={() =>
+                    row.source === 'local'
+                      ? openBackup(row.backup!)
+                      : void openDriveBackup(row.file!)
+                  }
                   accessibilityRole="button"
-                  accessibilityLabel={`Details for ${backup.label || readableStamp(backup.createdAt)}`}
+                  accessibilityLabel={`Details for ${row.title}, ${
+                    row.source === 'drive' ? 'in Google Drive' : 'on this phone'
+                  }`}
                   style={({ pressed }) => ({
                     backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
                     flexDirection: 'row',
@@ -763,6 +916,9 @@ export default function BackupScreen() {
                     rest of the app uses for grouped rows makes each backup read
                     as an object you can act on.
                   */}
+                  {/* The mark says WHERE the copy lives — a cloud glyph for
+                      Drive, a document for this phone. That is the one thing
+                      the two row types genuinely differ on. */}
                   <View
                     style={{
                       width: 34,
@@ -770,30 +926,41 @@ export default function BackupScreen() {
                       borderRadius: radius.sm,
                       alignItems: 'center',
                       justifyContent: 'center',
-                      backgroundColor: colors.accentSoft,
+                      backgroundColor:
+                        row.source === 'drive' ? `${DRIVE_BLUE}1A` : colors.accentSoft,
                     }}
                   >
-                    <Ionicons name="document-text-outline" size={17} color={colors.accent} />
+                    <Ionicons
+                      name={row.source === 'drive' ? 'cloud-outline' : 'document-text-outline'}
+                      size={17}
+                      color={row.source === 'drive' ? DRIVE_BLUE : colors.accent}
+                    />
                   </View>
                   <View style={{ flex: 1, gap: 2 }}>
                     {/* The user's own name leads when they gave one — that is
                         what makes a list of backups tellable apart. */}
                     <Text variant="bodyStrong" numberOfLines={1}>
-                      {backup.label || readableStamp(backup.createdAt)}
+                      {row.title}
                     </Text>
-                    {/*
-                      CONTENTS lead the second line, with the date after.
+                    <Row gap={6}>
+                      {/*
+                        Named source, not just a coloured icon.
 
-                      "10 bills · 142 transactions" is what distinguishes two
-                      restore points; the timestamp was already the row's title
-                      when unnamed, so leading with it again said nothing twice
-                      and pushed the counts to the end of the line where they
-                      truncate first.
-                    */}
-                    <Text variant="caption" tone="muted" numberOfLines={1}>
-                      {backup.summary || 'Could not read this file'}
-                      {backup.label ? ` · ${readableStamp(backup.createdAt)}` : ''}
-                    </Text>
+                        "Is this the copy that survives losing the phone?" is the
+                        question, and colour alone cannot answer it for someone
+                        who cannot separate the two tints.
+                      */}
+                      <Text
+                        variant="caption"
+                        color={row.source === 'drive' ? DRIVE_BLUE : colors.inkFaint}
+                        style={{ fontWeight: '700' }}
+                      >
+                        {row.source === 'drive' ? 'Drive' : 'Phone'}
+                      </Text>
+                      <Text variant="caption" tone="muted" numberOfLines={1} style={{ flex: 1 }}>
+                        {row.subtitle}
+                      </Text>
+                    </Row>
                   </View>
                   {/*
                     No "Restore" chip on the row.
@@ -807,9 +974,15 @@ export default function BackupScreen() {
                   */}
                   <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
                   <Pressable
-                    onPress={() => handleDelete(backup)}
+                    onPress={() =>
+                      row.source === 'local'
+                        ? handleDelete(row.backup!)
+                        : handleDriveDelete(row.file!)
+                    }
                     accessibilityRole="button"
-                    accessibilityLabel={`Delete ${backup.filename}`}
+                    accessibilityLabel={`Delete ${row.title} from ${
+                      row.source === 'drive' ? 'Google Drive' : 'this phone'
+                    }`}
                     hitSlop={8}
                     style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                   >
@@ -820,29 +993,6 @@ export default function BackupScreen() {
             ))}
           </Surface>
 
-          {/*
-            The Drive half of restoring, in the Restore section.
-
-            "Backups in Drive" also sits under Back up, because that is where
-            you go right after uploading — but someone looking to bring a copy
-            BACK reads this heading, and finding nothing about Drive under it
-            suggested the cloud files were unreachable from here.
-          */}
-          {signedIn ? (
-            <>
-              <View style={{ height: space.xs }} />
-              <Label>ONLINE — GOOGLE DRIVE</Label>
-              <Surface padded={false} style={{ overflow: 'hidden' }}>
-                <ActionRow
-                  icon="folder-open-outline"
-                  label="Backups in Drive"
-                  sublabel="See what is stored, or remove one"
-                  busy={false}
-                  onPress={() => void openDriveFiles()}
-                />
-              </Surface>
-            </>
-          ) : null}
         </View>
       ) : (
         <View style={{ gap: space.sm }}>
@@ -852,10 +1002,20 @@ export default function BackupScreen() {
             subtitle="Replace what is on your board with a saved copy"
           />
           <Surface style={{ gap: space.xs }}>
+            {/* Says which places were actually checked. "No backups on this
+                phone" was misleading for someone whose copies are all in
+                Drive — they are listed here too now, so the empty state has to
+                account for both or it reads as data lost. */}
             <Text variant="small" tone="secondary">
-              No backups on this phone yet. Save one above, or copy a backup
-              file into {BACKUP_FILES_LOCATION} and it will appear here.
+              {signedIn
+                ? 'No backups yet, on this phone or in your Google Drive. Save one above and it will appear here.'
+                : 'No backups on this phone yet. Save one above, or connect Google Drive to see copies stored there.'}
             </Text>
+            {driveBusy ? (
+              <Text variant="caption" tone="muted">
+                Checking Google Drive…
+              </Text>
+            ) : null}
           </Surface>
         </View>
       )}
@@ -1106,6 +1266,21 @@ export default function BackupScreen() {
                 {driveFiles.map((file, index) => (
                   <View key={file.id}>
                     {index > 0 ? <Divider /> : null}
+                    {/*
+                      The whole row opens the backup, matching the local list.
+
+                      No separate "Restore" chip, for the reason the local rows
+                      note: a button labelled Restore implies it restores, when
+                      what it actually does is open a panel to choose from.
+                    */}
+                    <Pressable
+                      onPress={() => void openDriveBackup(file)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open backup from ${relativeTime(file.modifiedTime)}`}
+                      style={({ pressed }) => ({
+                        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                      })}
+                    >
                     <Row
                       gap={space.md}
                       style={{
@@ -1191,6 +1366,16 @@ export default function BackupScreen() {
                           {file.modifiedTime ? ` · ${relativeTime(file.modifiedTime)}` : ''}
                         </Text>
                       </View>
+                      {/*
+                        No Restore chip here, matching the local list.
+
+                        The row already opens the same inspect panel, and a
+                        button labelled Restore implies it restores when what it
+                        actually does is open a panel to choose from. The
+                        chevron says "there is more here", which is the honest
+                        description of the tap.
+                      */}
+                      <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
                       <Pressable
                         onPress={() => handleDriveDelete(file)}
                         accessibilityRole="button"
@@ -1204,11 +1389,11 @@ export default function BackupScreen() {
                         <Ionicons name="trash-outline" size={17} color={colors.danger} />
                       </Pressable>
                     </Row>
+                    </Pressable>
                   </View>
                 ))}
               </Surface>
 
-              {/* Says how to get one BACK, since this sheet cannot do it. */}
               <Row gap={space.sm} style={{ alignItems: 'flex-start', paddingHorizontal: space.xs }}>
                 <Ionicons
                   name="information-circle-outline"
@@ -1217,8 +1402,7 @@ export default function BackupScreen() {
                   style={{ marginTop: 1 }}
                 />
                 <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-                  To restore one, save it from the Drive app into{' '}
-                  {BACKUP_FILES_LOCATION} — it then appears under Restore.
+                  Tap any backup to see what it holds and choose what to bring back.
                 </Text>
               </Row>
             </>

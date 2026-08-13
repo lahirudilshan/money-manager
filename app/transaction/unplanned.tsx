@@ -67,7 +67,7 @@ export default function AddUnplannedTransaction() {
         label="Amount"
         value={amount}
         onChangeText={setAmount}
-        keyboardType="decimal-pad"
+        money
         placeholder="0"
       />
 

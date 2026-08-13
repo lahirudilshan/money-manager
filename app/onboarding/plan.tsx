@@ -1,19 +1,30 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, TextInput, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { AddAccountSheet } from '../../src/components/AddAccountSheet';
 import { BankLogo } from '../../src/components/BankLogo';
 import { DayPicker } from '../../src/components/DayPicker';
 import { DragList } from '../../src/components/DragList';
 import { FrequencyPicker } from '../../src/components/forms';
-import { BottomSheet, Divider, GradientButton, Label, PinnedFooter, Row, Surface, Text } from '../../src/components/ui';
+import {
+  emptySavingPlanDraft,
+  savingPlanDraftFrom,
+  SavingPlanFields,
+  toSavingPlanPatch,
+  type SavingPlanDraft,
+} from '../../src/components/SavingPlanFields';
+import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '../../src/components/ui';
 import { isHouseCatalogId, isHouseScopedCatalogId } from '../../src/core/houses';
-import { convertToLocalMinor, formatMoney, parseAmount } from '../../src/core/money';
+import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '../../src/core/money';
 import { resolveBrand } from '../../src/data/banks';
-import { CATEGORY_CATALOG } from '../../src/data/categoryCatalog';
+import {
+  CATALOG_SUBCATEGORY_BY_ID,
+  CATEGORY_CATALOG,
+  DEFAULT_CATALOG_IDS,
+} from '../../src/data/categoryCatalog';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useOnboardingDraft, type DraftLine } from '../../src/store/useOnboardingDraft';
+import { hydrateOnboardingDraft, useOnboardingDraft, type DraftLine } from '../../src/store/useOnboardingDraft';
 import { useTheme } from '../../src/theme/ThemeProvider';
 
 const ROW_HEIGHT = 68;
@@ -31,10 +42,11 @@ const ROW_HEIGHT = 68;
  */
 export default function OnboardingPlanScreen() {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
 
   const state = useAppStore();
+  // Reloads an interrupted setup on whichever step the user re-enters on.
+  useState(hydrateOnboardingDraft);
   const draft = useOnboardingDraft();
   const lines = draft.orderedLines();
 
@@ -53,7 +65,17 @@ export default function OnboardingPlanScreen() {
   // A plan is only meaningful once its lines carry amounts, so the finish
   // action stays disabled until every picked line has a budget set.
   const unsetCount = lines.filter((line) => line.plannedMinor <= 0).length;
-  const canBuild = lines.length > 0 && unsetCount === 0;
+  /*
+   * An account is required on every line, not optional.
+   *
+   * The board's whole job is "how much do I move where" — the per-account
+   * transfer rows on the dashboard are built by grouping lines by their funding
+   * account. A line with none was silently left out of that sum, so the transfer
+   * figures were quietly short and the user had no way to see which line was
+   * missing. Requiring it here is cheaper than discovering it a month later.
+   */
+  const unfundedCount = lines.filter((line) => !line.cardId).length;
+  const canBuild = lines.length > 0 && unsetCount === 0 && unfundedCount === 0;
 
   /**
    * Commit the draft: create one category per catalog group that has picked
@@ -93,8 +115,47 @@ export default function OnboardingPlanScreen() {
     // Resolved AFTER the houses above exist — see the comment there.
     const primaryHouseId = state.houses.find((house) => house.isPrimary)?.id ?? null;
 
+    /*
+     * The lines the user picked, plus the ones every board gets regardless.
+     *
+     * Bank charges are the case: nobody opts in to them, the SMS parser already
+     * routes fees to that line by id, and without it those messages arrive with
+     * nowhere to land. Appended rather than pre-ticked in step 2, so it is not a
+     * question the user has to answer — see `DEFAULT_CATALOG_IDS`.
+     *
+     * Guarded against the user having picked it anyway, which would otherwise
+     * create the line twice.
+     */
+    const committed = [...lines];
+    for (const id of DEFAULT_CATALOG_IDS) {
+      if (committed.some((line) => line.id === id)) continue;
+
+      const entry = CATALOG_SUBCATEGORY_BY_ID.get(id);
+      if (!entry) continue;
+
+      committed.push({
+        id: entry.subcategory.id,
+        name: entry.subcategory.name,
+        categoryId: entry.category.id,
+        icon: entry.subcategory.icon,
+        type: entry.subcategory.type ?? 'expense',
+        // No budget: fees are whatever they turn out to be, which is what
+        // `unplanned` means — the line sums its actuals.
+        plannedMinor: 0,
+        dueDay: entry.subcategory.dueDay ?? 1,
+        frequency: entry.subcategory.frequency ?? 'unplanned',
+        // Funded from whichever account the rest of the plan mostly uses; the
+        // charges land on the account they were charged to anyway.
+        cardId: dominantCardId(lines) ?? state.cards[0]?.id ?? null,
+        currency: 'local',
+        foreignAmount: null,
+        planTargetMinor: null,
+        planDueDate: null,
+      });
+    }
+
     const byCategory = new Map<string, DraftLine[]>();
-    for (const line of lines) {
+    for (const line of committed) {
       const bucket = byCategory.get(line.categoryId) ?? [];
       bucket.push(line);
       byCategory.set(line.categoryId, bucket);
@@ -136,6 +197,17 @@ export default function OnboardingPlanScreen() {
           houseScoped: isHouseScopedCatalogId(line.id),
           // Whichever house is the user's own, so the common case needs no tap.
           houseId: primaryHouseId,
+          /*
+           * The save-up plan, carried through to the real subcategory.
+           *
+           * Without these the plan the user built on a yearly line — the whole
+           * point of offering it here — was discarded on commit, and the line
+           * arrived on the board as a plain yearly bill with the monthly figure
+           * as its amount, which reads as an error.
+           */
+          planTargetMinor: line.planTargetMinor,
+          planDueDate: line.planDueDate ? new Date(line.planDueDate) : null,
+          planStartDate: line.planTargetMinor != null ? new Date() : null,
         });
 
         if (line.type === 'income' && line.plannedMinor > 0) {
@@ -161,26 +233,22 @@ export default function OnboardingPlanScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+    <StepHeader step={4} title="Set up your plan" onBack={() => router.back()}>
+      Tap a line to set its amount, day and account. Hold and drag to
+      reorder.
+    </StepHeader>
+
     <ScrollView
       style={{ flex: 1 }}
       contentContainerStyle={{
-        paddingTop: insets.top + space.lg,
-        paddingBottom: space.lg,
+        // Clears the pinned footer, which overlays this list. See FOOTER_CLEARANCE.
+        paddingBottom: space.lg + FOOTER_CLEARANCE,
         paddingHorizontal: space.lg,
         gap: space.lg,
       }}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      <View style={{ gap: 2 }}>
-        <Label>STEP 4 OF 5</Label>
-        <Text variant="title">Set up your plan</Text>
-        <Text variant="small" tone="muted">
-          Tap a line to set its amount, day and account. Hold and drag to
-          reorder.
-        </Text>
-      </View>
-
       {/* Running total, so amounts are entered against live feedback. */}
       {/*
         Label/figure pairs. The label shrinks and the figure holds its width —
@@ -253,10 +321,18 @@ export default function OnboardingPlanScreen() {
 
     <PinnedFooter>
       <View style={{ gap: space.sm }}>
+        {/* Amounts first, accounts second — one instruction at a time, in the
+            order the editor asks for them. */}
         {unsetCount > 0 ? (
           <Row justify="center">
             <Text variant="caption" tone="muted">
               {unsetCount} line{unsetCount === 1 ? '' : 's'} still need an amount
+            </Text>
+          </Row>
+        ) : unfundedCount > 0 ? (
+          <Row justify="center">
+            <Text variant="caption" tone="muted">
+              {unfundedCount} line{unfundedCount === 1 ? '' : 's'} still need an account
             </Text>
           </Row>
         ) : null}
@@ -382,6 +458,29 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
   const state = useAppStore();
   const draft = useOnboardingDraft();
 
+  const [addingAccount, setAddingAccount] = useState(false);
+
+  /*
+   * The saving-plan form's own state, reseeded whenever a different line opens.
+   *
+   * `SavingPlanFields` is a string-shaped form (see `SavingPlanDraft`) while the
+   * draft line stores the resolved target and date, so the two cannot be the
+   * same object — the form has to hold what was typed, including the half-typed
+   * states that resolve to no plan at all.
+   */
+  const [planDraft, setPlanDraft] = useState<SavingPlanDraft>(emptySavingPlanDraft);
+
+  React.useEffect(() => {
+    setPlanDraft(
+      line
+        ? savingPlanDraftFrom({
+            planTargetMinor: line.planTargetMinor,
+            planDueDate: line.planDueDate ? new Date(line.planDueDate) : null,
+          })
+        : emptySavingPlanDraft,
+    );
+  }, [line?.id]);
+
   return (
     <BottomSheet
       visible={Boolean(line)}
@@ -406,33 +505,50 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                   <View style={{ flexShrink: 1 }}>
                     <Label>AMOUNT</Label>
                   </View>
-                  {/* Income is often paid in USD; expenses are local. */}
-                  {line.type === 'income' ? (
-                    <Row gap={space.xs} style={{ flexShrink: 0 }}>
-                      <Chip
-                        label={state.currency}
-                        selected={line.currency === 'local'}
-                        onPress={() =>
-                          draft.updateLine(line.id, { currency: 'local', foreignAmount: null })
-                        }
-                      />
-                      <Chip
-                        label="USD"
-                        selected={line.currency === 'usd'}
-                        onPress={() => draft.updateLine(line.id, { currency: 'usd' })}
-                      />
-                    </Row>
-                  ) : null}
+                  {/*
+                    On EVERY line, not just income.
+
+                    Software subscriptions, cloud storage and streaming are all
+                    billed in USD here, and offering the toggle only on income
+                    meant the user converted at today's rate by hand and typed a
+                    figure that was wrong by the next month. Holding the original
+                    amount and the rate keeps the line honest and lets the row
+                    show "$12 @ rate" rather than a stale local number.
+                  */}
+                  <Row gap={space.xs} style={{ flexShrink: 0 }}>
+                    <Chip
+                      label={state.currency}
+                      selected={line.currency === 'local'}
+                      onPress={() =>
+                        draft.updateLine(line.id, { currency: 'local', foreignAmount: null })
+                      }
+                    />
+                    <Chip
+                      label="USD"
+                      selected={line.currency === 'usd'}
+                      onPress={() => draft.updateLine(line.id, { currency: 'usd' })}
+                    />
+                  </Row>
                 </Row>
 
                 <TextInput
+                  /*
+                   * Grouped for display, so a seven-digit salary is readable as
+                   * it is typed rather than a wall of digits.
+                   *
+                   * This field is unusual: it holds no text state of its own —
+                   * the value is derived from the parsed number in the draft on
+                   * every render. So the formatting is applied to what is shown
+                   * rather than in `onChangeText`, and `parseAmount` below
+                   * strips the separators straight back out.
+                   */
                   value={
                     line.currency === 'usd'
                       ? line.foreignAmount
-                        ? String(line.foreignAmount)
+                        ? formatAmountInput(String(line.foreignAmount))
                         : ''
                       : line.plannedMinor > 0
-                        ? String(line.plannedMinor / 100)
+                        ? formatAmountInput(String(line.plannedMinor / 100))
                         : ''
                   }
                   onChangeText={(text) => {
@@ -451,7 +567,9 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                   }}
                   placeholder="0"
                   placeholderTextColor={colors.inkMuted}
-                  keyboardType="numeric"
+                  // `decimal-pad`, matching every other money field: the
+                  // numeric pad offers punctuation this input only strips.
+                  keyboardType="decimal-pad"
                   autoFocus
                   /*
                    * A salary in rupees runs to seven or eight digits. The field
@@ -481,27 +599,77 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                 ) : null}
               </View>
 
+              {/*
+                `includeUnplanned` — an ongoing spending budget is a cadence a
+                plan needs from the start.
+
+                Groceries, fuel and cash are not one payment on a day; they are a
+                monthly budget that many entries draw against. Leaving that
+                option out of onboarding meant those lines were set up as fixed
+                monthly bills, went "overdue" on their due day, and had to be
+                converted one at a time afterwards.
+              */}
               <FrequencyPicker
                 label="Frequency"
                 value={line.frequency}
+                includeUnplanned
                 onChange={(frequency) =>
-                  // Onboarding offers only the category-default cadences, so the
-                  // narrow to DraftLine's frequency type is safe.
                   draft.updateLine(line.id, {
-                    frequency: frequency as 'monthly' | 'one_time' | 'yearly',
+                    frequency: frequency as DraftLine['frequency'],
+                    // A plan only means anything on a yearly line; leaving a
+                    // stale one behind would set aside money for a due date the
+                    // line no longer has.
+                    ...(frequency === 'yearly'
+                      ? null
+                      : { planTargetMinor: null, planDueDate: null }),
                   })
                 }
               />
 
-              <DayPicker
-                value={line.dueDay}
-                onChange={(dueDay) => draft.updateLine(line.id, { dueDay })}
-              />
+              {/*
+                Save-up plan, offered on yearly lines exactly as the subcategory
+                editor does. Vehicle insurance is the case that drove this: a
+                once-a-year figure that the user would rather fund monthly.
+              */}
+              {line.frequency === 'yearly' ? (
+                <SavingPlanFields
+                  draft={planDraft}
+                  onChange={(next) => {
+                    setPlanDraft(next);
+                    const patch = toSavingPlanPatch(next);
+                    draft.updateLine(line.id, {
+                      planTargetMinor: patch?.planTargetMinor ?? null,
+                      planDueDate: patch?.planDueDate
+                        ? patch.planDueDate.toISOString()
+                        : null,
+                      // The monthly set-aside REPLACES the planned amount, so
+                      // the plan's totals show what is actually put aside each
+                      // month rather than the whole yearly figure.
+                      ...(patch ? { plannedMinor: patch.monthlyMinor } : null),
+                    });
+                  }}
+                />
+              ) : null}
 
-              {state.cards.length > 0 ? (
-                <View style={{ gap: space.sm }}>
-                  {/* Income arrives *into* an account; expenses go *out of* one. */}
+              {/* An ongoing budget has no single day it falls due. */}
+              {line.frequency === 'unplanned' ? null : (
+                <DayPicker
+                  value={line.dueDay}
+                  onChange={(dueDay) => draft.updateLine(line.id, { dueDay })}
+                />
+              )}
+
+              <View style={{ gap: space.sm }}>
+                {/* Income arrives *into* an account; expenses go *out of* one.
+                    Marked required, because it is — see `unfundedCount`. */}
+                <Row justify="space-between" align="center" gap={space.sm}>
                   <Label>{line.type === 'income' ? 'PAID IN TO' : 'PAID FROM'}</Label>
+                  {!line.cardId ? (
+                    <Text variant="caption" color={colors.danger} style={{ fontWeight: '700' }}>
+                      Required
+                    </Text>
+                  ) : null}
+                </Row>
                   <View style={{ gap: space.sm }}>
                     {state.cards.map((card) => {
                       const brand = resolveBrand({
@@ -513,9 +681,16 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                       return (
                         <Pressable
                           key={card.id}
-                          onPress={() =>
-                            draft.updateLine(line.id, { cardId: selected ? null : card.id })
-                          }
+                          /*
+                           * Tapping the chosen account again does NOT clear it.
+                           *
+                           * The field is required, so "none" is not a state the
+                           * user can be in — and a toggle that silently empties
+                           * a mandatory field turns a mis-tap into a line that
+                           * fails validation somewhere the user is no longer
+                           * looking. Switching accounts is still one tap.
+                           */
+                          onPress={() => draft.updateLine(line.id, { cardId: card.id })}
                           accessibilityRole="button"
                           accessibilityState={{ selected }}
                           style={({ pressed }) => ({
@@ -550,12 +725,122 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                         </Pressable>
                       );
                     })}
+
+                    {/*
+                      Adding an account from the place you discover you need
+                      one. Sitting at the END of the list rather than above it,
+                      so the accounts you already have stay the first thing read
+                      and this is what you reach when none of them fit.
+                    */}
+                    <Pressable
+                      onPress={() => setAddingAccount(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Add another account"
+                      /*
+                       * Deliberately the same metrics as an account row above:
+                       * identical padding, radius and border width, and a
+                       * leading tile the same 40px as the rows' BankLogo.
+                       *
+                       * Matching the padding alone would not be enough — a row's
+                       * height is driven by that 40px mark, so a button holding
+                       * only a 20px icon lands noticeably shorter and the list
+                       * ends on a ragged edge.
+                       */
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: space.md,
+                        paddingVertical: space.md,
+                        paddingHorizontal: space.md,
+                        borderRadius: radius.lg,
+                        borderWidth: 2,
+                        borderStyle: 'dashed',
+                        borderColor: colors.hairlineStrong,
+                        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                      })}
+                    >
+                      {/* Stands in for the rows' bank mark, so the text baseline
+                          and the row height both line up with the list. */}
+                      <View
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: radius.md,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: colors.accentSoft,
+                        }}
+                      >
+                        <Ionicons name="add" size={22} color={colors.accent} />
+                      </View>
+                      <Text
+                        variant="bodyStrong"
+                        color={colors.accent}
+                        style={{ flex: 1 }}
+                        numberOfLines={1}
+                      >
+                        {state.cards.length > 0 ? 'Add another account' : 'Add an account'}
+                      </Text>
+                    </Pressable>
                   </View>
-                </View>
-              ) : null}
+              </View>
 
             </>
           ) : null}
+
+      {/*
+        The add-account sheet, stacked INSIDE this one.
+
+        It cannot be its own `<Modal>`: iOS will not present a second modal from
+        inside one that is already up, which is why an earlier pass had to swap
+        the two — unmounting the line editor and losing the user's place. Nor
+        can it replace this sheet's content, because the answer being edited
+        (the line, its amount, its day) should stay visible behind the thing
+        being added.
+
+        `asRoute` renders the shared chrome WITHOUT a Modal wrapper, so an
+        absolutely-positioned overlay inside this sheet gives a real stacked
+        sheet: the line editor stays mounted and on screen underneath, and
+        dismissing this returns to it with nothing lost.
+      */}
+      {addingAccount ? (
+        <View style={StyleSheet.absoluteFill}>
+          {/* Dims the editor behind, so the two layers read as stacked rather
+              than as one confusing merged form. */}
+          <Pressable
+            style={[StyleSheet.absoluteFill, { backgroundColor: colors.overlay }]}
+            accessibilityLabel="Dismiss"
+            onPress={() => setAddingAccount(false)}
+          />
+          <View
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              // Inset from the top so the editor is visibly still there behind
+              // it — the point of stacking rather than replacing.
+              top: space.xxl,
+              borderTopLeftRadius: radius.xl,
+              borderTopRightRadius: radius.xl,
+              overflow: 'hidden',
+              backgroundColor: colors.surface,
+            }}
+          >
+            <AddAccountSheet
+              visible
+              asRoute
+              onClose={() => setAddingAccount(false)}
+              onAdded={(cardId) => {
+                // Assign the new account to the line straight away — needing
+                // one is why the user added it.
+                if (line) draft.updateLine(line.id, { cardId });
+                setAddingAccount(false);
+              }}
+            />
+          </View>
+        </View>
+      ) : null}
     </BottomSheet>
   );
 }

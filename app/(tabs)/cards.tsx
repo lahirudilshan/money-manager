@@ -40,10 +40,10 @@ export default function CardsScreen() {
    * form lives here, so "Edit details" from there navigates in with this param
    * rather than the form being duplicated in two places.
    */
-  const { edit } = useLocalSearchParams<{ edit?: string }>();
+  const { edit, add } = useLocalSearchParams<{ edit?: string; add?: string }>();
 
   // `formId` null = closed; '' = creating new; an id = editing that entry.
-  const [formId, setFormId] = useState<string | null>(edit ?? null);
+  const [formId, setFormId] = useState<string | null>(add ? '' : (edit ?? null));
 
   /*
    * Re-open when the param arrives on an ALREADY-MOUNTED screen.
@@ -55,6 +55,18 @@ export default function CardsScreen() {
   React.useEffect(() => {
     if (edit) setFormId(edit);
   }, [edit]);
+
+  /*
+   * `?add=1` opens the form ready to create.
+   *
+   * Separate from `edit` because the "new" state is the empty string, which is
+   * falsy — so it cannot be signalled through `edit` without every truthiness
+   * check here treating it as "closed". Account pickers elsewhere in the app
+   * link here when the user has nowhere to put the money yet.
+   */
+  React.useEffect(() => {
+    if (add) setFormId('');
+  }, [add]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const detailCard = detailId ? state.cards.find((c) => c.id === detailId) : undefined;
 
