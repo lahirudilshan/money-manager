@@ -197,3 +197,62 @@ describe('paymentsElapsed', () => {
     expect(paymentsElapsed(start, 60, new Date(2025, 0, 15))).toBe(0);
   });
 });
+
+/*
+ * Flat-rate loans — the method Sri Lankan vehicle leases are usually quoted on.
+ *
+ * The distinction is not cosmetic: the same headline rate produces a materially
+ * bigger installment flat than reducing, because interest is charged on the
+ * FULL principal for the whole term rather than on what is still owed.
+ */
+describe('flat-rate interest', () => {
+  const FLAT = {
+    principalMinor: toMinor(7_200_000),
+    annualRatePct: 11.5,
+    termMonths: 60,
+    interestMethod: 'flat' as const,
+  };
+
+  it('charges interest on the full principal for the whole term', () => {
+    // 7,200,000 x 11.5% x 5 years = 4,140,000
+    expect(totalInterest(FLAT)).toBe(toMinor(4_140_000));
+  });
+
+  it('splits principal plus interest evenly', () => {
+    // (7,200,000 + 4,140,000) / 60 = 189,000
+    expect(monthlyInstallment(FLAT)).toBe(toMinor(189_000));
+  });
+
+  it('costs more than the same rate on reducing balance', () => {
+    const flat = monthlyInstallment(FLAT);
+    const reducing = monthlyInstallment({ ...FLAT, interestMethod: 'emi' });
+    expect(flat).toBeGreaterThan(reducing);
+    // ~30,653 a month on this loan — the reason the method has to be recorded
+    // rather than assumed.
+    expect(flat - reducing).toBe(toMinor(189_000) - toMinor(158_346.77));
+  });
+
+  it('charges the same interest every period, unlike a reducing loan', () => {
+    const { schedule } = buildSchedule(FLAT);
+    const first = schedule[0].interestMinor;
+    expect(schedule[29].interestMinor).toBe(first);
+    // The final row absorbs rounding drift, so it is excluded from this check.
+    expect(schedule[58].interestMinor).toBe(first);
+  });
+
+  it('pays the balance down to exactly zero', () => {
+    const { schedule } = buildSchedule(FLAT);
+    expect(schedule[schedule.length - 1].balanceMinor).toBe(0);
+  });
+
+  it('defaults to reducing balance when no method is given', () => {
+    const implicit = monthlyInstallment({
+      principalMinor: toMinor(7_200_000),
+      annualRatePct: 11.5,
+      termMonths: 60,
+    });
+    // The user's spreadsheet figure — every loan recorded before the method
+    // column existed was computed this way and must not change.
+    expect(implicit).toBe(toMinor(158_346.77));
+  });
+});

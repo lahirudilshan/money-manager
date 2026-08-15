@@ -1,0 +1,604 @@
+/**
+ * Health records, as one dated story per person.
+ *
+ * The feature exists because medical history arrives in four incompatible
+ * shapes — a prescription, a consultation, a lab report, a blood-pressure
+ * reading — and lives in four incompatible places: a paper folder, a photo
+ * library, a pharmacy bag, memory. Asking "what has been happening with Amma?"
+ * means reconstructing it from all four every time.
+ *
+ * So the organising idea is a TIMELINE, not four lists. `healthTimeline` merges
+ * every record type onto one dated axis, which is the shape the question is
+ * actually asked in. Four tabs would have been easier to build and would have
+ * left the user doing the merge in their head.
+ *
+ * Everything here is pure — no database, no store — so the rules below are unit
+ * tested without a device, matching core/fuel.ts.
+ */
+
+import type { Minor } from './money';
+
+/** How many days of history the "recent" band covers by default. */
+export const RECENT_WINDOW_DAYS = 90;
+
+/*
+ * ---------------------------------------------------------------------------
+ * The timeline
+ * ---------------------------------------------------------------------------
+ */
+
+/** What kind of thing happened. Drives the icon and colour on the row. */
+export type TimelineKind = 'visit' | 'document' | 'reading' | 'medicine';
+
+/**
+ * One entry on the merged timeline.
+ *
+ * Deliberately flat rather than a tagged union of the four row types: every
+ * consumer wants the same four things (when, what, a line of detail, where to
+ * navigate), and a union would push a four-way switch into every render. The
+ * `kind` is kept so the UI can still style per type, and `refId` points back at
+ * the real row for the tap target.
+ */
+export interface TimelineEntry {
+  id: string;
+  kind: TimelineKind;
+  /** The row this came from, for navigation. */
+  refId: string;
+  personId: string;
+  at: Date;
+  title: string;
+  /** One line of context — the doctor, the dose, the figure. */
+  detail?: string;
+  /** Money attached, when there is any. Visits only, today. */
+  costMinor?: Minor | null;
+  /**
+   * A document's kind, so the row can badge it ("Report", "Prescription").
+   *
+   * Kept as the raw key rather than a label because the label lives in
+   * `DOCUMENT_KIND_LABEL` on the schema, and core/ deliberately holds no UI
+   * strings — the same reason `metric` is not formatted here either.
+   */
+  documentKind?: string;
+  /** Local file URI, so a document row can show its thumbnail. */
+  imageUri?: string | null;
+  /**
+   * A reading's metric key, so a run of them can be grouped.
+   *
+   * Raw rather than the formatted title: "129/82 mmHg" cannot be compared
+   * across rows, and grouping a run needs to know that two entries measure the
+   * same thing.
+   */
+  metricKey?: string;
+  /**
+   * The visit this record came out of, when it came out of one.
+   *
+   * What lets `healthStory` fold a consultation and everything it produced
+   * into a single episode instead of scattering them as unrelated rows.
+   */
+  visitId?: string | null;
+}
+
+/** The minimum a visit needs to appear on the timeline. */
+export interface TimelineVisit {
+  id: string;
+  personId: string;
+  visitedAt: Date;
+  kind: string;
+  doctor?: string | null;
+  facility?: string | null;
+  reason?: string | null;
+  diagnosis?: string | null;
+  costMinor?: Minor | null;
+}
+
+export interface TimelineDocument {
+  id: string;
+  personId: string;
+  title: string;
+  kind: string;
+  documentDate: Date;
+  /** What the page says, in the user's words — the row's detail line. */
+  summary?: string | null;
+  imageUri?: string | null;
+  /** The visit that ordered it, when it came from one. */
+  visitId?: string | null;
+}
+
+export interface TimelineReading {
+  id: string;
+  personId: string;
+  /** The visit it was measured at — null for a reading taken at home. */
+  visitId?: string | null;
+  metric: string;
+  value: number;
+  valueSecondary?: number | null;
+  unit?: string | null;
+  context?: string | null;
+  measuredAt: Date;
+}
+
+export interface TimelineMedicine {
+  id: string;
+  personId: string;
+  name: string;
+  dosage?: string | null;
+  instructions?: string | null;
+  /** When the course began — where it sits on the timeline. */
+  startedOn: Date;
+  /** The consultation that prescribed it, when there was one. */
+  visitId?: string | null;
+}
+
+export interface TimelineSource {
+  visits?: readonly TimelineVisit[];
+  medicines?: readonly TimelineMedicine[];
+  documents?: readonly TimelineDocument[];
+  readings?: readonly TimelineReading[];
+}
+
+/**
+ * Merge every record type into one list, newest first.
+ *
+ * Sorted by date descending because a health timeline is read from "what
+ * happened lately" backwards — the opposite of the funding board, which is
+ * about the month ahead.
+ *
+ * Every entry is something that HAPPENED on a date — a consultation, a
+ * prescription starting, a report filed, a reading taken. Nothing here is
+ * generated by the app on a schedule, so the list stays short enough to scroll
+ * back through a year of it.
+ */
+export function healthTimeline(source: TimelineSource): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+
+  for (const visit of source.visits ?? []) {
+    entries.push({
+      id: `visit:${visit.id}`,
+      kind: 'visit',
+      refId: visit.id,
+      personId: visit.personId,
+      at: visit.visitedAt,
+      title: visit.diagnosis || visit.reason || visitFallbackTitle(visit.kind),
+      detail: [visit.doctor, visit.facility].filter(Boolean).join(' · ') || undefined,
+      costMinor: visit.costMinor ?? null,
+    });
+  }
+
+  for (const medicine of source.medicines ?? []) {
+    entries.push({
+      id: `medicine:${medicine.id}`,
+      kind: 'medicine',
+      refId: medicine.id,
+      personId: medicine.personId,
+      at: medicine.startedOn,
+      title: medicine.name,
+      detail: [medicine.dosage, medicine.instructions].filter(Boolean).join(' · ') || undefined,
+      visitId: medicine.visitId ?? null,
+    });
+  }
+
+  for (const document of source.documents ?? []) {
+    entries.push({
+      id: `document:${document.id}`,
+      kind: 'document',
+      refId: document.id,
+      personId: document.personId,
+      at: document.documentDate,
+      title: document.title,
+      /*
+       * What the report SAYS, not what kind of file it is.
+       *
+       * This used to pass `document.kind` straight through, so a row read
+       * "report" — lowercase, and a restatement of the icon already beside it.
+       * The summary is the line someone actually wrote down off the page
+       * ("Cholesterol slightly high"), which is the whole reason to open a
+       * report again months later. The kind is carried separately so the row
+       * can label it properly rather than in enum case.
+       */
+      detail: document.summary?.trim() || undefined,
+      documentKind: document.kind,
+      imageUri: document.imageUri ?? null,
+      visitId: document.visitId ?? null,
+    });
+  }
+
+  for (const reading of source.readings ?? []) {
+    entries.push({
+      id: `reading:${reading.id}`,
+      kind: 'reading',
+      refId: reading.id,
+      personId: reading.personId,
+      at: reading.measuredAt,
+      title: formatReading(reading),
+      detail: reading.context ?? undefined,
+      metricKey: reading.metric,
+      visitId: reading.visitId ?? null,
+    });
+  }
+
+  return entries.sort((a, b) => b.at.getTime() - a.at.getTime());
+}
+
+/** Local calendar day, so entries group by the user's day and not by UTC. */
+function dayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+/** Midnight local — the anchor both the day grouping and `upcoming` count from. */
+function startOfDay(date: Date): Date {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function visitFallbackTitle(kind: string): string {
+  return kind === 'lab' ? 'Lab test' : kind === 'vaccination' ? 'Vaccination' : 'Visit';
+}
+
+/** "120/80 mmHg" or "5.6 mg/dL" — the reading as a person reads it. */
+export function formatReading(
+  reading: Pick<TimelineReading, 'metric' | 'value' | 'valueSecondary' | 'unit'>,
+): string {
+  const value =
+    reading.valueSecondary != null
+      ? `${trim(reading.value)}/${trim(reading.valueSecondary)}`
+      : trim(reading.value);
+
+  return reading.unit ? `${value} ${reading.unit}` : value;
+}
+
+/** Drops a trailing ".0" so 72 does not render as "72.0". */
+function trim(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+/**
+ * Group a timeline into dated sections, newest first.
+ *
+ * The UI renders a date header then its entries; doing the grouping here keeps
+ * that a `.map` rather than a running comparison against the previous row,
+ * which is the kind of thing that quietly breaks when a list is filtered.
+ */
+export interface TimelineDay {
+  /** Midnight local, for the header. */
+  date: Date;
+  entries: TimelineEntry[];
+}
+
+export function groupTimelineByDay(entries: readonly TimelineEntry[]): TimelineDay[] {
+  const days = new Map<string, TimelineDay>();
+
+  for (const entry of entries) {
+    const key = dayKey(entry.at);
+    const existing = days.get(key);
+
+    if (existing) {
+      existing.entries.push(entry);
+      continue;
+    }
+
+    const date = new Date(entry.at);
+    date.setHours(0, 0, 0, 0);
+    days.set(key, { date, entries: [entry] });
+  }
+
+  return [...days.values()].sort((a, b) => b.date.getTime() - a.date.getTime());
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Readings: trends
+ * ---------------------------------------------------------------------------
+ */
+
+export interface TrendPoint {
+  at: Date;
+  value: number;
+  valueSecondary?: number | null;
+}
+
+export interface Trend {
+  points: TrendPoint[];
+  latest: TrendPoint | null;
+  /** Mean of the primary value across the window. */
+  average: number | null;
+  min: number | null;
+  max: number | null;
+  /**
+   * Change from the FIRST reading to the latest, in the metric's own units.
+   *
+   * Deliberately not a percentage: a 10% rise in blood pressure means nothing
+   * to most people, while "up 12" against a number they recognise does.
+   */
+  change: number | null;
+  direction: 'up' | 'down' | 'flat' | null;
+}
+
+/**
+ * A metric's history, ready to chart.
+ *
+ * Filters by CONTEXT when one is given, because mixing fasting and post-meal
+ * blood sugar produces a trend line that describes neither — the two are
+ * different measurements that happen to share a unit.
+ */
+export function trend(
+  readings: readonly TimelineReading[],
+  options: { metric: string; context?: string | null } = { metric: '' },
+): Trend {
+  const points = readings
+    .filter((reading) => (options.metric ? reading.metric === options.metric : true))
+    .filter((reading) =>
+      options.context ? reading.context === options.context : true,
+    )
+    .map((reading) => ({
+      at: reading.measuredAt,
+      value: reading.value,
+      valueSecondary: reading.valueSecondary ?? null,
+    }))
+    // Oldest first: a chart reads left to right through time.
+    .sort((a, b) => a.at.getTime() - b.at.getTime());
+
+  if (points.length === 0) {
+    return { points, latest: null, average: null, min: null, max: null, change: null, direction: null };
+  }
+
+  const values = points.map((point) => point.value);
+  const first = points[0]!;
+  const latest = points[points.length - 1]!;
+  const change = latest.value - first.value;
+
+  return {
+    points,
+    latest,
+    average: values.reduce((sum, value) => sum + value, 0) / values.length,
+    min: Math.min(...values),
+    max: Math.max(...values),
+    // A single reading is not a trend, however tempting the arrow is.
+    change: points.length > 1 ? change : null,
+    direction:
+      points.length < 2
+        ? null
+        : Math.abs(change) < 0.0001
+          ? 'flat'
+          : change > 0
+            ? 'up'
+            : 'down',
+  };
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Upcoming
+ * ---------------------------------------------------------------------------
+ */
+
+export interface UpcomingItem {
+  kind: 'follow_up';
+  refId: string;
+  personId: string;
+  at: Date;
+  title: string;
+  detail?: string;
+  /** Negative when already overdue, which the UI colours differently. */
+  daysAway: number;
+}
+
+/**
+ * Follow-up appointments still ahead, soonest first.
+ *
+ * Sits at the TOP of the timeline while everything else runs backwards from
+ * today, because it is the only part of a health record that is actionable. A
+ * follow-up written on a card in a consulting room is precisely what gets
+ * forgotten, and burying it below three months of history guarantees it.
+ *
+ * Overdue ones are kept rather than dropped: a missed appointment is more
+ * important to surface than an upcoming one, not less.
+ */
+export function upcoming(
+  visits: readonly (TimelineVisit & { followUpOn?: Date | null })[],
+  now: Date = new Date(),
+  options: { withinDays?: number } = {},
+): UpcomingItem[] {
+  const horizon = options.withinDays ?? 120;
+  const today = startOfDay(now);
+  const items: UpcomingItem[] = [];
+
+  for (const visit of visits) {
+    if (!visit.followUpOn) continue;
+
+    const daysAway = Math.round(
+      (startOfDay(visit.followUpOn).getTime() - today.getTime()) / 86_400_000,
+    );
+
+    // Overdue by more than a fortnight stops being actionable and becomes
+    // clutter — by then it was either attended or abandoned.
+    if (daysAway < -14) continue;
+    if (daysAway > horizon) continue;
+
+    items.push({
+      kind: 'follow_up',
+      refId: visit.id,
+      personId: visit.personId,
+      at: visit.followUpOn,
+      title: 'Follow-up',
+      detail: [visit.doctor, visit.facility].filter(Boolean).join(' · ') || undefined,
+      daysAway,
+    });
+  }
+
+  return items.sort((a, b) => a.at.getTime() - b.at.getTime());
+}
+
+/** "in 3 days" / "today" / "2 days ago" — the phrasing the cards use. */
+export function describeDaysAway(days: number): string {
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days === -1) return 'Yesterday';
+  if (days < 0) return `${Math.abs(days)} days ago`;
+  if (days < 7) return `In ${days} days`;
+  if (days < 14) return 'Next week';
+  return `In ${Math.round(days / 7)} weeks`;
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * The story — the timeline as episodes rather than rows
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * One block on the timeline.
+ *
+ * Three shapes, because a health record contains three genuinely different
+ * kinds of thing and flattening them into uniform rows is what made the old
+ * timeline unreadable:
+ *
+ *   - `episode`   a consultation AND everything it produced — the readings
+ *                 taken in the room, what was prescribed, the report that came
+ *                 back a week later. One thing happened; it shows as one thing.
+ *   - `readings`  a RUN of routine measurements taken outside any visit. Seven
+ *                 home blood-pressure checks were seven dated cards, burying
+ *                 the one consultation that mattered under noise nobody reads
+ *                 line by line. Collapsed, they become "7 readings · 148/95 →
+ *                 129/82", which is the useful summary.
+ *   - `single`    anything standing alone: a prescription started without a
+ *                 consultation, a report filed on its own.
+ */
+export type StoryBlock =
+  | {
+      kind: 'episode';
+      id: string;
+      at: Date;
+      visit: TimelineEntry;
+      /** What came out of it, newest first. */
+      records: TimelineEntry[];
+    }
+  | {
+      kind: 'readings';
+      id: string;
+      at: Date;
+      /** Oldest first, so first → latest reads in the direction of time. */
+      entries: TimelineEntry[];
+      metric: string;
+    }
+  | { kind: 'single'; id: string; at: Date; entry: TimelineEntry };
+
+/**
+ * How many routine readings must pile up before they are collapsed.
+ *
+ * Two is not a run worth hiding — the reader loses more by having to expand it
+ * than they gain in space. Three is where a list starts to feel repetitive.
+ */
+const COLLAPSE_READINGS_AT = 3;
+
+/**
+ * Fold a flat timeline into the story of what actually happened.
+ *
+ * The ordering rule is that an EPISODE sits at its visit's date, not at the
+ * date of its latest record: a report collected a week after the consultation
+ * belongs to that consultation, and floating the whole episode forward would
+ * put it out of sequence with everything around it.
+ */
+export function healthStory(entries: readonly TimelineEntry[]): StoryBlock[] {
+  const visits = entries.filter((entry) => entry.kind === 'visit');
+  const byVisit = new Map<string, TimelineEntry[]>();
+  const loose: TimelineEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.kind === 'visit') continue;
+
+    // Only attach to a visit that is actually in this list — a record whose
+    // visit was deleted must still appear, not vanish into a missing parent.
+    if (entry.visitId && visits.some((visit) => visit.refId === entry.visitId)) {
+      const list = byVisit.get(entry.visitId) ?? [];
+      list.push(entry);
+      byVisit.set(entry.visitId, list);
+      continue;
+    }
+    loose.push(entry);
+  }
+
+  const blocks: StoryBlock[] = visits.map((visit) => ({
+    kind: 'episode' as const,
+    id: visit.id,
+    at: visit.at,
+    visit,
+    records: (byVisit.get(visit.refId) ?? []).sort(
+      (a, b) => b.at.getTime() - a.at.getTime(),
+    ),
+  }));
+
+  /*
+   * Collapse consecutive routine readings OF THE SAME METRIC.
+   *
+   * Same-metric because a run mixing blood pressure and weight has no
+   * meaningful "first → latest", and consecutive because a visit landing in
+   * the middle of a series genuinely breaks it: what happened before the
+   * consultation and after it are different stretches.
+   */
+  loose.sort((a, b) => b.at.getTime() - a.at.getTime());
+
+  /*
+   * Dates where an episode sits, so a run can be cut at them.
+   *
+   * Visits are pulled out of `loose` above, which means a straight scan of the
+   * remaining readings would happily merge the six weeks either side of a
+   * consultation into one run — hiding the very thing the run is context for.
+   * "Before the doctor changed the tablets" and "after" are different
+   * stretches, and a summary spanning both describes neither.
+   */
+  const episodeTimes = visits
+    .map((visit) => visit.at.getTime())
+    .sort((a, b) => b - a);
+
+  /** True when an episode falls between two consecutive readings. */
+  const episodeBetween = (newer: TimelineEntry, older: TimelineEntry): boolean =>
+    episodeTimes.some(
+      (time) => time <= newer.at.getTime() && time >= older.at.getTime(),
+    );
+
+  let run: TimelineEntry[] = [];
+  const flushRun = () => {
+    if (run.length === 0) return;
+
+    if (run.length >= COLLAPSE_READINGS_AT) {
+      blocks.push({
+        kind: 'readings',
+        id: `readings:${run[0]!.id}`,
+        // The run sits at its most recent reading, which is where a reader
+        // looking for "how has it been lately" expects to find it.
+        at: run[0]!.at,
+        entries: [...run].reverse(),
+        metric: run[0]!.metricKey ?? '',
+      });
+    } else {
+      for (const entry of run) {
+        blocks.push({ kind: 'single', id: entry.id, at: entry.at, entry });
+      }
+    }
+    run = [];
+  };
+
+  for (const entry of loose) {
+    const routine = entry.kind === 'reading';
+    const previous = run[run.length - 1];
+    const sameMetric = run.length === 0 || run[0]!.metricKey === entry.metricKey;
+    // A consultation between this reading and the last one ends the stretch.
+    const continuous = !previous || !episodeBetween(previous, entry);
+
+    if (routine && sameMetric && continuous) {
+      run.push(entry);
+      continue;
+    }
+
+    flushRun();
+    if (routine) {
+      run = [entry];
+    } else {
+      blocks.push({ kind: 'single', id: entry.id, at: entry.at, entry });
+    }
+  }
+  flushRun();
+
+  return blocks.sort((a, b) => b.at.getTime() - a.at.getTime());
+}

@@ -7,6 +7,21 @@ is *technically working and still wrong*: a question that makes no sense for
 this user, a default that is absurd for their age, a screen that says nothing
 when it should say something.
 
+## Automated now
+
+Most of this plan runs unattended — see [e2e/README.md](../e2e/README.md):
+
+```bash
+python3 e2e/run.py              # every case
+python3 e2e/run.py personas     # one file
+python3 e2e/run.py kasun-23     # one case
+```
+
+The checkpoints below remain the source of truth for WHAT is worth checking; the
+scripts are how the mechanical parts get checked on every change. Anything that
+needs a human eye — whether a screen *feels* confusing, whether a default is
+insulting — still wants a manual pass.
+
 ## How to run a pass
 
 1. **Settings → Clear all data.** This wipes every table and returns to
@@ -171,6 +186,25 @@ The case that matters most for a real user, and the one that was broken.
       everything return?
 - [ ] Restore a partial scope (setup only, no transactions) — is the result what
       the panel promised?
+
+## Persona 8 — daily usage on an existing board
+
+Onboarding is a one-off. This is the loop someone repeats every month, and it is
+where most real defects live.
+
+**Checkpoints**
+
+- [ ] Two accounts with bills split across them — does the dashboard show a
+      SEPARATE "money to move" row per account, with the right amount in each?
+- [ ] Mark one account's money as moved. Does only that account change?
+- [ ] Open a bill, mark it paid, save. Does it survive a relaunch?
+- [ ] A spending-budget line: can entries be added, and do they sum against the
+      monthly budget?
+- [ ] **Bank charges** must NOT be pinned to one account — fees are levied by
+      whichever bank charged them, so the line (and its category) should name no
+      account and must not inflate any one account's transfer total.
+- [ ] Delete a subcategory that has entries. The app must not crash.
+- [ ] Add an account after setup; can existing lines be moved onto it?
 
 ## Persona 7 — the "Coming up" / dates pass
 

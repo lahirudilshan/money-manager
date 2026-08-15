@@ -98,7 +98,37 @@ const BRANDS: [SpendCategory, string[]][] = [
   ['fuel', ['ceypetco', 'ioc', 'sinopec', 'petroleum']],
   ['electricity', ['ceb', 'leco', 'ceylon electricity']],
   ['water', ['nwsdb', 'national water supply', 'water board']],
-  ['dining', ['pizza hut', 'kfc', 'mcdonald', 'burger king', 'dominos', 'barista', 'coffee bean', 'cinnamon', 'shangri', 'kingsbury', 'movenpick']],
+  /*
+   * Food DELIVERY is listed before the ride-hailing brands below, and the
+   * two-word forms are what make it work.
+   *
+   * "UBER EATS" and "PICKME FOOD" are the same companies as the taxi services,
+   * so the bare brand matched `transport` and a food order was filed as a ride
+   * — the user's real UBER EATS row scored transport 0.91 with nothing to
+   * contest it. The full service name is the discriminator, and because both
+   * are matched as phrases the longer one is the specific answer.
+   *
+   * This is the single biggest source of misfiled food spend: delivery is
+   * ordered far more often than taxis for most people, and every order was
+   * landing on the wrong line.
+   */
+  ['dining', [
+    'uber eats', 'ubereats', 'pickme food', 'pickme foods', 'pick me food',
+    'glovo', 'deliveroo', 'foodpanda', 'food panda', 'menulog', 'kapruka food',
+    /*
+     * Both forms of the possessive brands.
+     *
+     * Boundaries are matched on whole words (see `phraseIndex`, which protects
+     * "spar" from firing inside "Sparrow"), so "mcdonald" does NOT match
+     * "MCDONALDS" — the trailing s is a word character. Listing the plural is
+     * the fix that keeps the boundary rule intact.
+     */
+    'pizza hut', 'kfc', 'mcdonald', 'mcdonalds', "mcdonald's",
+    'burger king', 'dominos', "domino's",
+    'subway', 'starbucks', 'popeyes', 'taco bell', 'dunkin',
+    'barista', 'coffee bean', 'java lounge', 'chinese dragon', 'nihonbashi',
+    'cinnamon', 'shangri', 'kingsbury', 'movenpick', 'galle face hotel',
+  ]],
   ['clothing', ['odel', 'nolimit', 'no limit', 'fashion bug', 'cool planet', 'hameedia', 'kelly felder']],
   ['subscription', ['netflix', 'spotify', 'youtube', 'anthropic', 'openai', 'icloud', 'apple.com', 'google', 'microsoft', 'adobe']],
   ['entertainment', ['scope cinemas', 'savoy', 'liberty cinema', 'pvr']],
@@ -121,12 +151,40 @@ const VOCABULARY: [SpendCategory, RegExp[]][] = [
     /\bchemist/i, /\bdrug\s*store\b/i, /\bsurgery\b/i, /\bdoctor\b/i, /\bchannel/i,
   ]],
   ['groceries', [
-    /\bsupermarket\b/i, /\bsuper\b/i, /\bgrocer/i, /\bfoods?\b/i, /\bmart\b/i,
-    /\bstores?\b/i, /\bfresh\b/i, /\bmarket\b/i, /\bprovision/i,
+    /\bsupermarket\b/i, /\bsuper\b/i, /\bgrocer/i,
+    /*
+     * A bare "food" means the grocery kind — a shop called FOODS, or a typed
+     * "food expenses" — but NOT when the next word makes it restaurant food.
+     *
+     * Without the guard the generic word beats the specific phrase: "food
+     * delivery" matched `food` at position 0 and took the lead-name bonus, so
+     * groceries scored 0.91 against dining's 0.85 and a delivery order was
+     * filed as a supermarket run. The lookahead is the cheapest correct fix —
+     * it lets the more specific dining phrase win by simply declining to
+     * compete.
+     */
+    /(?<!\boutside\s)\bfoods?\b(?!\s*(?:delivery|deliveries|court|panda))/i,
+    /\bmart\b/i, /\bstores?\b/i, /\bfresh\b/i, /\bmarket\b/i, /\bprovision/i,
   ]],
   ['dining', [
     /\brestaurant\b/i, /\bcafe\b/i, /\bcoffee\b/i, /\bbakery\b/i, /\bpizza\b/i,
     /\bhotel\b/i, /\bresort\b/i, /\bkitchen\b/i, /\bdining\b/i, /\bbar\s*&?\s*grill\b/i,
+    /*
+     * The MEAL words, which matter most for a typed transfer reason.
+     *
+     * A user annotating their own transfer writes "dinner with family" or
+     * "lunch", never "restaurant" — and those scored nothing at all, so the
+     * transfer arrived with no category despite saying plainly what it was.
+     * These are the outside-food counterpart to the grocery vocabulary below.
+     *
+     * "takeaway"/"delivery" are here rather than under groceries because food
+     * brought to the door is restaurant food; it is eating out without the
+     * travel, which is exactly the distinction the split has to get right.
+     */
+    /\bdinner\b/i, /\blunch\b/i, /\bbreakfast\b/i, /\bbrunch\b/i,
+    /\beat(?:ing)?\s*out\b/i, /\btake\s*away\b/i, /\btakeout\b/i,
+    /\bfood\s*delivery\b/i, /\boutside\s*food\b/i, /\bmeal\b/i, /\bbuffet\b/i, /\bcanteen\b/i,
+    /\bhotel\s*food\b/i, /\bshort\s*eats?\b/i, /\bfast\s*food\b/i,
   ]],
   ['fuel', [/\bfuel\b/i, /\bpetrol\b/i, /\bdiesel\b/i, /\bfilling\s*station\b/i, /\bgas\s*station\b/i]],
   ['transport', [/\btaxi\b/i, /\buber\b/i, /\bpickme\b/i, /\brailway\b/i, /\bbus\b/i, /\bparking\b/i, /\btoll\b/i]],
@@ -404,7 +462,16 @@ export const CATEGORY_SELF_WORDS: Record<SpendCategory, RegExp[]> = {
   water: [/\bwater\b/i],
   electricity: [/\belectric(?:ity)?\b/i, /\bpower\b/i, /\bceb\b/i],
   telecom: [/\bphone\b/i, /\bmobile\b/i, /\binternet\b/i, /\bbroadband\b/i, /\btelecom\b/i],
-  groceries: [/\bgrocer(?:y|ies)\b/i, /\bfood\b/i, /\bshopping\b/i, /\bsupermarket\b/i],
+  /*
+   * The two food lines must not answer to each other's category.
+   *
+   * Both entries carried a bare `\bfood\b`, so "Groceries (home food)" and
+   * "Eating out & delivery" each matched BOTH guesses — the two lines tied at
+   * 0.50 and the winner fell to board order, which put a UBER EATS delivery on
+   * the Groceries line while the hint said dining. Qualifying the word is what
+   * makes the split resolvable: home food here, restaurant food below.
+   */
+  groceries: [/\bgrocer(?:y|ies)\b/i, /\bhome\s*food\b/i, /\bshopping\b/i, /\bsupermarket\b/i],
   fuel: [/\bfuel\b/i, /\bpetrol\b/i, /\bdiesel\b/i, /\bgas\b/i],
   subscription: [/\bsubscription(?:s)?\b/i, /\bstreaming\b/i],
   loan: [/\bloan(?:s)?\b/i, /\blease\b/i, /\bdebt\b/i, /\bcredit\b/i, /\binstal/i],
@@ -413,12 +480,18 @@ export const CATEGORY_SELF_WORDS: Record<SpendCategory, RegExp[]> = {
   income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
   bank_charge: [/\bbank\b[^.]{0,20}\b(?:charge|fee)/i, /\b(?:charge|fee)s?\b/i],
   health: [/\bhealth\b/i, /\bmedic/i, /\bhospital\b/i, /\bpharmac/i, /\bdoctor\b/i, /\bdental\b/i],
-  dining: [/\bdining\b/i, /\beating\s*out\b/i, /\brestaurant\b/i, /\bfood\b/i, /\bcafe\b/i],
+  // The outside-food half — "delivery"/"takeaway" so the line answers to this
+  // category by every part of its name. See the groceries note above.
+  dining: [
+    /\bdining\b/i, /\beating\s*out\b/i, /\brestaurant\b/i, /\bcafe\b/i,
+    /\bdelivery\b/i, /\btake\s*away\b/i, /\boutside\s*food\b/i,
+  ],
   clothing: [/\bcloth/i, /\bapparel\b/i, /\bfashion\b/i, /\bshoes?\b/i],
   education: [/\bschool\b/i, /\btuition\b/i, /\beducation\b/i, /\bclasses\b/i, /\bkids?\b/i],
   transport: [/\btransport\b/i, /\btaxi\b/i, /\btravel\b/i, /\bbus\b/i, /\btrain\b/i, /\bparking\b/i],
   entertainment: [/\bentertainment\b/i, /\bcinema\b/i, /\bmovie/i, /\bhobb/i, /\bfun\b/i],
-  household: [/\bhousehold\b/i, /\bhome\b/i, /\bfurniture\b/i, /\brepairs?\b/i, /\bmaintenance\b/i],
+  // "home" must not swallow "Groceries (home food)".
+  household: [/\bhousehold\b/i, /\bhome\b(?!\s*food)/i, /\bfurniture\b/i, /\brepairs?\b/i, /\bmaintenance\b/i],
   insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpolicy\b/i, /\bpremium\b/i],
 };
 

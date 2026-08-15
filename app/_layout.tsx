@@ -335,7 +335,17 @@ function RootNavigator() {
   // infinite "Maximum update depth exceeded" loop, not a real redirect.
   useEffect(() => {
     if (ready && needsOnboarding) {
-      router.replace('/onboarding');
+      /*
+       * The welcome screen, not step 1 of setup.
+       *
+       * Someone opening the app on a NEW PHONE already has a plan and wants it
+       * back — sending them straight into "pick your banks" asks them to
+       * rebuild what they are about to restore, and the restore screen itself
+       * lived behind this flow in Settings, so it was unreachable exactly when
+       * it was needed. `welcome` offers the fork; picking "set up a new plan"
+       * continues to `/onboarding/index` as before.
+       */
+      router.replace('/onboarding/welcome');
     }
   }, [ready, needsOnboarding, router]);
 
@@ -435,6 +445,30 @@ function RootNavigator() {
           <Stack.Screen name="mini/fuel/entry" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/fuel/vehicle" />
           <Stack.Screen name="mini/fuel/services" />
+          {/*
+            Health add-on — see core/miniApps.ts. Same reasoning as fuel above:
+            pushed screens rather than sheets, because this is a place the user
+            goes and drills into (people, medicines, individual visits).
+
+            The forms are sheets, though. Each one is a task that gets filled in
+            and dismissed, and the chooser that leads to them uses `replace` so
+            backing out of a form returns to the timeline rather than to the
+            chooser it came through.
+          */}
+          <Stack.Screen name="mini/health/index" />
+          <Stack.Screen name="mini/health/prescriptions" />
+          {/* Browsing destinations: places you go and come back from, so they
+              are pushed screens like the timeline itself. */}
+          <Stack.Screen name="mini/health/vitals" />
+          <Stack.Screen name="mini/health/documents" />
+          {/* One visit and everything that came out of it. A place you go
+              and come back from, so a pushed screen rather than a sheet. */}
+          <Stack.Screen name="mini/health/case" />
+          <Stack.Screen name="mini/health/person" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/health/medicine" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/health/visit" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/health/reading" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/health/document" options={SHEET_ROUTE} />
         </Stack>
         )}
       </AppLockGate>

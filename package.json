@@ -58,7 +58,9 @@
     "web": "expo start --web",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "python3 e2e/run.py",
+    "test:all": "vitest run && python3 e2e/run.py"
   },
   "private": true,
   "packageManager": "yarn@4.9.1"

@@ -80,16 +80,25 @@ import {
   stateRepo,
   subcategoryRepo,
   vehicleRepo,
+  healthPersonRepo,
   transactionRepo,
   SETTINGS_KEYS,
 } from '../db/repositories';
 import { seedSampleTemplate } from '../db/seed';
 import { seedFuelSample } from '../db/seedFuel';
+import { seedHealthSample } from '../db/seedHealth';
 import {
   cancelAllReminders,
   notifyDraftsImported,
 } from '../services/notifications';
-import { isUnplanned, supportsSavingPlan, type NewVehicle, type Vehicle } from '../db/schema';
+import {
+  isUnplanned,
+  supportsSavingPlan,
+  type NewVehicle,
+  type Vehicle,
+  type HealthPerson,
+  type NewHealthPerson,
+} from '../db/schema';
 import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '../core/houses';
 import { toggleMiniApp, type MiniAppId } from '../core/miniApps';
 import type {
@@ -200,9 +209,14 @@ export interface AppState {
 
   /** Vehicles for the fuel mini-app. Empty unless it has been used. */
   vehicles: Vehicle[];
+  /** Family members tracked by the health add-on — see core/miniApps.ts. */
+  healthPeople: HealthPerson[];
   addVehicle: (input: Omit<NewVehicle, 'id'>) => Vehicle;
   updateVehicle: (id: string, patch: Partial<NewVehicle>) => void;
   deleteVehicle: (id: string) => void;
+  addHealthPerson: (input: Omit<NewHealthPerson, 'id'>) => HealthPerson;
+  updateHealthPerson: (id: string, patch: Partial<NewHealthPerson>) => void;
+  deleteHealthPerson: (id: string) => void;
 
   initialise: () => Promise<void>;
   refresh: () => void;
@@ -360,6 +374,17 @@ export interface AppState {
    * launch/foreground drains — iOS fires no events while the app is suspended.
    */
   watchSmsInbox: () => () => void;
+  /**
+   * Drain the inbox, re-pair the queue and refresh the review list in one call —
+   * the whole detection cycle, for a screen that has just come into view.
+   *
+   * Exists so the dashboard can sync on focus without reproducing the ordering
+   * the foreground handler already gets right (drain, then prune across the
+   * WHOLE queue, then load). Cheap and idempotent when nothing arrived: the
+   * drain's re-entrancy guard absorbs an overlapping call, and a drain that
+   * imports nothing does no writes.
+   */
+  syncSmsNow: () => void;
   /** Messages waiting in the inbox file, without consuming them. */
   smsInboxWaiting: number;
   /** Re-read the waiting count from disk. */
@@ -530,6 +555,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   catalogSyncing: false,
   miniApps: '',
   vehicles: [],
+  healthPeople: [],
 
   async initialise() {
     initialiseDatabase();
@@ -666,6 +692,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       catalogSyncedAt: settingsRepo.get(SETTINGS_KEYS.catalogSyncedAt) ?? null,
       miniApps: settingsRepo.get(SETTINGS_KEYS.miniApps) ?? '',
       vehicles: vehicleRepo.all(),
+      /*
+       * People only — never their records.
+       *
+       * The store holds what every health screen needs to render a header (who
+       * exists), while medicines, doses, visits and readings are read straight
+       * from the repositories by the screen that shows them, exactly as the
+       * fuel app does with fill-ups. Keeping a family's medical history in the
+       * global store would load it on every launch for the majority who never
+       * enable this — and would keep it in memory long after the screen closed.
+       */
+      healthPeople: healthPersonRepo.all(),
     });
   },
 
@@ -687,6 +724,13 @@ export const useAppStore = create<AppState>((set, get) => ({
      * so this cannot duplicate on a re-toggle.
      */
     if (on && id === 'fuel') seedFuelSample();
+    /*
+     * Same reasoning as fuel: every health screen is built around history — a
+     * timeline, an adherence percentage, a trend chart — and all three are
+     * blank with no data, which reads as broken rather than as new. The sample
+     * is one clearly-labelled person; deleting them cascades it all away.
+     */
+    if (on && id === 'health') seedHealthSample();
 
     set({ miniApps: next });
     get().refresh();
@@ -706,6 +750,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   /** Cascades to the vehicle's fill-ups and services — see the schema. */
   deleteVehicle(id) {
     vehicleRepo.remove(id);
+    get().refresh();
+  },
+
+  addHealthPerson(input) {
+    /*
+     * `isSelf` is NOT decided here any more.
+     *
+     * It used to be set silently on the first person added, which guessed at
+     * something the user was never asked and could not see. "Myself" is now one
+     * of the relations they pick from, and `healthPersonRepo.create` derives
+     * the flag from that — so the answer lives in one place, chosen rather than
+     * inferred.
+     */
+    const created = healthPersonRepo.create({
+      ...input,
+      sortOrder: get().healthPeople.length,
+    });
+    get().refresh();
+    return created;
+  },
+
+  updateHealthPerson(id, patch) {
+    healthPersonRepo.update(id, patch);
+    get().refresh();
+  },
+
+  /** Cascades to every medicine, dose, visit, document and reading. */
+  deleteHealthPerson(id) {
+    healthPersonRepo.remove(id);
     get().refresh();
   },
 
@@ -1288,6 +1361,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       principalMinor: loan.principalMinor,
       annualRatePct: loan.annualRatePct,
       termMonths: loan.termMonths,
+      interestMethod: loan.interestMethod,
     });
 
     const debtCategory =
@@ -1328,6 +1402,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       principalMinor: updated.principalMinor,
       annualRatePct: updated.annualRatePct,
       termMonths: updated.termMonths,
+      interestMethod: updated.interestMethod,
     });
 
     // Renaming the loan renames its line as well, so the two never disagree on
@@ -2117,20 +2192,31 @@ export const useAppStore = create<AppState>((set, get) => ({
      * pending from an earlier session are on screen rather than waiting for the
      * queue to change.
      */
-    const stopForeground = onForeground(() => {
-      const summary = get().drainSmsInbox();
-      // The halves of one transfer routinely arrive in DIFFERENT batches (the
-      // sending and receiving banks alert independently), so pairing has to run
-      // over the whole queue after each import, not only within a batch.
-      get().pruneSmsQueue();
-      get().loadSmsDrafts();
-      if (summary.queued > 0) get().refresh();
-    });
+    const stopForeground = onForeground(() => get().syncSmsNow());
 
     return () => {
       stopWatching();
       stopForeground();
     };
+  },
+
+  /**
+   * One full detection cycle: import, re-pair, re-render.
+   *
+   * The ordering is the point, and it is why this is one action rather than
+   * three calls at each site. `pruneSmsQueue` has to see the whole queue, not
+   * just this batch — the two halves of a transfer routinely arrive from the
+   * sending and receiving banks in separate imports — and `loadSmsDrafts` runs
+   * unconditionally so rows left pending from an earlier session appear even
+   * when this drain imported nothing.
+   */
+  syncSmsNow() {
+    const summary = get().drainSmsInbox();
+    get().pruneSmsQueue();
+    get().loadSmsDrafts();
+    // Only a real import changes the board's figures; the queue itself is
+    // already re-rendered by `loadSmsDrafts` above.
+    if (summary.queued > 0) get().refresh();
   },
 
   confirmDraft(draftId, overrides) {
@@ -2856,6 +2942,9 @@ export function selectLoanViews(state: AppState): LoanView[] {
       principalMinor: loan.principalMinor,
       annualRatePct: loan.annualRatePct,
       termMonths: loan.termMonths,
+      // Reducing-balance vs flat — a lease quoted flat costs materially more
+      // per month than the same headline rate reducing. See core/amortization.
+      interestMethod: loan.interestMethod,
     };
     const schedule = buildSchedule(terms);
     // Prefer the explicit "installments paid" the user entered; fall back to

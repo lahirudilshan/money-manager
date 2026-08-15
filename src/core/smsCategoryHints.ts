@@ -148,6 +148,45 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
       /\bbroadband\b/i,
     ],
   ],
+  /*
+   * Eating out, checked BEFORE groceries.
+   *
+   * Entry order is the tie-break when a message matches two tags (see the list
+   * comment above), and these two overlap constantly: "UBER EATS" and "FOOD
+   * CITY" both contain grocery-ish words. Delivery and restaurant names are the
+   * more specific reading, so they get first refusal.
+   *
+   * "food city" stays under groceries below and is unaffected — it is matched
+   * as a whole phrase there, and nothing here claims it.
+   */
+  [
+    'dining',
+    [
+      /\buber\s*eats\b/i,
+      /\bpick\s*me\s*food/i,
+      /\bfood\s*panda\b/i,
+      /\bfoodpanda\b/i,
+      /\bglovo\b/i,
+      /\bdeliveroo\b/i,
+      /\brestaurant\b/i,
+      /\bcafe\b/i,
+      /\bbakery\b/i,
+      /\bpizza\b/i,
+      /\bkfc\b/i,
+      /\bmcdonald/i,
+      /\bburger\s*king\b/i,
+      /\bdomino/i,
+      /\bsubway\b/i,
+      /\bstarbucks\b/i,
+      /\bdinner\b/i,
+      /\blunch\b/i,
+      /\bbreakfast\b/i,
+      /\beat(?:ing)?\s*out\b/i,
+      /\btake\s*away\b/i,
+      /\bfood\s*delivery\b/i,
+      /\bshort\s*eats?\b/i,
+    ],
+  ],
   [
     'groceries',
     [
@@ -257,7 +296,16 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
   water: [/\bwater\b/i],
   electricity: [/\belectric(?:ity)?\b/i, /\bpower\b/i],
   telecom: [/\bphone\b/i, /\bmobile\b/i, /\binternet\b/i, /\bbroadband\b/i, /\btelecom\b/i],
-  groceries: [/\bgrocer(?:y|ies)\b/i, /\bfood\b/i, /\bshopping\b/i],
+  /*
+   * "food" here must mean the AT-HOME kind.
+   *
+   * These patterns match a BILL's own name, and the two food lines are now
+   * "Groceries (home food)" and "Eating out & delivery" — so a bare `\bfood\b`
+   * made the Groceries line answer to the `dining` hint as well, and a delivery
+   * order was scored against groceries and filed there. The qualifier is what
+   * keeps the two lines distinguishable by name.
+   */
+  groceries: [/\bgrocer(?:y|ies)\b/i, /\bhome\s*food\b/i, /\bshopping\b/i],
   fuel: [/\bfuel\b/i, /\bpetrol\b/i, /\bdiesel\b/i, /\bgas\b/i],
   subscription: [/\bsubscription(?:s)?\b/i, /\bstreaming\b/i],
   loan: [/\bloan(?:s)?\b/i, /\blease\b/i, /\bdebt\b/i, /\bcredit\b/i],
@@ -273,12 +321,25 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
    * the entries above do, for the categories the scorer can now detect.
    */
   health: [/\bhealth\b/i, /\bmedic(?:al|ine)\b/i, /\bdoctor\b/i, /\bhospital\b/i, /\bpharmac/i],
-  dining: [/\bdining\b/i, /\brestaurant\b/i, /\beat(?:ing)?\s*out\b/i, /\bcafe\b/i],
+  // "delivery" and "takeaway" so the "Eating out & delivery" line answers to
+  // this tag by every part of its name, not only the first two words.
+  dining: [
+    /\bdining\b/i, /\brestaurant\b/i, /\beat(?:ing)?\s*out\b/i, /\bcafe\b/i,
+    /\bdelivery\b/i, /\btake\s*away\b/i,
+  ],
   clothing: [/\bcloth(?:es|ing)\b/i, /\bapparel\b/i, /\bfashion\b/i],
   education: [/\beducation\b/i, /\btuition\b/i, /\bschool\b/i, /\bclasses\b/i],
   transport: [/\btransport\b/i, /\btaxi\b/i, /\bbus\b/i, /\btravel\b/i],
   entertainment: [/\bentertainment\b/i, /\bcinema\b/i, /\bmovies?\b/i, /\bleisure\b/i],
-  household: [/\bhousehold\b/i, /\bhome\b/i, /\bfurniture\b/i, /\bappliance/i],
+  /*
+   * "home" must not swallow "Groceries (home food)".
+   *
+   * The lookahead is what keeps the grocery line out of the household tag now
+   * that its name carries the home/outside qualifier — a supermarket run would
+   * otherwise be proposed against Household items, which is the same mistake
+   * ATM cash used to make.
+   */
+  household: [/\bhousehold\b/i, /\bhome\b(?!\s*food)/i, /\bfurniture\b/i, /\bappliance/i],
   insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpremium\b/i],
 };
 

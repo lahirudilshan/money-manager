@@ -7,7 +7,6 @@ import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-nati
 import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
 import {
   ALL_PARTS,
-  DEFAULT_BACKUP_PARTS,
   BACKUP_PARTS,
   describeSnapshot,
   parseSnapshot,
@@ -125,7 +124,17 @@ export default function BackupScreen() {
    * ends up with a file missing their transactions without having asked for
    * that.
    */
-  const [parts, setParts] = useState<BackupPartKey[]>(DEFAULT_BACKUP_PARTS);
+  /*
+   * Every part ticked, including the sensitive one.
+   *
+   * `DEFAULT_BACKUP_PARTS` leaves "Messages awaiting review" out — raw bank SMS
+   * text — on the argument that it should never leave the phone because a
+   * default said so. Chosen deliberately against that here: a backup that
+   * quietly omits a part is how someone restores onto a new phone and finds
+   * their unreviewed messages gone. The tickbox is right there to drop it, and
+   * the privacy note at the foot of the screen now states which way this falls.
+   */
+  const [parts, setParts] = useState<BackupPartKey[]>(ALL_PARTS);
   const [label, setLabel] = useState('');
   /**
    * Whether the "what should this backup include?" sheet is open.
@@ -153,7 +162,14 @@ export default function BackupScreen() {
    * with a destructive action already in reach.
    */
   const [inspecting, setInspecting] = useState<
-    null | { backup: StoredBackup; snapshot: Snapshot | null }
+    null | {
+      backup: StoredBackup;
+      snapshot: Snapshot | null;
+      /** Where this copy lives, so the panel's mark matches the row's. */
+      source: 'local' | 'drive';
+      /** Contents still downloading — Drive only; local files read instantly. */
+      loading?: boolean;
+    }
   >(null);
   /**
    * What is actually in the Drive folder, and whether it is being fetched.
@@ -338,7 +354,18 @@ export default function BackupScreen() {
       key: `local:${backup.filename}`,
       source: 'local',
       title: backup.label || readableStamp(backup.createdAt),
-      subtitle: backup.summary || 'Could not read this file',
+      /*
+       * Age first, then what is in it.
+       *
+       * A Drive row leads with its age and a local row led with its contents,
+       * so the merged list — whose whole point is "which copy is newest?" —
+       * answered that question for half its rows and not the other half. The
+       * age is the axis the list is sorted on; it belongs in the same position
+       * on every row.
+       */
+      subtitle: backup.summary
+        ? `${relativeTime(stampToIso(backup.createdAt))} · ${backup.summary}`
+        : 'Could not read this file',
       sortKey: backup.createdAt,
       backup,
     }));
@@ -429,7 +456,7 @@ export default function BackupScreen() {
     if (!snapshot) {
       // Unreadable: the panel says so and offers deletion, which is the only
       // useful action left.
-      setInspecting({ backup, snapshot: null });
+      setInspecting({ backup, snapshot: null, source: 'local' });
       return;
     }
 
@@ -442,7 +469,7 @@ export default function BackupScreen() {
     // Pre-ticked with what the file ACTUALLY holds — offering to restore
     // transactions from a backup that has none would be a lie.
     setRestoreParts(partsOf(snapshot));
-    setInspecting({ backup, snapshot });
+    setInspecting({ backup, snapshot, source: 'local' });
   }
 
   function confirmRestore(snapshot: Snapshot, chosen: readonly BackupPartKey[]) {
@@ -482,48 +509,66 @@ export default function BackupScreen() {
    * is deleted, and the panel is where the user picks what to bring back.
    */
   async function openDriveBackup(file: DriveFile) {
-    setDriveBusy(true);
-    try {
-      const result = await downloadDriveBackup(file.id);
+    /*
+     * The panel opens FIRST, then fills in.
+     *
+     * Downloading before opening meant a tap on a Drive row did nothing visible
+     * until the file arrived — on a slow connection, several seconds of a screen
+     * that looked like it had ignored the tap, which is what makes people tap
+     * again. The sheet now answers immediately and shows its own loader, so the
+     * wait happens somewhere the user is already looking.
+     *
+     * Everything known without the download goes in now — the name and the size
+     * come from the listing — so only the contents are missing while it loads.
+     */
+    const backup: StoredBackup = {
+      filename: file.name,
+      // `size` comes back from Drive as a string and is only ever displayed.
+      size: Number(file.size) || 0,
+      createdAt: file.modifiedTime,
+      summary: '',
+    };
 
-      if (!result.ok || !result.contents) {
-        Alert.alert('Could not open it', result.error ?? 'The download did not complete.');
-        return;
-      }
+    setDriveOpen(false);
+    setInspecting({ backup, snapshot: null, source: 'drive', loading: true });
 
-      const snapshot = parseSnapshot(result.contents);
-      if (!snapshot) {
-        Alert.alert('That backup is not usable', 'The file could not be read as a backup.');
-        return;
-      }
+    const fail = (title: string, message: string) => {
+      // Close the panel on failure: it has nothing to show, and leaving it up
+      // behind an alert offers a restore of a file that never loaded.
+      setInspecting(null);
+      Alert.alert(title, message);
+    };
 
-      const validation = validateSnapshot(snapshot);
-      if (!validation.ok) {
-        Alert.alert('That backup is not usable', validation.problems.join('\n\n'));
-        return;
-      }
+    const result = await downloadDriveBackup(file.id);
 
-      /*
-       * Adapted into the shape the panel already takes, so a Drive backup and a
-       * local one are inspected and restored by exactly one code path — there is
-       * no second restore flow here that could drift from the local one.
-       *
-       * `size` comes back from Drive as a string and is only ever displayed.
-       */
-      setRestoreParts(partsOf(snapshot));
-      setDriveOpen(false);
-      setInspecting({
-        backup: {
-          filename: file.name,
-          size: Number(file.size) || 0,
-          createdAt: file.modifiedTime,
-          summary: describeSnapshot(snapshot),
-        },
-        snapshot,
-      });
-    } finally {
-      setDriveBusy(false);
+    if (!result.ok || !result.contents) {
+      fail('Could not open it', result.error ?? 'The download did not complete.');
+      return;
     }
+
+    const snapshot = parseSnapshot(result.contents);
+    if (!snapshot) {
+      fail('That backup is not usable', 'The file could not be read as a backup.');
+      return;
+    }
+
+    const validation = validateSnapshot(snapshot);
+    if (!validation.ok) {
+      fail('That backup is not usable', validation.problems.join('\n\n'));
+      return;
+    }
+
+    /*
+     * Adapted into the shape the panel already takes, so a Drive backup and a
+     * local one are inspected and restored by exactly one code path — there is
+     * no second restore flow here that could drift from the local one.
+     */
+    setRestoreParts(partsOf(snapshot));
+    setInspecting({
+      backup: { ...backup, summary: describeSnapshot(snapshot) },
+      snapshot,
+      source: 'drive',
+    });
   }
 
   function handleDelete(backup: StoredBackup) {
@@ -867,7 +912,37 @@ export default function BackupScreen() {
         below refers to a "Restore" heading that is not on screen — which reads
         as an instruction for an app they do not have.
       */}
-      {restoreRows.length > 0 ? (
+      {driveBusy && !driveOpen ? (
+        /*
+          Loading, and it does not yet know what it will find.
+
+          The Drive listing is fetched on mount whenever an account is
+          connected, and until it lands this section cannot honestly claim
+          either "here are your backups" or "you have none". It used to claim
+          the latter: `restoreRows` was empty during the fetch, so someone
+          restoring onto a new phone — who by definition has nothing local —
+          was told "No backups yet" for a second or two before their Drive
+          copies appeared. That is the worst possible lie to tell at exactly
+          that moment.
+
+          Local rows are known synchronously, so they render immediately and
+          the skeleton fills in only for what is still arriving.
+        */
+        <View style={{ gap: space.sm }}>
+          <SectionHeading
+            icon="time-outline"
+            title="Restore"
+            subtitle="Replace what is on your board with a saved copy"
+          />
+          <BackupSkeleton rows={Math.max(3, restoreRows.length)} />
+          <Row gap={space.sm} style={{ paddingHorizontal: space.xs }}>
+            <ActivityIndicator size="small" color={colors.inkMuted} />
+            <Text variant="caption" tone="muted">
+              Checking Google Drive…
+            </Text>
+          </Row>
+        </View>
+      ) : restoreRows.length > 0 ? (
         <View style={{ gap: space.sm }}>
           <SectionHeading
             icon="time-outline"
@@ -916,9 +991,22 @@ export default function BackupScreen() {
                     rest of the app uses for grouped rows makes each backup read
                     as an object you can act on.
                   */}
-                  {/* The mark says WHERE the copy lives — a cloud glyph for
-                      Drive, a document for this phone. That is the one thing
-                      the two row types genuinely differ on. */}
+                  {/*
+                    The mark says WHERE the copy lives.
+
+                    Drive rows carry Drive's OWN four-colour triangle rather
+                    than a blue cloud outline. In a merged list the source is
+                    the thing a reader is scanning for — "which of these
+                    survives losing the phone?" — and a brand mark is recognised
+                    before any label is read, where one generic glyph tinted
+                    blue against another tinted accent is a colour difference
+                    the eye has to decode.
+
+                    The connected-account card above already uses this mark, so
+                    the rows and the account now agree on what "Drive" looks
+                    like. A local file keeps the document glyph: it has no brand
+                    and it is genuinely a file on this phone.
+                  */}
                   <View
                     style={{
                       width: 34,
@@ -930,11 +1018,15 @@ export default function BackupScreen() {
                         row.source === 'drive' ? `${DRIVE_BLUE}1A` : colors.accentSoft,
                     }}
                   >
-                    <Ionicons
-                      name={row.source === 'drive' ? 'cloud-outline' : 'document-text-outline'}
-                      size={17}
-                      color={row.source === 'drive' ? DRIVE_BLUE : colors.accent}
-                    />
+                    {row.source === 'drive' ? (
+                      <DriveMark size={18} />
+                    ) : (
+                      <Ionicons
+                        name="document-text-outline"
+                        size={17}
+                        color={colors.accent}
+                      />
+                    )}
                   </View>
                   <View style={{ flex: 1, gap: 2 }}>
                     {/* The user's own name leads when they gave one — that is
@@ -1081,11 +1173,12 @@ export default function BackupScreen() {
       <Row gap={space.sm} style={{ paddingHorizontal: space.xs, alignItems: 'flex-start' }}>
         <Ionicons name="eye-off-outline" size={15} color={colors.inkMuted} style={{ marginTop: 1 }} />
         <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-          {/* Was "never included", which stopped being true when the review
-              queue became a tickable part. A note that is quietly wrong about
-              privacy is worse than none. */}
-          Bank message text is only included if you tick "Messages awaiting
-          review" when backing up.
+          {/* Kept in step with the default above. This said message text was
+              only included if you ticked it, which stopped being true when
+              every part became ticked by default — and a note that is quietly
+              wrong about privacy is worse than none. */}
+          Backups include bank message text awaiting review. Untick "Messages
+          awaiting review" to leave it on this phone.
         </Text>
       </Row>
 
@@ -1139,15 +1232,6 @@ export default function BackupScreen() {
           icon="folder-open-outline"
         >
           {driveBusy ? (
-            /*
-              Skeleton rows, not a spinner on a line.
-
-              A lone spinner says "something is happening" and nothing else, so
-              the sheet appears empty until it resolves and then jumps as rows
-              push in. Placeholders in the shape of the real list say what is
-              coming and keep the layout still, which makes a slow network feel
-              slow rather than broken.
-            */
             <View style={{ gap: space.sm }}>
               {/* A placeholder for the count/size header, so the whole sheet
                   holds its shape rather than only the list part. */}
@@ -1171,60 +1255,10 @@ export default function BackupScreen() {
                 />
               </Row>
 
-              <Surface padded={false} style={{ overflow: 'hidden' }}>
               {/* Enough rows to reach the bottom of the sheet — five filled
                   only the top third, which looked like a short list that had
                   finished loading rather than a page still arriving. */}
-              {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((row) => (
-                <View key={row}>
-                  {row > 0 ? <Divider /> : null}
-                  <Row
-                    gap={space.md}
-                    style={{
-                      paddingHorizontal: space.lg,
-                      paddingVertical: space.md,
-                      alignItems: 'center',
-                      /*
-                       * Fades gently down the page rather than to nothing.
-                       *
-                       * Five rows fill the sheet, so a steep fade would leave
-                       * the last two invisible and the page looking half-drawn.
-                       * A shallow one reads as "more below", which is what a
-                       * folder of backups usually has.
-                       */
-                      opacity: 1 - row * 0.075,
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: radius.sm,
-                        backgroundColor: colors.surfaceSunken,
-                      }}
-                    />
-                    <View style={{ flex: 1, gap: 6 }}>
-                      <View
-                        style={{
-                          height: 11,
-                          width: '55%',
-                          borderRadius: 4,
-                          backgroundColor: colors.surfaceSunken,
-                        }}
-                      />
-                      <View
-                        style={{
-                          height: 9,
-                          width: '35%',
-                          borderRadius: 4,
-                          backgroundColor: colors.surfaceSunken,
-                        }}
-                      />
-                    </View>
-                  </Row>
-                </View>
-              ))}
-              </Surface>
+              <BackupSkeleton rows={10} />
             </View>
           ) : driveFiles === null || driveFiles.length === 0 ? (
             <Surface style={{ gap: space.xs }}>
@@ -1297,6 +1331,17 @@ export default function BackupScreen() {
                          */
                       }}
                     >
+                      {/*
+                        Drive's own mark on every row in Drive's own folder.
+
+                        The newest row used to be marked by filling this chip
+                        solid green, which cannot work with a four-colour logo
+                        — a multicolour mark on a saturated fill is unreadable.
+                        The LATEST tag beside the name already says which is
+                        current, so the chip stays a light Drive-blue tint on
+                        every row and the distinction moves to a small tick
+                        badge in the corner.
+                      */}
                       <View
                         style={{
                           width: 34,
@@ -1304,16 +1349,32 @@ export default function BackupScreen() {
                           borderRadius: radius.sm,
                           alignItems: 'center',
                           justifyContent: 'center',
-                          // Solid on the highlighted row — a soft chip on a
-                          // soft band disappears into it.
-                          backgroundColor: index === 0 ? colors.completed : colors.accentSoft,
+                          backgroundColor: `${DRIVE_BLUE}14`,
                         }}
                       >
-                        <Ionicons
-                          name={index === 0 ? 'cloud-done' : 'cloud-outline'}
-                          size={17}
-                          color={index === 0 ? colors.inkInverse : colors.accent}
-                        />
+                        <DriveMark size={18} />
+                        {index === 0 ? (
+                          <View
+                            style={{
+                              position: 'absolute',
+                              right: -3,
+                              bottom: -3,
+                              width: 15,
+                              height: 15,
+                              borderRadius: 8,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              backgroundColor: colors.completed,
+                              // A ring in the surface colour so the badge reads
+                              // as sitting ON the tile rather than merging with
+                              // the row behind it.
+                              borderWidth: 2,
+                              borderColor: colors.surface,
+                            }}
+                          >
+                            <Ionicons name="checkmark" size={8} color={colors.inkInverse} />
+                          </View>
+                        ) : null}
                       </View>
                       <View style={{ flex: 1, gap: 2 }}>
                         <Row gap={6}>
@@ -1452,7 +1513,12 @@ function BackupDetails({
   onClose,
   onRestore,
 }: {
-  entry: null | { backup: StoredBackup; snapshot: Snapshot | null };
+  entry: null | {
+    backup: StoredBackup;
+    snapshot: Snapshot | null;
+    source: 'local' | 'drive';
+    loading?: boolean;
+  };
   parts: readonly BackupPartKey[];
   onToggle: (key: BackupPartKey) => void;
   onPreset: (keys: BackupPartKey[]) => void;
@@ -1464,7 +1530,7 @@ function BackupDetails({
   const [expanded, setExpanded] = useState<BackupPartKey | null>(null);
   if (!entry) return null;
 
-  const { backup, snapshot } = entry;
+  const { backup, snapshot, source, loading } = entry;
   const summary = snapshot ? summariseSnapshot(snapshot) : [];
   /** Parts this file carries — the only ones that can be ticked. */
   const available = summary.filter((part) => part.included).map((part) => part.key);
@@ -1486,7 +1552,24 @@ function BackupDetails({
        */
       scroll
       title={backup.label || readableStamp(backup.createdAt)}
-      icon="document-text-outline"
+      /*
+       * The mark says WHERE this copy lives, matching the row that opened it.
+       *
+       * A Drive backup opened into a panel headed by a document icon, which is
+       * the local mark — so the one screen where you decide to overwrite your
+       * board gave no sign which copy you were about to restore from. The list
+       * rows already distinguish the two; the panel has to agree with them.
+       */
+      icon={source === 'drive' ? <DriveMark size={22} /> : 'document-text-outline'}
+      /*
+       * A pale tile behind the brand mark, a solid one behind the glyph.
+       *
+       * The glyph path draws white on a saturated fill, which is right for a
+       * monochrome icon and wrong for a four-colour logo — Drive's triangle on
+       * solid blue loses its blue arm entirely. The light tint keeps all three
+       * colours readable, and matches the chip the restore rows use.
+       */
+      iconColor={source === 'drive' ? `${DRIVE_BLUE}14` : colors.accent}
       footer={
         snapshot ? (
           <View style={{ gap: space.sm }}>
@@ -1533,7 +1616,28 @@ function BackupDetails({
         ) : null
       }
     >
-      {snapshot === null ? (
+      {loading ? (
+        /*
+          Downloading. Same shape as the loaded panel, so nothing jumps.
+
+          "This file cannot be read" is what a null snapshot means everywhere
+          else, and showing it here for the second the download takes would
+          accuse a perfectly good backup of being corrupt.
+        */
+        <View style={{ gap: space.sm }}>
+          <Row style={{ alignItems: 'center', paddingRight: space.xs }}>
+            <Label>WHAT TO BRING BACK</Label>
+            <View style={{ flex: 1 }} />
+            <Row gap={6}>
+              <ActivityIndicator size="small" color={colors.inkMuted} />
+              <Text variant="caption" tone="muted">
+                Downloading…
+              </Text>
+            </Row>
+          </Row>
+          <BackupSkeleton rows={BACKUP_PARTS.length} />
+        </View>
+      ) : snapshot === null ? (
         /* A corrupt file still LISTS so it can be deleted — see `listBackups`.
            Saying so plainly beats an empty panel that looks like a bug. */
         <Surface style={{ gap: space.xs }}>
@@ -1699,6 +1803,75 @@ function BackupDetails({
       )}
 
     </BottomSheet>
+  );
+}
+
+/**
+ * Placeholder rows in the shape of a backup list.
+ *
+ * A lone spinner says "something is happening" and nothing else, so a list
+ * appears empty until it resolves and then jumps as rows push in. Placeholders
+ * shaped like the real rows say what is coming and keep the layout still, which
+ * makes a slow network feel slow rather than broken.
+ *
+ * Shared by the Drive sheet and the Restore section: they render the same row —
+ * chip, two lines of text — so two hand-built skeletons would drift apart, and
+ * the one on the Restore section was missing entirely.
+ */
+function BackupSkeleton({ rows = 5 }: { rows?: number }) {
+  const { colors, space, radius } = useTheme();
+
+  return (
+    <Surface padded={false} style={{ overflow: 'hidden' }}>
+      {Array.from({ length: rows }, (_, row) => (
+        <View key={row}>
+          {row > 0 ? <Divider /> : null}
+          <Row
+            gap={space.md}
+            style={{
+              paddingHorizontal: space.lg,
+              paddingVertical: space.md,
+              alignItems: 'center',
+              /*
+               * Fades gently down the page rather than to nothing.
+               *
+               * A steep fade would leave the last rows invisible and the list
+               * looking half-drawn. A shallow one reads as "more below", which
+               * a folder of backups usually has.
+               */
+              opacity: 1 - row * 0.075,
+            }}
+          >
+            <View
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: radius.sm,
+                backgroundColor: colors.surfaceSunken,
+              }}
+            />
+            <View style={{ flex: 1, gap: 6 }}>
+              <View
+                style={{
+                  height: 11,
+                  width: '55%',
+                  borderRadius: 4,
+                  backgroundColor: colors.surfaceSunken,
+                }}
+              />
+              <View
+                style={{
+                  height: 9,
+                  width: '35%',
+                  borderRadius: 4,
+                  backgroundColor: colors.surfaceSunken,
+                }}
+              />
+            </View>
+          </Row>
+        </View>
+      ))}
+    </Surface>
   );
 }
 
@@ -2135,12 +2308,35 @@ function absoluteTime(iso: string): string {
   });
 }
 
-/** Turn a filename stamp ("2026-08-04T12-00-00") into something readable. */
+/**
+ * Turn a filename stamp ("2026-08-04T12-00-00") into something readable.
+ *
+ * The stamp is UTC — `snapshotFilename` builds it from `toISOString()` — so the
+ * `Z` has to go back on before parsing. Without it `new Date` reads the string
+ * as LOCAL time, and every backup in the list showed a time off by the whole
+ * timezone offset: a backup taken at 17:30 in Colombo listed as 12:00, five and
+ * a half hours before it happened. The half-hour offset is what makes this
+ * unmistakable rather than merely suspicious.
+ */
 function readableStamp(stamp: string): string {
   const iso = stamp.replace(
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})$/,
-    '$1-$2-$3T$4:$5:$6',
+    '$1-$2-$3T$4:$5:$6Z',
   );
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? stamp : absoluteTime(date.toISOString());
+}
+
+/**
+ * A filename stamp as a real ISO instant, for arithmetic rather than display.
+ *
+ * `relativeTime` and the age comparisons need a parseable moment; the stamp on
+ * its own is not one. Returns the input untouched when it is already an ISO
+ * string, so Drive rows (which carry `modifiedTime`) pass straight through.
+ */
+function stampToIso(stamp: string): string {
+  return stamp.replace(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})$/,
+    '$1-$2-$3T$4:$5:$6Z',
+  );
 }

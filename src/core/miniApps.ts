@@ -17,7 +17,7 @@
 
 import type { Ionicons } from '@expo/vector-icons';
 
-export type MiniAppId = 'fuel';
+export type MiniAppId = 'fuel' | 'health';
 
 export interface MiniApp {
   id: MiniAppId;
@@ -40,6 +40,15 @@ export const MINI_APPS: MiniApp[] = [
     icon: 'car-sport-outline',
     color: '#0E9F6E',
     route: '/mini/fuel',
+  },
+  {
+    id: 'health',
+    name: 'Health records',
+    description:
+      'Medicines, doses taken, doctor visits, prescriptions and readings — one timeline per family member.',
+    icon: 'heart-outline',
+    color: '#D6336C',
+    route: '/mini/health',
   },
 ];
 

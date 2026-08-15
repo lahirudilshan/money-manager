@@ -83,6 +83,18 @@ export const SNAPSHOT_TABLES = [
   // References vehicle_services.
   'service_items',
   /*
+   * Health records — see the `health` part below.
+   *
+   * Ordered people -> visits -> the rest: a medicine points at the visit that
+   * prescribed it, and documents and readings may also reference a visit.
+   * Restoring out of this order fails on a foreign key.
+   */
+  'health_people',
+  'health_visits',
+  'health_medicines',
+  'health_documents',
+  'health_readings',
+  /*
    * The Smart Detect queue — messages waiting for review.
    *
    * Last in the list because nothing references it, and it is the only table a
@@ -141,6 +153,17 @@ export const HISTORY_TABLES: readonly SnapshotTable[] = [
   'fuel_entries',
   'vehicle_services',
   'service_items',
+  /*
+   * Health EVENTS are history; health PEOPLE and their medicine list are not.
+   *
+   * Same test as everywhere else here — "would carrying this into a fresh board
+   * make a figure on it wrong?". A visit last March would; the fact that Amma
+   * exists and is on Metformin would not, and losing that on a setup-only
+   * restore would mean retyping the whole family.
+   */
+  'health_visits',
+  'health_documents',
+  'health_readings',
 ];
 
 /** Whether a table survives a `setup`-only restore. */
@@ -434,6 +457,7 @@ export type BackupPartKey =
   | 'vehicles'
   | 'rules'
   | 'history'
+  | 'health'
   | 'sms';
 
 export const BACKUP_PARTS: readonly BackupPart[] = [
@@ -469,6 +493,32 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
     label: 'Transactions & history',
     hint: 'Every payment recorded, month by month',
     tables: ['transactions', 'subcategory_states', 'category_states', 'fundings', 'fuel_entries'],
+  },
+  /*
+   * Health records — `sensitive`, so a backup never carries a family's medical
+   * history because a default said so.
+   *
+   * The strictest case for that flag in the app. Bank message text is private;
+   * a record of who takes what medication, and what they were diagnosed with,
+   * is the kind of thing that should only leave the phone when someone has
+   * deliberately said yes — and this app's backups can go to Google Drive.
+   *
+   * All six tables travel together. Splitting "people" from their records would
+   * let someone restore a timeline whose person rows are missing, which is not
+   * a state any screen here can render.
+   */
+  {
+    key: 'health',
+    label: 'Health records',
+    hint: 'Visits, prescriptions, reports and readings',
+    tables: [
+      'health_people',
+      'health_visits',
+      'health_medicines',
+      'health_documents',
+      'health_readings',
+    ],
+    sensitive: true,
   },
   {
     key: 'sms',
@@ -569,6 +619,11 @@ const TABLE_LABELS: Record<string, string> = {
   category_states: 'Monthly group states',
   fundings: 'Funding moves',
   fuel_entries: 'Fuel fill-ups',
+  health_people: 'People',
+  health_medicines: 'Medicines',
+  health_visits: 'Doctor visits',
+  health_documents: 'Prescriptions & reports',
+  health_readings: 'Readings',
   sms_inbox: 'Messages awaiting review',
 };
 

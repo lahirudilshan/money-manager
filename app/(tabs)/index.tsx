@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BankLogo } from '../../src/components/BankLogo';
@@ -82,9 +82,51 @@ export default function DashboardScreen() {
   const healthVisual = HEALTH_VISUALS[health];
   const smsDrafts = state.smsDrafts;
 
+  /*
+   * Check for new messages every time this screen comes into view.
+   *
+   * Smart Detect is the reason the app exists, and until now nothing ran when
+   * the dashboard was merely NAVIGATED to: the drain fired at launch, on a
+   * folder-watch event, and on return to the foreground. Coming back from the
+   * List tab — or from confirming a draft — is none of those, so a message that
+   * landed in between sat unimported while the user looked straight at the
+   * section that should have shown it.
+   *
+   * `useFocusEffect` rather than `useEffect`, because a tab screen stays mounted
+   * when you leave it; a mount effect runs once per app run and never again.
+   *
+   * Safe to run on every focus: the sync is a stat and a short read of a file
+   * that is usually empty, `drainSmsInbox` guards against re-entry, and the
+   * store only re-renders when something actually changed.
+   */
+  const syncSmsNow = state.syncSmsNow;
+  useFocusEffect(
+    useCallback(() => {
+      syncSmsNow();
+    }, [syncSmsNow]),
+  );
+
   const overdue = reminders.filter((r) => r.urgency === 'overdue');
   const dueSoon = reminders.filter((r) => r.urgency === 'due_soon');
-  const actionable = [...overdue, ...dueSoon].slice(0, 5);
+  /*
+   * "Upcoming" bills belong in a section called COMING UP.
+   *
+   * The list used to hold only overdue + due-within-7-days, which meant that on
+   * any day more than a week before the month's bills fall due, a board full of
+   * unpaid rent and utilities rendered as a green "Nothing due right now". That
+   * is the most reassuring possible way to be wrong — the user is told they are
+   * clear at exactly the moment they should be planning.
+   *
+   * It becomes more wrong, not less, now that reminders resolve to the NEXT
+   * occurrence rather than the browsed month: a bill paid up for this month
+   * correctly points at next month, which is always more than 7 days out.
+   *
+   * Ordering carries the urgency instead: late first, then due soon, then
+   * simply next. `selectReminders` already sorts by days-until, so within each
+   * band the soonest leads.
+   */
+  const upcoming = reminders.filter((r) => r.urgency === 'upcoming');
+  const actionable = [...overdue, ...dueSoon, ...upcoming].slice(0, 5);
 
   const totalToTransfer = accounts.reduce((sum, a) => sum + a.toTransferMinor, 0);
   const paidCount = totals.categoryCount > 0 ? totals.settledCategoryCount : 0;

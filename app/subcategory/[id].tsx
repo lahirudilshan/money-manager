@@ -544,7 +544,10 @@ export default function SubcategoryScreen() {
               a bill's is what will be paid, a spending budget's is the monthly
               cap its entries draw down. The label says which. */}
           <Field
-            label={unplanned ? 'Monthly budget' : 'Planned amount'}
+            // "Plan amount", matching the onboarding step and BillFields — the
+            // same figure should not be called three different things across
+            // the screens that edit it.
+            label={unplanned ? 'Monthly budget' : 'Plan amount'}
             value={planned}
             onChangeText={setPlanned}
             money

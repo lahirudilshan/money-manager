@@ -105,18 +105,21 @@ export function DatePickerField({
         eyebrow={label}
         icon="calendar-outline"
         iconColor={colors.accent}
-        // Shortcuts pinned at the bottom, where the thumb already is, rather
-        // than floating under the grid as a bare text link.
+        /*
+         * Shortcuts pinned at the foot of the sheet, where the thumb already
+         * is, rather than floating under the grid as a bare text link.
+         *
+         * Yesterday leads, Today sits on the right.
+         *
+         * Right is the near side for a thumb on a phone held in either hand,
+         * and "Today" is by far the more common choice — it is the default the
+         * field already holds, and the one someone taps when they opened the
+         * picker only to confirm. Putting the likelier action where the thumb
+         * already rests, and the rarer one further away, is the ordering every
+         * other confirm-style row in the app uses.
+         */
         footer={
           <Row gap={space.sm}>
-            <QuickDate
-              label="Today"
-              active={isSameDay(value, today)}
-              onPress={() => {
-                onChange(today);
-                setOpen(false);
-              }}
-            />
             <QuickDate
               label="Yesterday"
               active={isSameDay(value, yesterday)}
@@ -125,6 +128,14 @@ export function DatePickerField({
               disabled={yesterday > max}
               onPress={() => {
                 onChange(yesterday);
+                setOpen(false);
+              }}
+            />
+            <QuickDate
+              label="Today"
+              active={isSameDay(value, today)}
+              onPress={() => {
+                onChange(today);
                 setOpen(false);
               }}
             />

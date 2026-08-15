@@ -380,6 +380,24 @@ export const loans = sqliteTable('loans', {
   principalMinor: integer('principal_minor').notNull(),
   /** Annual nominal rate as a percentage, e.g. 11.5 for 11.50%. */
   annualRatePct: real('annual_rate_pct').notNull(),
+  /**
+   * How the lender charges the quoted rate. Two products, two different sums.
+   *
+   * `emi` — reducing balance. Interest is charged on what is still owed, so it
+   * falls as the balance does. This is how banks quote personal loans and
+   * mortgages, and it is the standard annuity/EMI formula.
+   *
+   * `flat` — interest is computed once on the FULL principal for the whole
+   * term and split evenly across the installments, so it never falls. Common
+   * for vehicle leases here, and materially more expensive: 7,200,000 at 11.5%
+   * over 5 years is 158,347 a month reducing, but 189,000 a month flat.
+   *
+   * Defaults to `emi` because that is what every existing row was computed as;
+   * a lease created from now on defaults to `flat` in the form.
+   */
+  interestMethod: text('interest_method', { enum: ['emi', 'flat'] })
+    .notNull()
+    .default('emi'),
   termMonths: integer('term_months').notNull(),
   startDate: integer('start_date', { mode: 'timestamp_ms' }).notNull(),
   /**
@@ -700,6 +718,324 @@ export const serviceItems = sqliteTable(
   (t) => [index('service_items_service_idx').on(t.serviceId)],
 );
 
+/*
+ * ---------------------------------------------------------------------------
+ * Health mini-app — see core/miniApps.ts for why it is opt-in.
+ *
+ * The most sensitive data this app holds, by a distance. Two consequences run
+ * through every table below:
+ *
+ *   1. It is OFF by default and these tables stay empty until someone asks for
+ *      it, exactly like the fuel tables above.
+ *   2. It is a `sensitive` backup part (see core/backup.ts), so a medical
+ *      history never reaches Google Drive because a default said so.
+ *
+ * The organising idea is a TIMELINE per person. Medicines, visits, documents
+ * and readings are four different shapes of record, but the question people
+ * actually ask — "what has been happening with Amma?" — is answered by putting
+ * them on one dated axis, not by four separate lists. Each table therefore
+ * carries a person and a timestamp, which is what lets core/health.ts merge
+ * them without special cases.
+ * ---------------------------------------------------------------------------
+ */
+
+/**
+ * A person whose health is tracked — the user, a parent, a child.
+ *
+ * Deliberately its own table rather than a text field on each record. A family
+ * member is referenced from four places, and the whole premise ("one place to
+ * see all health records") depends on being able to filter every one of them by
+ * the same person. Free text would make "Amma" and "amma" two people.
+ *
+ * `isSelf` marks the phone's owner, so the timeline can open on them rather
+ * than asking who you are every time — the same trick `houses.isPrimary` uses
+ * to stay invisible in the common single-person case.
+ */
+export const healthPeople = sqliteTable('health_people', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  /**
+   * How this person relates to the phone's owner, picked from a list.
+   *
+   * An enum rather than free text, and `self` is one of the options. Typed
+   * relations made "Mother", "mother" and "Amma" three different things in a
+   * list whose whole job is telling a handful of people apart — and left the
+   * user with no way to say which one was them, since `isSelf` was set silently
+   * by the store on the first person added.
+   *
+   * Picking "Myself" IS that declaration now: `healthPersonRepo` keeps the flag
+   * and this column in step, so there is one answer to "who am I?" rather than
+   * a hidden boolean and a string that might disagree with it.
+   *
+   * `other` is the escape hatch for a relation the list does not name — a
+   * grandparent-in-law, a ward — and pairs with `relationLabel` below so those
+   * cases keep their own word rather than being forced into a wrong one.
+   */
+  relation: text('relation', {
+    enum: [
+      'self',
+      'spouse',
+      'mother',
+      'father',
+      'daughter',
+      'son',
+      'sister',
+      'brother',
+      'grandmother',
+      'grandfather',
+      'other',
+    ],
+  }),
+  /**
+   * The user's own word, used only when `relation` is `other`.
+   *
+   * Kept separate from `relation` rather than overloading it, so the enum stays
+   * an enum — a column that is sometimes a key and sometimes a label cannot be
+   * filtered or counted on.
+   */
+  relationLabel: text('relation_label'),
+  /**
+   * Date of birth, for the age shown beside a reading.
+   *
+   * Optional, and stored rather than an age: an age is wrong a year later, and
+   * a blood-pressure figure from 2019 means something different at 58 than the
+   * same number does at 64.
+   */
+  bornOn: integer('born_on', { mode: 'timestamp_ms' }),
+  /**
+   * Blood group and allergies, kept ON the person rather than in a note.
+   *
+   * These are the two facts someone opens this app for in an emergency, when
+   * scrolling a timeline is exactly what they cannot do. Surfaced at the top of
+   * the person's screen for that reason.
+   */
+  bloodGroup: text('blood_group'),
+  allergies: text('allergies'),
+  /** Long-term conditions — "Type 2 diabetes, hypertension". */
+  conditions: text('conditions'),
+  note: text('note'),
+  color: text('color').notNull().default('#D6336C'),
+  icon: text('icon').notNull().default('person-outline'),
+  /** Local file URI of a photo — see core/imageStorage.ts. */
+  imageUri: text('image_uri'),
+  isSelf: integer('is_self', { mode: 'boolean' }).notNull().default(false),
+  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+  ...timestamps,
+});
+
+/**
+ * A medicine that was prescribed — a line on a prescription, not a tracker.
+ *
+ * Deliberately NOT a dose log. An earlier version recorded every tablet taken
+ * and scored adherence out of it, which is a different product: it demands
+ * input several times a day, every day, and the people who actually keep family
+ * health records do not do that. They see a doctor, get a prescription, and
+ * want to know months later what was prescribed and by whom.
+ *
+ * So this answers exactly one question — "what was Amma put on, and when?" —
+ * and is written once, at the visit, from the paper in your hand.
+ *
+ * `visitId` ties it to the consultation that produced it, which is what makes
+ * the doctor's name and diagnosis available without duplicating them here.
+ * Null for a medicine recorded on its own (something long-standing, entered
+ * when the record was first set up).
+ *
+ * `endedOn` null means still being taken. A finished course is kept rather than
+ * deleted, because "what antibiotic was she on in March?" is a real question a
+ * year later.
+ */
+export const healthMedicines = sqliteTable(
+  'health_medicines',
+  {
+    id: text('id').primaryKey(),
+    personId: text('person_id')
+      .notNull()
+      .references(() => healthPeople.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** "500 mg", "10 ml" — free text, because real labels are not parseable. */
+    dosage: text('dosage'),
+    /** "Metformin" under a brand name, so two brands of one drug are spottable. */
+    genericName: text('generic_name'),
+    form: text('form', {
+      enum: ['tablet', 'capsule', 'syrup', 'injection', 'inhaler', 'drops', 'cream', 'other'],
+    })
+      .notNull()
+      .default('tablet'),
+    /**
+     * How to take it, in the doctor's own words.
+     *
+     * Free text — "twice a day after meals", "one at night" — because that is
+     * what is written on the prescription and copying it verbatim is both the
+     * fastest thing to type and the most faithful record. An earlier version
+     * made this a machine-readable enum so the app could work out whether a
+     * dose had been missed; nothing needs that now, and forcing real
+     * instructions into eight fixed options lost detail for no gain.
+     */
+    instructions: text('instructions'),
+    startedOn: integer('started_on', { mode: 'timestamp_ms' }),
+    /** Null while still being taken; set when the course finished. */
+    endedOn: integer('ended_on', { mode: 'timestamp_ms' }),
+    /** Who prescribed it, and the visit it came from. */
+    prescribedBy: text('prescribed_by'),
+    visitId: text('visit_id').references(() => healthVisits.id, { onDelete: 'set null' }),
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [
+    index('health_medicines_person_idx').on(t.personId),
+    index('health_medicines_visit_idx').on(t.visitId),
+  ],
+);
+
+/**
+ * A visit to a doctor, hospital, lab or dentist.
+ *
+ * The anchor most other records hang off: a prescription comes FROM a visit, a
+ * report is the RESULT of one. `costMinor` and `transactionId` follow the fuel
+ * mini-app's money link exactly — the cost lives once, on the board, and this
+ * only points at it (see `fuelEntries.transactionId`).
+ */
+export const healthVisits = sqliteTable(
+  'health_visits',
+  {
+    id: text('id').primaryKey(),
+    personId: text('person_id')
+      .notNull()
+      .references(() => healthPeople.id, { onDelete: 'cascade' }),
+    visitedAt: integer('visited_at', { mode: 'timestamp_ms' }).notNull(),
+    kind: text('kind', {
+      enum: ['consultation', 'checkup', 'lab', 'dental', 'emergency', 'vaccination', 'therapy', 'other'],
+    })
+      .notNull()
+      .default('consultation'),
+    /** "Dr Perera" / "Nawaloka Hospital" — both worth keeping, separately. */
+    doctor: text('doctor'),
+    facility: text('facility'),
+    speciality: text('speciality'),
+    reason: text('reason'),
+    diagnosis: text('diagnosis'),
+    note: text('note'),
+    costMinor: integer('cost_minor'),
+    /** Same money link as a fill-up — see `fuelEntries.transactionId`. */
+    transactionId: text('transaction_id').references(() => transactions.id, {
+      onDelete: 'set null',
+    }),
+    /**
+     * The next appointment, when one was given.
+     *
+     * Drives the "coming up" band at the top of the timeline. A follow-up told
+     * to you in a consulting room and written on a card is exactly the thing
+     * that gets lost.
+     */
+    followUpOn: integer('follow_up_on', { mode: 'timestamp_ms' }),
+    ...timestamps,
+  },
+  (t) => [
+    index('health_visits_person_idx').on(t.personId, t.visitedAt),
+    index('health_visits_follow_up_idx').on(t.followUpOn),
+  ],
+);
+
+/**
+ * A photographed prescription, report, scan or bill.
+ *
+ * The paper problem is the real one this feature solves: prescriptions and lab
+ * reports arrive as physical sheets that are lost within a year, and the phone
+ * camera is already how people half-solve it — into a photo library where the
+ * report is indistinguishable from a screenshot six months later.
+ *
+ * `visitId` is optional so a document can be filed on its own (a report that
+ * arrived by email) but attaches to its visit when there is one.
+ */
+export const healthDocuments = sqliteTable(
+  'health_documents',
+  {
+    id: text('id').primaryKey(),
+    personId: text('person_id')
+      .notNull()
+      .references(() => healthPeople.id, { onDelete: 'cascade' }),
+    visitId: text('visit_id').references(() => healthVisits.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    kind: text('kind', {
+      enum: ['prescription', 'report', 'scan', 'bill', 'insurance', 'vaccination', 'other'],
+    })
+      .notNull()
+      .default('report'),
+    /** Local file URI — see core/imageStorage.ts. Stays on the device. */
+    imageUri: text('image_uri'),
+    /** When the document is DATED, which is not when it was photographed. */
+    documentDate: integer('document_date', { mode: 'timestamp_ms' }).notNull(),
+    /** Free text lifted off the page, so a report is findable by what it says. */
+    summary: text('summary'),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [
+    index('health_documents_person_idx').on(t.personId, t.documentDate),
+    index('health_documents_visit_idx').on(t.visitId),
+  ],
+);
+
+/**
+ * One measured reading — blood pressure, sugar, weight, cholesterol.
+ *
+ * A single generic table rather than one per metric. The alternative would need
+ * a migration for every new thing someone wants to track, and every screen
+ * would grow a branch; here a new metric is one entry in `HEALTH_METRIC_LABEL`.
+ *
+ * Blood pressure is why `valueSecondary` exists: it is the one common reading
+ * that is genuinely two numbers (120/80), and storing it as two rows would
+ * break the pairing that makes it meaningful.
+ */
+export const healthReadings = sqliteTable(
+  'health_readings',
+  {
+    id: text('id').primaryKey(),
+    personId: text('person_id')
+      .notNull()
+      .references(() => healthPeople.id, { onDelete: 'cascade' }),
+    /** Optional link to the visit or lab report the figure came from. */
+    visitId: text('visit_id').references(() => healthVisits.id, { onDelete: 'set null' }),
+    metric: text('metric', {
+      enum: [
+        'blood_pressure',
+        'blood_sugar',
+        'weight',
+        'heart_rate',
+        'temperature',
+        'cholesterol',
+        'oxygen',
+        'hba1c',
+        'other',
+      ],
+    })
+      .notNull()
+      .default('blood_pressure'),
+    /** The reading itself. Systolic, for blood pressure. */
+    value: real('value').notNull(),
+    /** Diastolic — only blood pressure uses it. */
+    valueSecondary: real('value_secondary'),
+    /** Stored per row: someone may record weight in kg and a doctor in lb. */
+    unit: text('unit'),
+    measuredAt: integer('measured_at', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * Context that changes what the number MEANS.
+     *
+     * A blood sugar of 140 is unremarkable after lunch and a problem fasting,
+     * so a trend line mixing the two is worse than no trend at all.
+     */
+    context: text('context', { enum: ['fasting', 'post_meal', 'random', 'morning', 'night'] }),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [
+    // Every chart reads one metric for one person, in date order.
+    index('health_readings_person_idx').on(t.personId, t.metric, t.measuredAt),
+  ],
+);
+
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
@@ -776,6 +1112,173 @@ export const SERVICE_KIND_LABEL: Record<ServiceKind, string> = {
   insurance: 'Insurance',
   licence: 'Licence',
   other: 'Other',
+};
+
+export type HealthPerson = typeof healthPeople.$inferSelect;
+export type NewHealthPerson = typeof healthPeople.$inferInsert;
+export type HealthMedicine = typeof healthMedicines.$inferSelect;
+export type NewHealthMedicine = typeof healthMedicines.$inferInsert;
+export type HealthVisit = typeof healthVisits.$inferSelect;
+export type NewHealthVisit = typeof healthVisits.$inferInsert;
+export type HealthDocument = typeof healthDocuments.$inferSelect;
+export type NewHealthDocument = typeof healthDocuments.$inferInsert;
+export type HealthReading = typeof healthReadings.$inferSelect;
+export type NewHealthReading = typeof healthReadings.$inferInsert;
+
+/**
+ * The eight blood groups, in the order they are normally listed.
+ *
+ * A closed set, so it is picked rather than typed. This is the one field in the
+ * app where a typo could matter in an emergency — "0+" for "O+", or "O+ve" —
+ * and a free-text box invited exactly that. Stored as the plain string so the
+ * column needs no migration and an old hand-typed value still reads back.
+ */
+export const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] as const;
+
+export type BloodGroup = (typeof BLOOD_GROUPS)[number];
+
+/** Whether a stored value is one of the eight — old rows may hold anything. */
+export function isBloodGroup(value: string | null | undefined): value is BloodGroup {
+  return BLOOD_GROUPS.includes(value as BloodGroup);
+}
+
+export type PersonRelation = NonNullable<HealthPerson['relation']>;
+
+/**
+ * The relations offered, in the order a family list is usually built.
+ *
+ * "Myself" leads because the person adding the app is almost always the first
+ * entry, and because it is the one option that also answers "who is the phone's
+ * owner?" — see `healthPeople.relation`.
+ */
+export const PERSON_RELATIONS: PersonRelation[] = [
+  'self',
+  'spouse',
+  'mother',
+  'father',
+  'daughter',
+  'son',
+  'sister',
+  'brother',
+  'grandmother',
+  'grandfather',
+  'other',
+];
+
+export const PERSON_RELATION_LABEL: Record<PersonRelation, string> = {
+  self: 'Myself',
+  spouse: 'Spouse',
+  mother: 'Mother',
+  father: 'Father',
+  daughter: 'Daughter',
+  son: 'Son',
+  sister: 'Sister',
+  brother: 'Brother',
+  grandmother: 'Grandmother',
+  grandfather: 'Grandfather',
+  other: 'Other',
+};
+
+/**
+ * What to show under a person's name.
+ *
+ * Falls back through the user's own word for `other`, then to nothing at all —
+ * an unset relation shows no subtitle rather than the word "Other", which reads
+ * as a category the user chose when in fact they skipped the question.
+ */
+export function relationLabel(
+  person: Pick<HealthPerson, 'relation' | 'relationLabel'>,
+): string | null {
+  if (!person.relation) return null;
+  if (person.relation === 'other') return person.relationLabel?.trim() || null;
+  return PERSON_RELATION_LABEL[person.relation];
+}
+
+export type MedicineForm = HealthMedicine['form'];
+export type VisitKind = HealthVisit['kind'];
+export type DocumentKind = HealthDocument['kind'];
+export type HealthMetric = HealthReading['metric'];
+export type ReadingContext = NonNullable<HealthReading['context']>;
+
+export const MEDICINE_FORM_LABEL: Record<MedicineForm, string> = {
+  tablet: 'Tablet',
+  capsule: 'Capsule',
+  syrup: 'Syrup',
+  injection: 'Injection',
+  inhaler: 'Inhaler',
+  drops: 'Drops',
+  cream: 'Cream',
+  other: 'Other',
+};
+
+export const VISIT_KIND_LABEL: Record<VisitKind, string> = {
+  consultation: 'Consultation',
+  checkup: 'Check-up',
+  lab: 'Lab test',
+  dental: 'Dental',
+  emergency: 'Emergency',
+  vaccination: 'Vaccination',
+  therapy: 'Therapy',
+  other: 'Other',
+};
+
+export const VISIT_KIND_ICON: Record<VisitKind, string> = {
+  consultation: 'medkit-outline',
+  checkup: 'clipboard-outline',
+  lab: 'flask-outline',
+  dental: 'happy-outline',
+  emergency: 'alert-circle-outline',
+  vaccination: 'shield-checkmark-outline',
+  therapy: 'fitness-outline',
+  other: 'ellipsis-horizontal-outline',
+};
+
+export const DOCUMENT_KIND_LABEL: Record<DocumentKind, string> = {
+  prescription: 'Prescription',
+  report: 'Report',
+  scan: 'Scan',
+  bill: 'Bill',
+  insurance: 'Insurance',
+  vaccination: 'Vaccination card',
+  other: 'Other',
+};
+
+export const HEALTH_METRIC_LABEL: Record<HealthMetric, string> = {
+  blood_pressure: 'Blood pressure',
+  blood_sugar: 'Blood sugar',
+  weight: 'Weight',
+  heart_rate: 'Heart rate',
+  temperature: 'Temperature',
+  cholesterol: 'Cholesterol',
+  oxygen: 'Oxygen',
+  hba1c: 'HbA1c',
+  other: 'Other',
+};
+
+/** The unit a metric is normally recorded in, pre-filled on the form. */
+export const HEALTH_METRIC_UNIT: Record<HealthMetric, string> = {
+  blood_pressure: 'mmHg',
+  blood_sugar: 'mg/dL',
+  weight: 'kg',
+  heart_rate: 'bpm',
+  temperature: '°C',
+  cholesterol: 'mg/dL',
+  oxygen: '%',
+  hba1c: '%',
+  other: '',
+};
+
+/** True for the one metric that is genuinely two numbers (120/80). */
+export function isPairedMetric(metric: HealthMetric): boolean {
+  return metric === 'blood_pressure';
+}
+
+export const READING_CONTEXT_LABEL: Record<ReadingContext, string> = {
+  fasting: 'Fasting',
+  post_meal: 'After meal',
+  random: 'Random',
+  morning: 'Morning',
+  night: 'Night',
 };
 
 export type SmsInboxRow = typeof smsInbox.$inferSelect;

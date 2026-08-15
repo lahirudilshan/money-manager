@@ -259,7 +259,7 @@ export function GradientButton({
  * Uses the `Will` events on iOS (they fire with the frame before the animation)
  * and the `Did` events on Android (which lacks the `Will` variants).
  */
-function useKeyboardHeight(enabled: boolean): number {
+export function useKeyboardHeight(enabled: boolean): number {
   const [height, setHeight] = useState(0);
 
   useEffect(() => {
@@ -367,8 +367,16 @@ type SheetProps = {
   title?: string;
   /** Small uppercase context line above the title (e.g. a parent category). */
   eyebrow?: string;
-  /** Leading header icon. Defaults to a neutral list glyph when a title is set. */
-  icon?: keyof typeof Ionicons.glyphMap;
+  /**
+   * Leading header icon. Defaults to a neutral list glyph when a title is set.
+   *
+   * Accepts a rendered node as well as an Ionicons name, for the handful of
+   * headers whose mark is a BRAND rather than a glyph — a backup opened from
+   * Google Drive shows Drive's own four-colour triangle, matching the row it
+   * was opened from. Passing a node also opts out of the white tint the glyph
+   * path applies, since a multicolour logo must keep its own colours.
+   */
+  icon?: keyof typeof Ionicons.glyphMap | React.ReactNode;
   /**
    * Turns the leading icon tile into a BACK button.
    *
@@ -435,6 +443,21 @@ function SheetChrome({
          * exposes whatever is behind the notch.
          */
         paddingTop: fullScreen ? insets.top : 0,
+        /*
+         * The whole sheet gets shorter while the keyboard is up.
+         *
+         * This is what makes the footer sit ON the keyboard and the body
+         * scrollable within what is left. Padding the footer bar alone (the
+         * previous approach) moved the button's pixels but not the column's
+         * height, so the ScrollView above still believed it had the full screen
+         * and would not scroll a low field — the loan term — out from under the
+         * keyboard.
+         *
+         * Only applied when there is a footer, matching `useKeyboardHeight`'s
+         * own gate: a sheet without one has nothing to pin and iOS handles a
+         * plain scroll view's keyboard avoidance perfectly well.
+         */
+        paddingBottom: keyboardHeight,
         ...(fullScreen
           ? null
           : {
@@ -496,7 +519,17 @@ function SheetChrome({
                   justifyContent: 'center',
                 }}
               >
-                <Ionicons name={(icon ?? 'albums-outline') as never} size={20} color="#FFFFFF" />
+                {/* A node passed through as-is keeps its own colours; a name
+                    is drawn as the usual white glyph on the tinted tile. */}
+                {React.isValidElement(icon) ? (
+                  icon
+                ) : (
+                  <Ionicons
+                    name={((icon as keyof typeof Ionicons.glyphMap) ?? 'albums-outline') as never}
+                    size={20}
+                    color="#FFFFFF"
+                  />
+                )}
               </View>
             )}
             <View style={{ flex: 1 }}>
@@ -532,25 +565,84 @@ function SheetChrome({
       {/* Body — optionally a keyboard-aware scroll area so it flexes and the
           footer pins to the bottom. */}
       {scroll ? (
+        /*
+          `keyboardDismissMode="interactive"` lets a downward drag dismiss the
+          keyboard. Deliberately NOT `automaticallyAdjustKeyboardInsets`: the
+          column already shrinks by the keyboard height (see the wrapper's
+          `paddingBottom`), and adding the OS inset on top would double-count
+          it — leaving the body scrollable past a gap the size of the keyboard.
+        */
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ padding: space.lg, gap: space.lg }}
+          contentContainerStyle={{
+            padding: space.lg,
+            gap: space.lg,
+            /*
+             * Room at the end for the footer, which DRAWS OVER this content.
+             *
+             * The footer is a sibling of the scroll area, not part of it, so
+             * anything within its height of the end could not be scrolled into
+             * view at all — tapping the last field on a long form (the loan
+             * term, say) focused an input that then sat behind the button, or
+             * behind the keyboard, with no amount of scrolling able to reveal
+             * it. Same failure `FOOTER_CLEARANCE` documents for `PinnedFooter`;
+             * it was simply never applied to the sheet.
+             *
+             * `space.lg` alone is right when there is no footer to clear.
+             */
+            paddingBottom: footer ? FOOTER_CLEARANCE : space.lg,
+          }}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}
         >
           {children}
         </ScrollView>
+      ) : footer ? (
+        /*
+          A non-scrolling body still has to FILL the sheet when there is a
+          footer beneath it.
+
+          Rendering `children` bare left the column exactly as tall as its
+          content, so the footer stopped wherever the content happened to end —
+          the date picker's Today/Yesterday buttons sat mid-screen with a tall
+          band of empty sheet below them, rather than pinned at the bottom
+          where a thumb is.
+
+          `flex: 1` on a wrapper does what the ScrollView's own `flex: 1` does
+          on the other branch: take the remaining height so the footer is
+          pushed to the foot of the sheet. Only applied when there IS a footer
+          — a footerless sheet is deliberately sized to its content, which is
+          what lets a short one stay short.
+        */
+        <View style={{ flex: 1 }}>{children}</View>
       ) : (
         children
       )}
 
-      {/* Pinned footer — lifts with the keyboard when open. */}
+      {/*
+        Pinned footer — sits directly on top of the keyboard when it is open.
+
+        The lift is done by PADDING THE COLUMN (see the `paddingBottom` on the
+        wrapper above), not by padding this bar. Growing this bar's own bottom
+        padding by the keyboard height was the old approach and it did not work:
+        the column stayed the same height, so the scroll area never shrank and
+        the button merely grew a tall transparent skirt behind the keyboard
+        while the body kept its original size.
+
+        Padding the column instead makes the whole sheet genuinely shorter while
+        the keyboard is up, which is what lets the ScrollView above scroll a
+        focused field into the remaining space.
+      */}
       {footer ? (
         <View
           style={{
             paddingHorizontal: space.lg,
             paddingTop: space.sm,
-            paddingBottom: (keyboardHeight > 0 ? keyboardHeight : insets.bottom) + space.sm,
+            // No keyboard term here: the column carries it. The home-indicator
+            // inset is only wanted when the keyboard is CLOSED — with it open,
+            // the keyboard already covers that area and the gap reads as a hole.
+            paddingBottom: (keyboardHeight > 0 ? 0 : insets.bottom) + space.sm,
             borderTopWidth: StyleSheet.hairlineWidth,
             borderTopColor: colors.hairline,
             backgroundColor: colors.surface,
@@ -1254,18 +1346,33 @@ export function AppHeader({
   onBack,
   action,
   right,
+  inModal = false,
 }: {
   title: string;
   onBack?: () => void;
   action?: { icon: keyof typeof Ionicons.glyphMap; onPress: () => void; label: string };
   right?: React.ReactNode;
+  /**
+   * Drop the status-bar inset, for a header inside a presented sheet.
+   *
+   * A `presentation: 'modal'` screen is ALREADY inset below the status bar by
+   * iOS — it starts partway down the display with the previous screen showing
+   * above it. Adding `insets.top` on top of that counted the notch twice and
+   * left a tall empty band above the title, which is why the health forms sat
+   * noticeably lower than every other sheet in the app.
+   *
+   * An explicit flag rather than trying to detect the presentation: a header
+   * cannot know how its screen was routed, and guessing from `insets.top === 0`
+   * fails on the devices that have no notch.
+   */
+  inModal?: boolean;
 }) {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
   return (
     <View
       style={{
-        paddingTop: insets.top + space.md,
+        paddingTop: (inModal ? 0 : insets.top) + space.md,
         paddingHorizontal: space.lg,
         paddingBottom: space.sm,
         backgroundColor: colors.canvas,

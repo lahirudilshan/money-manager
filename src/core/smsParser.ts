@@ -199,12 +199,66 @@ const CREDIT_PATTERNS: RegExp[] = [/\bcredited\b/i, /\bcredit of\b/i, /\breceive
 
 const BILL_PATTERNS: RegExp[] = [/\bbill\b[^.]*\bdue\b/i, /\bdue (?:on|by)\b/i, /\bamounting to\b/i];
 
+/**
+ * The transaction-type label an alert states after its `SMS ALERT:` heading.
+ *
+ * Captured so both the direction and the finer kind can read the SAME token,
+ * rather than each re-guessing from loose keywords scattered through the text.
+ *
+ * The separator is `\s*:?\s*` because the heading is written both ways in the
+ * wild — "HNB SMS ALERT:INTERNET" glued, and "HNB SMS ALERT: PURCHASE" spaced.
+ */
+const ALERT_LABEL_RE = /\bSMS\s+ALERT\s*:?\s*([A-Z][A-Z\s/&-]{1,24}?)\s*(?:,|$)/i;
+
+/** The label this message states as its transaction type, uppercased, or ''. */
+function alertLabel(text: string): string {
+  const match = text.match(ALERT_LABEL_RE);
+  return match ? match[1].trim().toUpperCase() : '';
+}
+
+/**
+ * Alert labels that mean money LEFT the account.
+ *
+ * Each is a way HNB names an outgoing transaction on a card or account.
+ * "INTERNET" and "IPG" are card-not-present payments (an internet payment
+ * gateway); "POS" is in person; the rest are self-describing. Deliberately a
+ * fixed list rather than "any label", because the same heading also introduces
+ * credits and notices, and guessing a direction from an unknown label would
+ * invent spend out of a message nobody has read yet.
+ */
+const DEBIT_ALERT_LABELS =
+  /^(?:INTERNET|IPG|POS|PURCHASE|ATM|CASH\s*WITHDRAWAL|WITHDRAWAL|FUND\s*TRANSFER|TRANSFER\s*OUT|OUTWARD\s*TRANSFER|PAYMENT|DEBIT|STANDING\s*ORDER|BILL\s*PAYMENT)$/;
+
+/** Alert labels that mean money ARRIVED. */
+const CREDIT_ALERT_LABELS = /^(?:CREDIT|DEPOSIT|INWARD\s*TRANSFER|TRANSFER\s*IN|SALARY|REFUND)$/;
+
 const DEBIT_PATTERNS: RegExp[] = [
   /\bdebited\b/i,
   /\bwithdrawal\b/i,
   /\bpurchase\b/i,
   /\bPOS TXN\b/i,
   /\bspent\b/i,
+  /*
+   * The transaction TYPE stated as a bare label, HNB's field-list style:
+   *
+   *   "HNB SMS ALERT:INTERNET, Account:1380***6626,Location:UBER EATS, LK,..."
+   *
+   * These messages never conjugate a verb — the type IS the label after
+   * "SMS ALERT:" — so every pattern above missed them and `classifyDirection`
+   * returned null. That is a silent drop: the message is transaction-shaped, so
+   * the classifier accepts it and `isDiscardableNoise` correctly keeps it, and
+   * it then sits in the inbox file forever while the user watches the file grow
+   * and no transaction appear. Only "PURCHASE" ever worked, because that word
+   * happens to also be a debit verb.
+   *
+   * "INTERNET" is an online card purchase (HNB's word for a card-not-present
+   * payment); the rest are the labels the same alert uses for the other ways
+   * money leaves. Anchored to the `SMS ALERT:` prefix so these short, common
+   * words cannot fire on an unrelated message that merely contains them.
+   *
+   * Applied in `classifyDirection` rather than listed here, because the test is
+   * over the EXTRACTED label, not over the raw text a RegExp list matches.
+   */
 ];
 
 /**
@@ -341,11 +395,54 @@ export interface ItemisedFee {
  * `\s*[:.]?\s*` keeps the separator optional: "Txn Fee: 30.00LKR",
  * "Txn Fee 30.00", and "Fee:30.00LKR" all occur.
  */
+/**
+ * The labels that may introduce an itemised fee.
+ *
+ * A QUALIFIED label ("Txn Fee", "Service Charge") is unambiguous — the words
+ * name the line item's own type. A BARE "Fee"/"Charges" is not, and that
+ * ambiguity is what produced the 9,000-rupee "bank fee": the bare alternative
+ * matched a loose "charge" anywhere in the receipt and then swallowed the
+ * WITHDRAWAL's amount, because nothing required the number to belong to the
+ * label it was read from.
+ *
+ * Both are still accepted — banks really do print "Fee:30.00LKR" — but the bare
+ * form is fenced in by `FEE_LABEL_SEPARATOR` below, which demands the amount sit
+ * directly against the label rather than merely somewhere after it.
+ */
+const QUALIFIED_FEE_LABEL =
+  '(?:txn|transaction|service|handling|processing|atm|bank|withdrawal|cash)\\s+(?:fee|fees|charge|charges)';
+
+/**
+ * What may sit between a fee's label and its amount: a colon, a dot, or spaces
+ * — nothing else.
+ *
+ * This is the guard that keeps a fee's amount its OWN. Previously the separator
+ * was `\s*[:.]?\s*`, which looks strict but sits in front of an alternation
+ * whose second branch made the currency optional, so "Charges" could bind to a
+ * number several tokens away — the receipt's real amount. Requiring the label
+ * and figure to be adjacent means "Amt(Approx.): 9000.00 LKR ... Txn Fee:
+ * 30.00LKR" can only ever read 30, and a receipt that mentions "charges" in
+ * passing yields no fee at all rather than borrowing the withdrawal's number.
+ */
+const FEE_LABEL_SEPARATOR = '\\s*[:.]?\\s{0,3}';
+
 const ITEMISED_FEE_RE = new RegExp(
-  `\\b((?:txn|transaction|service|handling|processing|atm|bank)\\s+(?:fee|fees|charge|charges)|fee|charges?)\\s*[:.]?\\s*` +
+  `\\b(${QUALIFIED_FEE_LABEL}|fee|charges?)${FEE_LABEL_SEPARATOR}` +
     `(?:(${CURRENCY_ALTERNATION})\\s*([\\d,]+(?:\\.\\d{1,2})?)|([\\d,]+(?:\\.\\d{1,2})?)\\s*(${CURRENCY_ALTERNATION})?)`,
   'i',
 );
+
+/**
+ * The share of a transaction a plausible fee may be.
+ *
+ * A bank charge is a small cut of what it is charged on — 30 rupees on a 9,000
+ * withdrawal is 0.3%. When a "fee" reads as a large fraction of the parent, the
+ * label almost certainly captured the transaction's own amount, which is exactly
+ * the misread that put 9,000 on the Bank charges line while the 30 beside it was
+ * right. Half is deliberately loose: it rejects the misread (which reads 100%)
+ * without second-guessing a genuinely steep charge on a small transfer.
+ */
+const MAX_FEE_SHARE_OF_PARENT = 0.5;
 
 /**
  * Read a fee itemised inside a message that is mostly about something else.
@@ -472,8 +569,15 @@ export function splitItemisedFee(parsed: ParsedSms): ParsedSms | null {
    * If a loose label match ever captured the main amount, the "fee" would equal
    * the parent and double the spend. Equal amounts are far more likely to be
    * that misread than a genuine fee that happens to match the withdrawal.
+   *
+   * The SHARE test extends that to the near-misses the equality test let
+   * through. A 9,000 "fee" on a 9,000 withdrawal was caught; the same misread
+   * reading a slightly different figure was not, and it reached the board as a
+   * five-figure bank charge. A fee is a small cut of its parent or it is not a
+   * fee — see `MAX_FEE_SHARE_OF_PARENT`.
    */
   if (fee.amountMinor >= parsed.amountMinor) return null;
+  if (fee.amountMinor > parsed.amountMinor * MAX_FEE_SHARE_OF_PARENT) return null;
 
   return {
     ...parsed,
@@ -617,6 +721,67 @@ function clean(value: string): string {
 }
 
 /**
+ * Placeholders a bank prints where a reason would go when the user gave none.
+ *
+ * "ref" is HNB's — `Reason:MB:ref` is an empty marker, not a description, and
+ * treating it as one is what previously produced merchants like "Bal:LKR
+ * 405,757". These are rejected so a transfer with no stated purpose keeps an
+ * empty merchant and is still recognised as an internal transfer by
+ * `classifyKind`, which depends on exactly that emptiness.
+ */
+const EMPTY_REASON_MARKERS = /^(?:ref|n\/?a|nil|none|self|own|transfer|fund\s*transfer)$/i;
+
+/**
+ * The reason the user typed for a mobile-banking transfer, or ''.
+ *
+ * Stops at the bank's own trailing boilerplate — the balance, the scam warning,
+ * the hotline — none of which is part of what the user wrote. Everything about
+ * this is deliberately conservative, because the value becomes the row's name
+ * and is fed to the learning table: a wrong reason teaches a merchant that will
+ * never recur.
+ */
+function transferReason(text: string): string {
+  const match = text.match(
+    /Reason\s*:\s*(?:MB\s*:)?\s*([^\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE)|[.\n]|$)/i,
+  );
+  if (!match) return '';
+
+  const value = clean(match[1]);
+  if (value.length === 0) return '';
+
+  // A placeholder is the bank saying "no reason given" — see the marker list.
+  if (EMPTY_REASON_MARKERS.test(value)) return '';
+
+  /*
+   * It must read as WORDS.
+   *
+   * A bare reference number ("TXN9931", "0071") describes nothing to the user
+   * and would only pollute the learning table, so a reason with no real word in
+   * it is treated as absent. Requiring three letters also keeps a stray
+   * currency fragment out.
+   */
+  if (!/[a-z]{3,}/i.test(value)) return '';
+
+  return value;
+}
+
+/**
+ * Whether the BANK named a payee — a merchant that is not merely the reason the
+ * user typed.
+ *
+ * The distinction is what keeps an annotated transfer a transfer. Both produce
+ * a merchant, but only one means the money reached a shop; see the MB rule in
+ * `classifyKind`.
+ */
+function namesPayee(text: string): boolean {
+  const merchant = extractMerchant(text);
+  if (merchant.length === 0) return false;
+
+  // A merchant that is exactly the typed reason is not a payee.
+  return merchant !== transferReason(text);
+}
+
+/**
  * The payee/merchant/description. Each shape hides it differently: NDB uses
  * "at MERCHANT." (POS) or "as TYPE" (transfers), HNB uses "Location:MERCHANT,"
  * and "Reason:MB:loan-CODE". Tried in that order; empty when none applies.
@@ -625,6 +790,27 @@ function extractMerchant(text: string): string {
   // "Reason:MB:loan-AML08" — surface the loan code as the description.
   const loan = text.match(/Reason\s*:\s*(?:MB:)?(loan-[A-Z0-9]+)/i);
   if (loan) return clean(loan[1]);
+
+  /*
+   * The reason the USER typed when they made the transfer.
+   *
+   * A mobile-banking transfer names no merchant — there is nothing for the bank
+   * to print, because the money went to an account rather than a shop. What it
+   * does carry is the reference the user wrote themselves:
+   *
+   *   "LKR 40,000.00 debited to Ac No:13802XXXXX50 ... Reason:MB:food expenses"
+   *
+   * That is the single best description of the transaction available anywhere in
+   * the message — better than most merchant names, because the user chose it to
+   * describe this exact payment. It was being thrown away: the merchant came out
+   * empty, so the card showed "Need a category" on a message that says in plain
+   * words what it was for.
+   *
+   * Read here, ahead of the generic clauses below, because a typed reason
+   * outranks anything inferred from the message's boilerplate.
+   */
+  const reason = transferReason(text);
+  if (reason) return reason;
 
   /*
    * A receipt TITLE outranks a Location field.
@@ -762,6 +948,21 @@ function classifyDirection(text: string): SmsDirection | null {
   if (firstMatch(CREDIT_PATTERNS, text)) return 'credit';
   if (firstMatch(DEBIT_PATTERNS, text)) return 'debit';
   if (firstMatch(BILL_PATTERNS, text)) return 'bill';
+
+  /*
+   * Fall back to the alert's own TYPE LABEL, for the field-list formats that
+   * state what happened instead of narrating it — see `DEBIT_ALERT_LABELS`.
+   *
+   * Checked last so the verb wins wherever a message has one: the verb
+   * describes this specific transaction, while the label is a channel name that
+   * a bank could in principle reuse across a reversal or a notice.
+   */
+  const label = alertLabel(text);
+  if (label) {
+    if (CREDIT_ALERT_LABELS.test(label)) return 'credit';
+    if (DEBIT_ALERT_LABELS.test(label)) return 'debit';
+  }
+
   return null;
 }
 
@@ -847,15 +1048,43 @@ function classifyKind(text: string, direction: SmsDirection): SmsKind {
    * transfers land here, and while they were classified 'other' they could never
    * pair with the NDB credit, so every top-up counted as spend AND income.
    *
-   * Narrow on purpose: a `MB:` channel marker, a debit, and no merchant text
-   * recovered. A mobile-banking payment that DOES name a payee keeps flowing to
-   * the merchant rules below, where it belongs.
+   * Narrow on purpose: a `MB:` channel marker, a debit, and no PAYEE recovered.
+   * A mobile-banking payment that DOES name a payee keeps flowing to the
+   * merchant rules below, where it belongs.
+   *
+   * The payee test deliberately ignores a typed REASON. "Reason:MB:food
+   * expenses" is the user describing their own transfer, not the bank naming a
+   * shop — the money still went to an account — so a transfer that carries one
+   * must stay a `transfer_out` and remain eligible for internal-transfer
+   * pairing. Testing `extractMerchant` here instead would silently reclassify
+   * every annotated transfer the moment reasons started being read, and a
+   * top-up that cannot pair counts as both spend and income.
    */
-  if (direction === 'debit' && /\bMB\s*:/i.test(text) && !extractMerchant(text)) {
+  if (direction === 'debit' && /\bMB\s*:/i.test(text) && !namesPayee(text)) {
     return 'transfer_out';
   }
   if (/\bPOS TXN\b|purchase/i.test(text)) return 'purchase';
   if (/\bbill\b[^.]*\bdue\b|due (?:on|by)/i.test(text)) return 'utility';
+
+  /*
+   * The alert's own type label, for the field-list formats — see
+   * `classifyDirection`, which reads the same token for the direction.
+   *
+   * Without this an "INTERNET" card payment survives as kind `other`, which
+   * costs the user the category prior: `scoreSubcategory` treats `purchase`
+   * as a merchant spend, while `other` matches nothing in particular and the
+   * draft arrives with no suggestion at all. The ATM/transfer labels are
+   * mapped for the same reason — a cash withdrawal announced only by its label
+   * should still reach the cash line.
+   */
+  const label = alertLabel(text);
+  if (label) {
+    if (/^(?:ATM|CASH\s*WITHDRAWAL|WITHDRAWAL)$/.test(label)) return 'atm';
+    if (/^(?:FUND\s*TRANSFER|TRANSFER\s*OUT|OUTWARD\s*TRANSFER)$/.test(label)) return 'transfer_out';
+    if (/^(?:INWARD\s*TRANSFER|TRANSFER\s*IN|SALARY)$/.test(label)) return 'transfer_in';
+    if (/^(?:INTERNET|IPG|POS|PURCHASE)$/.test(label)) return 'purchase';
+  }
+
   return 'other';
 }
 
@@ -1013,7 +1242,14 @@ export function parseSms(input: string): ParsedSms | null {
   const marked = markedFeeLabel(text);
   if (marked) {
     const fee = extractItemisedFee(text);
-    if (fee && fee.amountMinor > 0 && fee.amountMinor < base.amountMinor) {
+    if (
+      fee &&
+      fee.amountMinor > 0 &&
+      fee.amountMinor < base.amountMinor &&
+      // Same share guard the split applies, so a stored row cannot come back
+      // from the database as the misread the split refused to create.
+      fee.amountMinor <= base.amountMinor * MAX_FEE_SHARE_OF_PARENT
+    ) {
       return {
         ...base,
         kind: 'bank_charge',

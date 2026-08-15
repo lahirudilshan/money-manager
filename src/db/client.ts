@@ -154,6 +154,10 @@ const DDL = [
     bank_id TEXT,
     principal_minor INTEGER NOT NULL,
     annual_rate_pct REAL NOT NULL,
+    -- How the lender charges the rate: reducing balance (emi) or flat. See
+    -- the loans table in schema.ts. Declared here AND in ensureAdditiveColumns,
+    -- since that pass only touches tables that already exist.
+    interest_method TEXT NOT NULL DEFAULT 'emi',
     term_months INTEGER NOT NULL,
     start_date INTEGER NOT NULL,
     color TEXT NOT NULL DEFAULT '#F97316',
@@ -193,6 +197,12 @@ const DDL = [
     plan_due_date INTEGER,
     plan_start_date INTEGER,
     plan_remind_days_before INTEGER NOT NULL DEFAULT 14,
+    -- Per-property attribution. A plain flag with no foreign key, so it is safe
+    -- to declare here even though houses is created later in this same list.
+    -- house_id is deliberately NOT here: it references houses, and adding it
+    -- alongside its index is left to ensureAdditiveColumns, which now runs
+    -- after the DDL as well as before it.
+    house_scoped INTEGER NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -324,6 +334,98 @@ const DDL = [
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
   `CREATE INDEX IF NOT EXISTS service_items_service_idx ON service_items(service_id)`,
+  // Health mini-app — see core/miniApps.ts. Opt-in, so these stay empty on a
+  // device that never enables it. Column comments live in schema.ts.
+  `CREATE TABLE IF NOT EXISTS health_people (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    -- One of the keys in PERSON_RELATIONS, 'self' included. Declared here AND in
+    -- ensureAdditiveColumns, since that pass only touches existing tables.
+    relation TEXT,
+    relation_label TEXT,
+    born_on INTEGER,
+    blood_group TEXT,
+    allergies TEXT,
+    conditions TEXT,
+    note TEXT,
+    color TEXT NOT NULL DEFAULT '#D6336C',
+    icon TEXT NOT NULL DEFAULT 'person-outline',
+    image_uri TEXT,
+    is_self INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE TABLE IF NOT EXISTS health_visits (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT NOT NULL REFERENCES health_people(id) ON DELETE CASCADE,
+    visited_at INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'consultation',
+    doctor TEXT,
+    facility TEXT,
+    speciality TEXT,
+    reason TEXT,
+    diagnosis TEXT,
+    note TEXT,
+    cost_minor INTEGER,
+    transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+    follow_up_on INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS health_visits_person_idx ON health_visits(person_id, visited_at)`,
+  `CREATE INDEX IF NOT EXISTS health_visits_follow_up_idx ON health_visits(follow_up_on)`,
+  // A prescription line, not a dose tracker — see `healthMedicines` in schema.ts.
+  `CREATE TABLE IF NOT EXISTS health_medicines (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT NOT NULL REFERENCES health_people(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    dosage TEXT,
+    generic_name TEXT,
+    form TEXT NOT NULL DEFAULT 'tablet',
+    instructions TEXT,
+    started_on INTEGER,
+    ended_on INTEGER,
+    prescribed_by TEXT,
+    visit_id TEXT REFERENCES health_visits(id) ON DELETE SET NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS health_medicines_person_idx ON health_medicines(person_id)`,
+  `CREATE INDEX IF NOT EXISTS health_medicines_visit_idx ON health_medicines(visit_id)`,
+  `CREATE TABLE IF NOT EXISTS health_documents (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT NOT NULL REFERENCES health_people(id) ON DELETE CASCADE,
+    visit_id TEXT REFERENCES health_visits(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'report',
+    image_uri TEXT,
+    document_date INTEGER NOT NULL,
+    summary TEXT,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS health_documents_person_idx ON health_documents(person_id, document_date)`,
+  `CREATE INDEX IF NOT EXISTS health_documents_visit_idx ON health_documents(visit_id)`,
+  `CREATE TABLE IF NOT EXISTS health_readings (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT NOT NULL REFERENCES health_people(id) ON DELETE CASCADE,
+    visit_id TEXT REFERENCES health_visits(id) ON DELETE SET NULL,
+    metric TEXT NOT NULL DEFAULT 'blood_pressure',
+    value REAL NOT NULL,
+    value_secondary REAL,
+    unit TEXT,
+    measured_at INTEGER NOT NULL,
+    context TEXT,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS health_readings_person_idx ON health_readings(person_id, metric, measured_at)`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL,
@@ -796,12 +898,33 @@ function ensureAdditiveColumns(): void {
     ensureColumn('cards', 'nickname', 'nickname TEXT');
   }
 
+  /*
+   * `relation_label` — the user's own word when the relation is "other".
+   *
+   * Only matters for a device that installed the health add-on from a build
+   * where `relation` was still free text; the column is in the DDL above for
+   * everyone else. Harmless either way, which is the point of this pass.
+   */
+  const hasHealthPeople = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='health_people'`,
+  );
+  if (hasHealthPeople) {
+    ensureColumn('health_people', 'relation_label', 'relation_label TEXT');
+  }
+
   const hasLoans = expoDb.getFirstSync(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='loans'`,
   );
   if (hasLoans) {
     ensureColumn('loans', 'bank_id', 'bank_id TEXT');
     ensureColumn('loans', 'paid_installments', 'paid_installments INTEGER NOT NULL DEFAULT 0');
+    /*
+     * Reducing-balance vs flat interest — see `loans` in schema.ts.
+     *
+     * Defaults to 'emi', which is what every pre-existing row was computed as,
+     * so an upgraded device's loans keep the exact figures they had.
+     */
+    ensureColumn('loans', 'interest_method', "interest_method TEXT NOT NULL DEFAULT 'emi'");
   }
 
   const hasCategories = expoDb.getFirstSync(
@@ -1121,6 +1244,30 @@ export function initialiseDatabase(): void {
   for (const statement of DDL) {
     expoDb.execSync(statement);
   }
+
+  /*
+   * AGAIN, after the DDL — and this second call is the one a fresh install
+   * depends on.
+   *
+   * Every block inside `ensureAdditiveColumns` is guarded by "does this table
+   * exist yet", which on a brand-new device is false for all of them: the
+   * tables are created by the DDL loop above, which had not run. So the first
+   * call did nothing, the DDL then created each table from its own column list,
+   * and any column that lives ONLY in the additive pass never appeared.
+   *
+   * `house_scoped` was exactly that: absent from the `subcategories` DDL and
+   * added only here, so a fresh install could not commit an onboarding plan at
+   * all — `subcategoryRepo.create` threw "table subcategories has no column
+   * named house_scoped" and the whole setup died on the last step. Upgraded
+   * devices were fine, which is why it survived: the tables already existed, so
+   * the first call did the work.
+   *
+   * Running it on both sides is safe because it is idempotent — `ensureColumn`
+   * checks `PRAGMA table_info` and returns early when the column is present —
+   * and it keeps the pre-DDL call, which the rebuild/repair helpers below still
+   * rely on for upgraded devices.
+   */
+  ensureAdditiveColumns();
 
   // Runs after the DDL so the tables it touches are guaranteed to exist. Like
   // the helpers above it is idempotent and shape-driven, so a loan category

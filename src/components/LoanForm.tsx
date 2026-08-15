@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
-import { buildSchedule } from '../core/amortization';
+import { buildSchedule, type InterestMethod } from '../core/amortization';
 import { formatAmountInput, formatMoney, parseAmount } from '../core/money';
 import { BANKS, bankById } from '../data/banks';
 import type { NewLoan } from '../db/schema';
@@ -26,6 +26,13 @@ export interface LoanDraft {
   bankId: string | null;
   amount: string;
   rate: string;
+  /**
+   * How the lender charges the rate — see `InterestMethod`.
+   *
+   * Defaults to `flat` for every loan type (see `emptyLoanDraft`), and the loan
+   * type never changes it: only the user does, through the toggle.
+   */
+  interestMethod: InterestMethod;
   years: string;
   /** How many installments have already been paid (0 = brand new loan). */
   paidInstallments: string;
@@ -37,6 +44,16 @@ export const emptyLoanDraft: LoanDraft = {
   bankId: null,
   amount: '',
   rate: '',
+  /*
+   * Flat by default, for every loan type.
+   *
+   * This is a deliberate bias toward the more expensive reading: a flat loan
+   * entered as reducing understates what leaves the account each month, and the
+   * user only finds out when the money is short. The reverse error is visible
+   * immediately and harmlessly — the plan simply looks a little pessimistic
+   * until they flip the toggle.
+   */
+  interestMethod: 'flat',
   years: '5',
   paidInstallments: '0',
 };
@@ -94,6 +111,7 @@ export function loanDraftFrom(loan: {
   annualRatePct: number;
   termMonths: number;
   paidInstallments: number;
+  interestMethod?: InterestMethod;
 }): LoanDraft {
   return {
     name: loan.name,
@@ -101,6 +119,7 @@ export function loanDraftFrom(loan: {
     bankId: loan.bankId,
     amount: formatAmountInput(String(loan.principalMinor / 100)),
     rate: String(loan.annualRatePct),
+    interestMethod: loan.interestMethod ?? 'emi',
     // Kept as years, which is what the form's presets and field speak in. A
     // term that is not a whole number of years still round-trips, because
     // `loanDraftToInput` multiplies back by 12 and rounds.
@@ -120,6 +139,7 @@ export function loanDraftToInput(draft: LoanDraft, fallbackColor: string): Omit<
     bankId: draft.bankId,
     principalMinor: parseAmount(draft.amount) ?? 0,
     annualRatePct: Number.parseFloat(draft.rate),
+    interestMethod: draft.interestMethod,
     termMonths,
     // Back-date the start so "paid installments" months have already elapsed —
     // this keeps the schedule's paid/remaining split correct without a separate
@@ -174,6 +194,15 @@ export function LoanForm({
       const suggested = suggestLoanName(next.bankId, next.kind);
       if (suggested) next.name = suggested;
     }
+
+    /*
+     * The loan TYPE does NOT override the method.
+     *
+     * An earlier pass flipped this to `emi` whenever the type was anything but
+     * a lease, which quietly undid the flat default the moment someone picked
+     * "Personal". Flat stays until the user says otherwise — see
+     * `emptyLoanDraft` for why that direction is the safe one to be wrong in.
+     */
 
     onChange(next);
   }
@@ -235,6 +264,29 @@ export function LoanForm({
         />
         <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
           The yearly rate as the bank quotes it — not the monthly one.
+        </Text>
+
+        {/*
+          HOW that rate is charged, which the rate alone does not say.
+
+          The same "11.5%" means two different monthly figures depending on the
+          product, and the gap is not small: 7,200,000 over 5 years is 158,347 a
+          month on reducing balance and 189,000 flat. Asking is the only way to
+          be right, and the type-based default means most users never have to.
+        */}
+        <PillSelect
+          label="How interest is charged"
+          options={[
+            { key: 'emi', label: 'Reducing', icon: 'trending-down-outline' as const },
+            { key: 'flat', label: 'Flat rate', icon: 'remove-outline' as const },
+          ]}
+          selectedKey={draft.interestMethod}
+          onSelect={(key) => update({ interestMethod: key as InterestMethod })}
+        />
+        <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
+          {draft.interestMethod === 'flat'
+            ? 'Interest on the full amount for the whole term — usual for vehicle leases.'
+            : 'Interest on what you still owe, falling as you repay — usual for bank loans.'}
         </Text>
 
         <View style={{ gap: space.sm }}>
@@ -310,7 +362,12 @@ export function LoanForm({
         ) : null}
       </FormSection>
 
-      <LoanPreview amount={draft.amount} rate={draft.rate} years={draft.years} />
+      <LoanPreview
+        amount={draft.amount}
+        rate={draft.rate}
+        years={draft.years}
+        interestMethod={draft.interestMethod}
+      />
     </>
   );
 }
@@ -466,10 +523,14 @@ export function LoanPreview({
   amount,
   rate,
   years,
+  interestMethod = 'emi',
 }: {
   amount: string;
   rate: string;
   years: string;
+  /** Without this the preview quotes reducing-balance figures for a flat loan,
+   *  understating a lease by tens of thousands a month. */
+  interestMethod?: InterestMethod;
 }) {
   const { colors, space } = useTheme();
   const principal = parseAmount(amount);
@@ -484,6 +545,7 @@ export function LoanPreview({
     principalMinor: principal,
     annualRatePct: annualRate,
     termMonths: Math.round(termYears * 12),
+    interestMethod,
   });
 
   const totalPayable = principal + summary.totalInterestMinor;

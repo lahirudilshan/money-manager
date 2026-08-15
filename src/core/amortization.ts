@@ -8,11 +8,35 @@ import type { Minor } from './money';
  *   5,400,000 @ 13.00% / 5y -> 122,867/mo, ~1,971,996 total interest
  */
 
+/**
+ * How the lender applies the quoted rate. The same headline percentage means
+ * two very different sums, so this cannot be inferred — it has to be recorded.
+ */
+export type InterestMethod =
+  /**
+   * Reducing balance (EMI). Interest is charged on the OUTSTANDING balance, so
+   * it falls every month as the principal is repaid. This is how banks quote
+   * personal loans and mortgages.
+   */
+  | 'emi'
+  /**
+   * Flat rate. Interest is calculated once on the FULL principal for the whole
+   * term, then split evenly across the installments — it never falls, because
+   * repaying principal does not reduce the base it is charged on.
+   *
+   * Standard for vehicle leases here, and materially more expensive than the
+   * same headline rate reducing: 7,200,000 at 11.5% over 5 years is 158,347 a
+   * month on reducing balance, but 189,000 flat.
+   */
+  | 'flat';
+
 export interface LoanTerms {
   principalMinor: Minor;
   /** Annual nominal rate as a percentage, e.g. 11.5 for 11.50%. */
   annualRatePct: number;
   termMonths: number;
+  /** Defaults to `emi`, matching every loan recorded before this existed. */
+  interestMethod?: InterestMethod;
 }
 
 export interface AmortizationEntry {
@@ -39,8 +63,25 @@ export interface LoanSummary {
  * Zero-interest loans divide evenly instead — the formula is undefined at r=0.
  */
 export function monthlyInstallment(terms: LoanTerms): Minor {
-  const { principalMinor, annualRatePct, termMonths } = terms;
+  const { principalMinor, annualRatePct, termMonths, interestMethod = 'emi' } = terms;
   if (principalMinor <= 0 || termMonths <= 0) return 0;
+
+  /*
+   * Flat rate: the whole term's interest, worked out once on the full
+   * principal, then divided evenly along with the principal itself.
+   *
+   *   interest    = P × rate × years
+   *   installment = (P + interest) / n
+   *
+   * No annuity discounting, because nothing is discounted — the borrower pays
+   * interest on the original amount for every month of the term, whatever they
+   * have already repaid.
+   */
+  if (interestMethod === 'flat') {
+    const years = termMonths / 12;
+    const interest = principalMinor * (annualRatePct / 100) * years;
+    return Math.round((principalMinor + interest) / termMonths);
+  }
 
   const monthlyRate = annualRatePct / 100 / 12;
   if (monthlyRate === 0) return Math.round(principalMinor / termMonths);
@@ -56,7 +97,7 @@ export function monthlyInstallment(terms: LoanTerms): Minor {
  * on zero — otherwise decades of half-cent rounding leave a phantom balance.
  */
 export function buildSchedule(terms: LoanTerms): LoanSummary {
-  const { principalMinor, annualRatePct, termMonths } = terms;
+  const { principalMinor, annualRatePct, termMonths, interestMethod = 'emi' } = terms;
   const installmentMinor = monthlyInstallment(terms);
 
   if (principalMinor <= 0 || termMonths <= 0) {
@@ -65,6 +106,56 @@ export function buildSchedule(terms: LoanTerms): LoanSummary {
       totalPaidMinor: 0,
       totalInterestMinor: 0,
       schedule: [],
+    };
+  }
+
+  /*
+   * A flat loan's rows are a different shape, not just different numbers.
+   *
+   * Every period carries the SAME interest — one twelfth of the annual charge
+   * on the full principal — and the same principal share, because neither is
+   * affected by what has been repaid. So this cannot reuse the reducing-balance
+   * loop below, which derives interest from the running balance.
+   */
+  if (interestMethod === 'flat') {
+    const totalInterestFlat = Math.round(
+      principalMinor * (annualRatePct / 100) * (termMonths / 12),
+    );
+    const interestPerPeriod = Math.round(totalInterestFlat / termMonths);
+    const schedule: AmortizationEntry[] = [];
+
+    let balance = principalMinor;
+    let interestBooked = 0;
+    let totalPaid = 0;
+
+    for (let period = 1; period <= termMonths; period += 1) {
+      const isFinal = period === termMonths;
+
+      // The last row absorbs both rounding drifts — interest and principal —
+      // so the totals match the quoted figures exactly and the balance lands
+      // on zero rather than a few cents either side.
+      const interest = isFinal ? totalInterestFlat - interestBooked : interestPerPeriod;
+      const payment = isFinal ? balance + interest : installmentMinor;
+      const principalPart = payment - interest;
+
+      balance = Math.max(0, balance - principalPart);
+      interestBooked += interest;
+      totalPaid += payment;
+
+      schedule.push({
+        period,
+        paymentMinor: payment,
+        principalMinor: principalPart,
+        interestMinor: interest,
+        balanceMinor: balance,
+      });
+    }
+
+    return {
+      installmentMinor,
+      totalPaidMinor: totalPaid,
+      totalInterestMinor: totalInterestFlat,
+      schedule,
     };
   }
 

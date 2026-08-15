@@ -15,6 +15,8 @@ export default function OnboardingLayout() {
         contentStyle: { backgroundColor: colors.canvas },
       }}
     >
+      {/* The fork: restore an existing backup, or build a new plan. */}
+      <Stack.Screen name="welcome" />
       <Stack.Screen name="index" />
       <Stack.Screen name="about" />
       <Stack.Screen name="categories" />

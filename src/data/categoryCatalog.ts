@@ -101,8 +101,28 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     color: '#B7791F',
     blurb: 'Day-to-day essentials',
     subcategories: [
-      { id: 'groceries', name: 'Groceries', icon: 'basket-outline', dueDay: 1, common: true },
-      { id: 'dining', name: 'Eating out', icon: 'restaurant-outline' },
+      /*
+       * Food is split in two, and the names say WHERE it was eaten.
+       *
+       * "Groceries" and "Eating out" are the same substance bought two ways,
+       * and keeping them apart is the point: groceries are a fairly fixed
+       * monthly need, while eating out is the most elastic line most people
+       * have. Merged into one "Food" total neither question can be answered —
+       * a rising number says nothing about whether to shop differently or eat
+       * out less.
+       *
+       * The names carry "home" and "outside" because that is the distinction
+       * the user actually makes, and because a delivery ordered to the house is
+       * still eating out — it is restaurant food, not a grocery run. Without
+       * the word, "Eating out" invites exactly that misfiling.
+       */
+      { id: 'groceries', name: 'Groceries (home food)', icon: 'basket-outline', dueDay: 1, common: true },
+      {
+        id: 'dining',
+        name: 'Eating out & delivery',
+        icon: 'restaurant-outline',
+        common: true,
+      },
       { id: 'household', name: 'Household items', icon: 'cube-outline' },
       /*
        * Cash taken out, as its own line.

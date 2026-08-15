@@ -100,6 +100,20 @@ export function suggestedLines(answers: PersonaAnswers): string[] {
     // True for everyone, regardless of every answer.
     'salary',
     'groceries',
+    /*
+     * Eating out, for everyone.
+     *
+     * It used to be suggested only to people who answered "partner", which
+     * quietly assumed that living alone means cooking every meal — the
+     * opposite is usually true, and a single person ordering delivery is the
+     * clearest case of all. Everyone buys food they did not cook.
+     *
+     * Suggesting it is also what makes the split work at all: groceries and
+     * eating out only tell you something when BOTH lines exist. Whoever has no
+     * board line for restaurant food ends up filing it under Groceries, and
+     * the home-vs-outside comparison the split exists for is lost.
+     */
+    'dining',
     'electricity',
     'water',
     'mobile',
@@ -120,9 +134,9 @@ export function suggestedLines(answers: PersonaAnswers): string[] {
    */
   lines.add('rent');
 
+  // `dining` is suggested to everyone now — see the base set above.
   if (answers.household.includes('partner')) {
     lines.add('internet');
-    lines.add('dining');
   }
 
   if (answers.household.includes('kids')) {

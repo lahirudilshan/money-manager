@@ -192,7 +192,10 @@ export function BillFields({
         </View>
       ) : (
         <AmountField
-          label={unplanned ? 'Monthly budget' : 'Amount'}
+          // "Plan amount" — what this bill is expected to cost, as opposed to
+          // the actual logged against it each month. Matches the onboarding
+          // plan step, which sets the same field.
+          label={unplanned ? 'Monthly budget' : 'Plan amount'}
           value={draft.amount}
           onChangeText={draft.setAmount}
           currency={state.currency}

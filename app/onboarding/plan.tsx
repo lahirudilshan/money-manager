@@ -62,20 +62,44 @@ export default function OnboardingPlanScreen() {
     return { income, expense, left: income - expense };
   }, [lines]);
 
-  // A plan is only meaningful once its lines carry amounts, so the finish
-  // action stays disabled until every picked line has a budget set.
-  const unsetCount = lines.filter((line) => line.plannedMinor <= 0).length;
   /*
-   * An account is required on every line, not optional.
+   * Lines with no amount yet — reported, but NOT a barrier.
    *
-   * The board's whole job is "how much do I move where" — the per-account
-   * transfer rows on the dashboard are built by grouping lines by their funding
-   * account. A line with none was silently left out of that sum, so the transfer
-   * figures were quietly short and the user had no way to see which line was
-   * missing. Requiring it here is cheaper than discovering it a month later.
+   * Requiring every line to carry a figure was wrong in two ways. Some lines
+   * have no plannable amount by their nature: a spending budget accumulates
+   * whatever its entries come to, and a bank-charges line is whatever the bank
+   * decides. And for the rest, a person setting up an app at 11pm often does not
+   * know their exact water bill — forcing a number means they invent one, which
+   * is worse than leaving it blank, because a made-up figure looks like a real
+   * budget on the board forever after.
+   *
+   * A line with no amount is perfectly usable: it appears on the board, its
+   * actuals still log against it, and the user fills the plan in when they know
+   * it. So this drives a gentle count in the footer rather than a locked button.
    */
-  const unfundedCount = lines.filter((line) => !line.cardId).length;
-  const canBuild = lines.length > 0 && unsetCount === 0 && unfundedCount === 0;
+  const unsetCount = lines.filter(
+    (line) => line.plannedMinor <= 0 && line.frequency !== 'unplanned',
+  ).length;
+  /*
+   * An account IS required on a line you fund.
+   *
+   * Unlike the amount, this one has no sensible blank for an ordinary bill: the
+   * board's whole job is "how much do I move where", and the per-account
+   * transfer rows are built by grouping lines by their funding account. A line
+   * with none is silently left out of that sum, so the transfer figures are
+   * quietly short with nothing on screen explaining which line is missing.
+   *
+   * Spending budgets are the exception. A budget accumulates whatever its
+   * entries came to, and those entries carry their own account — bank charges
+   * are the clearest case, since fees are levied by whichever bank charged them
+   * rather than paid out of one nominated card. Demanding a single account for
+   * the bucket would force the user to invent an answer and would pile every
+   * such entry into that one account's transfer total.
+   */
+  const unfundedCount = lines.filter(
+    (line) => !line.cardId && line.frequency !== 'unplanned',
+  ).length;
+  const canBuild = lines.length > 0 && unfundedCount === 0;
 
   /**
    * Commit the draft: create one category per catalog group that has picked
@@ -144,9 +168,19 @@ export default function OnboardingPlanScreen() {
         plannedMinor: 0,
         dueDay: entry.subcategory.dueDay ?? 1,
         frequency: entry.subcategory.frequency ?? 'unplanned',
-        // Funded from whichever account the rest of the plan mostly uses; the
-        // charges land on the account they were charged to anyway.
-        cardId: dominantCardId(lines) ?? state.cards[0]?.id ?? null,
+        /*
+         * NO account, deliberately.
+         *
+         * Bank charges are not paid FROM one account — they are deducted BY
+         * whichever bank levied them, so a household with three banks gets fees
+         * on all three and they all belong on this one line. Pinning it to a
+         * single card would put every fee in that account's transfer total,
+         * overstating what has to be moved there and hiding the rest.
+         *
+         * Each entry records where it actually came from; the line is only the
+         * bucket that adds them up.
+         */
+        cardId: null,
         currency: 'local',
         foreignAmount: null,
         planTargetMinor: null,
@@ -166,11 +200,21 @@ export default function OnboardingPlanScreen() {
       const group = byCategory.get(catalog.id);
       if (!group || group.length === 0) continue;
 
-      // A category's default card is whichever account its lines mostly use.
+      /*
+       * A category's default card is whichever account its lines mostly use —
+       * EXCEPT the bank-fees category, which deliberately has none.
+       *
+       * `resolveCardId` falls back from a line to its category, so leaving the
+       * charges line account-less is not enough on its own: it would simply
+       * inherit the category's card and land in that account's transfer total
+       * anyway. Fees are levied by whichever bank charged them, across every
+       * account the user holds, so neither level names one.
+       */
+      const isFeeCategory = catalog.id === 'bank-fees';
       const created = state.addCategory({
         name: catalog.name,
         icon: catalog.icon,
-        cardId: dominantCardId(group) ?? state.cards[0]?.id ?? null,
+        cardId: isFeeCategory ? null : (dominantCardId(group) ?? state.cards[0]?.id ?? null),
         dueDay: group[0]?.dueDay ?? 1,
         sortOrder: categoryIndex,
       });
@@ -234,7 +278,7 @@ export default function OnboardingPlanScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
     <StepHeader step={4} title="Set up your plan" onBack={() => router.back()}>
-      Tap a line to set its amount, day and account. Hold and drag to
+      Tap a line to set its plan amount, day and account. Hold and drag to
       reorder.
     </StepHeader>
 
@@ -321,18 +365,23 @@ export default function OnboardingPlanScreen() {
 
     <PinnedFooter>
       <View style={{ gap: space.sm }}>
-        {/* Amounts first, accounts second — one instruction at a time, in the
-            order the editor asks for them. */}
-        {unsetCount > 0 ? (
-          <Row justify="center">
-            <Text variant="caption" tone="muted">
-              {unsetCount} line{unsetCount === 1 ? '' : 's'} still need an amount
-            </Text>
-          </Row>
-        ) : unfundedCount > 0 ? (
+        {/*
+          The account requirement leads, because it is the only one that
+          actually blocks. A missing amount is reported underneath as
+          information — "you can do this later" — rather than as an error,
+          since it does not stop anything.
+        */}
+        {unfundedCount > 0 ? (
           <Row justify="center">
             <Text variant="caption" tone="muted">
               {unfundedCount} line{unfundedCount === 1 ? '' : 's'} still need an account
+            </Text>
+          </Row>
+        ) : unsetCount > 0 ? (
+          <Row justify="center">
+            <Text variant="caption" tone="muted">
+              {unsetCount} line{unsetCount === 1 ? '' : 's'} without a plan amount — you can
+              add these later
             </Text>
           </Row>
         ) : null}
@@ -425,7 +474,22 @@ function PlanRow({
           allowed to shrink rather than pushing the row's layout around. */}
       <Text
         variant="figure"
-        color={line.type === 'income' ? colors.completed : colors.ink}
+        /*
+         * "Set" is muted; a real figure is not.
+         *
+         * The word invites the tap that opens the editor — a bare dash would
+         * read as missing data rather than as something to do. But setting an
+         * amount is OPTIONAL (see `unsetCount`), so it must not look like an
+         * error either: muted grey says "you could fill this in", where the
+         * ink-coloured figures beside it say "this is set".
+         */
+        color={
+          line.plannedMinor > 0
+            ? line.type === 'income'
+              ? colors.completed
+              : colors.ink
+            : colors.inkFaint
+        }
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.85}
@@ -503,7 +567,23 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                 */}
                 <Row justify="space-between" align="center" gap={space.sm}>
                   <View style={{ flexShrink: 1 }}>
-                    <Label>AMOUNT</Label>
+                    {/*
+                      "PLAN AMOUNT", not "AMOUNT".
+
+                      This figure is what the user INTENDS to spend on the line,
+                      not what was actually spent — the actual is logged later,
+                      per month, against this. On a screen titled "Set up your
+                      plan" the bare word invited the reading "what did this
+                      cost?", which is a different number and a month too early
+                      to know.
+
+                      A spending budget says so in its own words, since what it
+                      holds is a monthly ceiling its entries draw against rather
+                      than one payment.
+                    */}
+                    <Label>
+                      {line.frequency === 'unplanned' ? 'MONTHLY BUDGET' : 'PLAN AMOUNT'}
+                    </Label>
                   </View>
                   {/*
                     On EVERY line, not just income.
@@ -660,16 +740,39 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
               )}
 
               <View style={{ gap: space.sm }}>
-                {/* Income arrives *into* an account; expenses go *out of* one.
-                    Marked required, because it is — see `unfundedCount`. */}
+                {/*
+                  Income arrives *into* an account; expenses go *out of* one.
+
+                  A spending budget names no account at all: its entries each
+                  carry their own, and bank charges in particular are levied by
+                  whichever bank charged them. So it is labelled as optional
+                  rather than marked Required — see `unfundedCount`.
+                */}
                 <Row justify="space-between" align="center" gap={space.sm}>
-                  <Label>{line.type === 'income' ? 'PAID IN TO' : 'PAID FROM'}</Label>
-                  {!line.cardId ? (
+                  <Label>
+                    {line.type === 'income'
+                      ? 'PAID IN TO'
+                      : line.frequency === 'unplanned'
+                        ? 'USUALLY PAID FROM'
+                        : 'PAID FROM'}
+                  </Label>
+                  {!line.cardId && line.frequency !== 'unplanned' ? (
                     <Text variant="caption" color={colors.danger} style={{ fontWeight: '700' }}>
                       Required
                     </Text>
+                  ) : line.frequency === 'unplanned' ? (
+                    <Text variant="caption" tone="muted">
+                      Optional
+                    </Text>
                   ) : null}
                 </Row>
+                {line.frequency === 'unplanned' ? (
+                  <Text variant="caption" tone="muted">
+                    Each entry records its own account, so this can be left
+                    unset — useful for bank fees, which any of your accounts can
+                    be charged.
+                  </Text>
+                ) : null}
                   <View style={{ gap: space.sm }}>
                     {state.cards.map((card) => {
                       const brand = resolveBrand({

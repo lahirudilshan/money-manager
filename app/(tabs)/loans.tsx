@@ -7,6 +7,7 @@ import {
   emptyLoanDraft,
   isLoanDraftValid,
   LoanForm,
+  loanDraftFrom,
   loanDraftToInput,
   type LoanDraft,
 } from '../../src/components/LoanForm';
@@ -29,6 +30,16 @@ export default function LoansScreen() {
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<LoanDraft>(emptyLoanDraft);
+  /**
+   * Which loan the sheet is editing, or null when it is adding a new one.
+   *
+   * Onboarding step 5 gained this first; the Loans tab kept only add and
+   * delete, so a rate typed wrong on a loan added last month could be corrected
+   * only by deleting it — which also destroys its board line and the payment
+   * history attached to it. The sheet is the same either way; only what the
+   * footer button does differs.
+   */
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const totals = views.reduce(
     (acc, view) => ({
@@ -39,13 +50,36 @@ export default function LoansScreen() {
     { monthly: 0, outstanding: 0, interest: 0 },
   );
 
-  function handleCreate() {
+  function handleSave() {
     if (!isLoanDraftValid(draft)) return;
     // Card faces use the lender's brand; `colors.pending` is the neutral
     // fallback for loans with no bank set.
-    state.addLoan(loanDraftToInput(draft, colors.pending));
+    const input = loanDraftToInput(draft, colors.pending);
+
+    if (editingId) {
+      // `updateLoan` re-derives the board line's installment from the new
+      // terms — the figure is never stored, so editing a rate has to rewrite
+      // the bill or the plan quietly funds the old amount.
+      state.updateLoan(editingId, input);
+    } else {
+      state.addLoan(input);
+    }
+
     setDraft(emptyLoanDraft);
+    setEditingId(null);
     setOpen(false);
+  }
+
+  function openNewLoan() {
+    setEditingId(null);
+    setDraft(emptyLoanDraft);
+    setOpen(true);
+  }
+
+  function openEditLoan(view: LoanView) {
+    setEditingId(view.loan.id);
+    setDraft(loanDraftFrom(view.loan));
+    setOpen(true);
   }
 
   function confirmDeleteLoan(loanName: string, loanId: string) {
@@ -74,7 +108,7 @@ export default function LoansScreen() {
           </View>
           {views.length > 0 ? (
             <Pressable
-              onPress={() => setOpen(true)}
+              onPress={openNewLoan}
               accessibilityRole="button"
               accessibilityLabel="Add loan"
               style={({ pressed }) => ({
@@ -97,7 +131,7 @@ export default function LoansScreen() {
         </Row>
 
         {views.length === 0 ? (
-          <LoansEmptyState onAdd={() => setOpen(true)} />
+          <LoansEmptyState onAdd={openNewLoan} />
         ) : (
           <>
             {/*
@@ -145,6 +179,7 @@ export default function LoansScreen() {
               <LoanCard
                 key={view.loan.id}
                 view={view}
+                onEdit={() => openEditLoan(view)}
                 onDelete={() => confirmDeleteLoan(view.loan.name, view.loan.id)}
               />
             ))}
@@ -152,18 +187,20 @@ export default function LoansScreen() {
         )}
       </ScrollView>
 
+      {/* One sheet for both adding and editing — the fields are identical, so
+          a second sheet could only drift out of step with this one. */}
       <BottomSheet
         visible={open}
         onClose={() => setOpen(false)}
-        title="New loan"
+        title={editingId ? 'Edit loan' : 'New loan'}
         icon="cash-outline"
         iconColor={colors.pending}
         scroll
         footer={
           <GradientButton
-            label="Add loan"
-            icon="add"
-            onPress={handleCreate}
+            label={editingId ? 'Save changes' : 'Add loan'}
+            icon="checkmark"
+            onPress={handleSave}
             disabled={!isLoanDraftValid(draft)}
           />
         }
@@ -285,7 +322,15 @@ function Benefit({
   );
 }
 
-function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) {
+function LoanCard({
+  view,
+  onEdit,
+  onDelete,
+}: {
+  view: LoanView;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const { colors, radius, space } = useTheme();
   const [expanded, setExpanded] = useState(false);
   // Which year of the schedule is on screen — the plan paginates by year so a
@@ -305,6 +350,10 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
         principalMinor: loan.principalMinor,
         annualRatePct: loan.annualRatePct,
         termMonths: loan.termMonths,
+        // A flat loan's rows carry the same interest every month; a reducing
+        // one's fall as the balance does. Passing the method is what makes the
+        // schedule show the borrower's actual split.
+        interestMethod: loan.interestMethod,
       }).schedule
     : [];
   const schedule = fullSchedule.filter(
@@ -398,7 +447,17 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
         {/* The three facts that define the loan, on one clean line. */}
         <Row justify="space-between">
           <CardStat label="Borrowed" value={formatMoney(loan.principalMinor, { compact: true })} />
-          <CardStat label="Rate" value={`${loan.annualRatePct}%`} align="center" />
+          {/*
+            The rate is meaningless without saying HOW it is charged: 11.5%
+            flat and 11.5% reducing are different loans. Only flat is marked,
+            since reducing is the ordinary case and labelling both would add
+            noise to every card.
+          */}
+          <CardStat
+            label={loan.interestMethod === 'flat' ? 'Rate · flat' : 'Rate'}
+            value={`${loan.annualRatePct}%`}
+            align="center"
+          />
           <CardStat label="Term" value={`${loan.termMonths / 12} yr`} align="flex-end" />
         </Row>
 
@@ -469,6 +528,33 @@ function LoanCard({ view, onDelete }: { view: LoanView; onDelete: () => void }) 
             >
               {expanded ? 'Hide plan' : 'Repayment plan'}
             </Text>
+          </Pressable>
+
+          {/*
+            Edit, between the plan and the delete.
+
+            A loan is eight fields copied off a bank statement, and until now
+            the only way to correct one was to delete it and retype — which also
+            destroys the board line and the payments recorded against it. Its
+            own control rather than making the card tappable: the card already
+            expands to show the repayment schedule, so a tap there means
+            something else.
+          */}
+          <Pressable
+            onPress={onEdit}
+            accessibilityRole="button"
+            accessibilityLabel={`Edit ${loan.name}`}
+            style={({ pressed }) => ({
+              width: 46,
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingVertical: 11,
+              borderRadius: radius.md,
+              backgroundColor: colors.surfaceSunken,
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <Ionicons name="create-outline" size={17} color={colors.inkSecondary} />
           </Pressable>
 
           <Pressable

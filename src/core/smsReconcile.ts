@@ -64,6 +64,54 @@ function hintFromGuesses(guesses: readonly CategoryGuess[]): CategoryHint | null
   return best.category as CategoryHint;
 }
 
+/**
+ * The message with the bank's own CHANNEL heading removed.
+ *
+ * "HNB SMS ALERT:INTERNET, ... Location:UBER EATS" says the payment was made
+ * online — "INTERNET" is how the card was used, not what was bought. But it is
+ * also a telecom keyword, and the keyword walk runs over the whole message and
+ * returns the first tag it finds, so every card-not-present purchase was
+ * labelled a phone bill: the user's UBER EATS order came back as `telecom`
+ * while the merchant scorer had correctly read `transport` from "UBER".
+ *
+ * The heading is dropped only from the text used for CATEGORY guessing. It stays
+ * in `raw` everywhere else, since the parser reads the same label to decide the
+ * transaction's direction and kind.
+ */
+function withoutChannelHeading(raw: string): string {
+  return raw.replace(/\bSMS\s+ALERT\s*:?\s*[A-Z][A-Z\s/&-]{1,24}?\s*(?=,)/i, ' ');
+}
+
+/**
+ * The LAST resort: the best guess the scorer had, even below the suggest bar.
+ *
+ * Everything above this asks "is this good enough to be confident". This asks a
+ * different and much weaker question — "did the message contain a category word
+ * at all" — and it runs only when every stronger reading has come back empty.
+ *
+ * The trade is deliberate and one-directional. The alternative to a weak guess
+ * here is not a better guess, it is "Need a category": the user categorises by
+ * hand from nothing. A weak suggestion they can see and correct in one tap is
+ * strictly more useful than no suggestion, because both cost a tap when wrong
+ * and only one of them can be right.
+ *
+ * What protects this from being noise is WHERE it sits. A confident guess has
+ * already won, so this can never override a good answer — it can only fill a
+ * blank. And it still requires the scorer to have found something: a message
+ * with no category vocabulary anywhere yields null and the card honestly says
+ * it does not know.
+ *
+ * The suggestion is NOT auto-filed. It reaches the card as a hint with
+ * `unknown` confidence, so the user is still asked — see `confidence` below,
+ * which only a learned rule can raise.
+ */
+function weakHintFromGuesses(guesses: readonly CategoryGuess[]): CategoryHint | null {
+  const [best] = guesses;
+  if (!best || best.score <= 0) return null;
+
+  return best.category as CategoryHint;
+}
+
 /** A candidate bill the SMS might be about, with why we think so. */
 export interface DraftMatch {
   subcategoryId: string;
@@ -592,26 +640,62 @@ export function reconcileSms(
    */
   // Everything the message says, ranked. Computed once and passed down rather
   // than re-derived per line — it depends only on the message.
+  /*
+   * The bank's channel heading is stripped before anything reads the message
+   * for a CATEGORY — see `withoutChannelHeading`. It describes how the card was
+   * used, and its words ("INTERNET") collide with real category vocabulary.
+   */
+  const categoryText = withoutChannelHeading(parsed.raw);
+
   const guesses = guessCategories({
     merchant: parsed.merchant,
-    raw: parsed.raw,
+    raw: categoryText,
     kind: parsed.kind,
   });
 
-  const hint =
+  /*
+   * Read the message four ways, strongest first, and take the first answer.
+   *
+   * The last tier is the safety net: rather than showing "Need a category" the
+   * moment nothing clears the confidence bar, fall back to any category word
+   * the message contains. It only ever fills a blank — see `weakHintFromGuesses`
+   * — so no confident reading is affected by its presence.
+   */
+  /*
+   * The hint the SCORING uses — confident readings only.
+   *
+   * Kept separate from the hint the card displays, because the two answer
+   * different questions. This one decides which budget line the money lands on,
+   * so it must stay as trustworthy as it was before the fallback existed.
+   */
+  const scoringHint =
     learned.hint ??
     (parsed.kind === 'bank_charge'
       ? 'bank_charge'
-      : (inferCategoryHint(`${parsed.merchant} ${parsed.raw}`) ?? hintFromGuesses(guesses)));
+      : (inferCategoryHint(`${parsed.merchant} ${categoryText}`) ?? hintFromGuesses(guesses)));
 
   const matches: DraftMatch[] = board.subcategories
     .filter((sub) => sub.type === wantType)
     .map((sub) => ({
       subcategoryId: sub.id,
-      score: scoreSubcategory(scoringParsed, sub, board, hint, guesses),
+      score: scoreSubcategory(scoringParsed, sub, board, scoringHint, guesses),
     }))
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score);
+
+  /*
+   * The hint the CARD shows, which may be weaker than the one that scored.
+   *
+   * This is the "say something rather than nothing" tier. When every confident
+   * reading came back empty the card would otherwise print "Need a category" on
+   * a message that plainly contains one — the user's own "food expenses" being
+   * the case that prompted this — so it falls back to any category word found.
+   *
+   * Crucially it does NOT feed `matches` above, so a weak word can label the
+   * row without silently choosing which budget line the money comes out of.
+   * The user still picks; they just start from a suggestion instead of a blank.
+   */
+  const hint = scoringHint ?? weakHintFromGuesses(guesses);
 
   // A learned rule pointing at a line that still exists and is the right type
   // wins outright — the user already told us this merchant maps here.

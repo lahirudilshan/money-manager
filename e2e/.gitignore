@@ -1,0 +1,6 @@
+# Failure screenshots — useful locally, noise in the repo.
+artifacts/
+
+# Python bytecode.
+__pycache__/
+*.pyc

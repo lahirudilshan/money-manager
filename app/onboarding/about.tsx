@@ -53,10 +53,18 @@ import { useTheme } from '../../src/theme/ThemeProvider';
 /**
  * How many category chips the preview names before collapsing to "+N more".
  *
- * Enough that a tap visibly changes the list, few enough that the card cannot
- * grow tall enough to push the primary button below the fold.
+ * Raised from 8 once the pinned footer stopped clipping this card (see
+ * `FOOTER_CLEARANCE`). The old cap was chosen so the card could not push the
+ * primary button below the fold — but the card now scrolls freely, and the cap
+ * had become the bigger problem: a household with children, a car and parents
+ * produces 22 lines, of which 8 were shown and 14 collapsed into "+14 more".
+ *
+ * That inverts the card's purpose. It exists so three questions visibly earn
+ * their answer, and "+14 more" is precisely the bare count the named chips were
+ * meant to replace. 14 covers the common personas outright and leaves the
+ * overflow marker for the genuinely long tail.
  */
-const PREVIEW_LIMIT = 8;
+const PREVIEW_LIMIT = 14;
 
 /** Fixed row height in the year list, so `getItemLayout` can be exact. */
 const YEAR_ROW_HEIGHT = 48;
