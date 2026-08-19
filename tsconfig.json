@@ -1,7 +1,15 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    // Metro reads these natively (no babel plugin), so `~/…` resolves in the
+    // app bundle, in `tsc`, and — via the matching alias in vitest.config.ts —
+    // in tests. `~` rather than `@` because server/ already claims `@/*` for
+    // its own tree, and two meanings for one prefix is a trap. No `baseUrl`:
+    // TS6 deprecates it, and `paths` resolve against this file's directory.
+    "paths": {
+      "~/*": ["./src/*"]
+    }
   },
   // `server/` is a separate Next.js deployment with its own tsconfig, its own
   // `@/*` alias and its own React types. Compiling it as part of the Expo app

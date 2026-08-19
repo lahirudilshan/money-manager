@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 /**
@@ -32,6 +33,14 @@ function stubImageRequires() {
 
 export default defineConfig({
   plugins: [stubImageRequires()],
+  resolve: {
+    // Mirrors `paths` in tsconfig.json, which Metro reads natively but vitest
+    // does not. Both must agree or a module resolves in the app and not in its
+    // test (or worse, resolves to two different files).
+    alias: {
+      '~': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   test: {
     // The core is pure TypeScript with no React Native imports, so it runs in
     // plain node — no Metro/jest-expo transform needed, which keeps it fast.
