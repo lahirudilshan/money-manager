@@ -984,12 +984,25 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     // a different line, the merchant now has a confirmed mapping — so the next
     // message from the same shop is recognised outright. Correcting a wrong
     // guess re-points the existing rule, which is how accuracy improves.
-    const upsert = planRuleUpsert(
-      draft.parsed.merchant,
-      subcategoryId,
-      draft.hint,
-      get().merchantRules,
-    );
+    /*
+     * Never learn a merchant from a FEE row.
+     *
+     * A split fee is named after its parent — "HNB ATM Withdrawal" and
+     * "HNB ATM Withdrawal — fee" (see `feeMerchant`) — so confirming the 30.00
+     * charge taught the rule "hnb atm withdrawal -> Bank charges", and every
+     * WITHDRAWAL from that merchant then inherited it. That is exactly how
+     * 10,000 / 9,000 / 4,000 came to sit on the Bank charges line on the
+     * device: not a parse error, a poisoned rule, which no amount of parser
+     * work could undo because the learned rule outranks every other tier.
+     *
+     * The fee needs no rule of its own: `reconcileSms` routes bank_charge by
+     * kind, so it finds the charges line without one.
+     */
+    const isFeeRow = draft.parsed.kind === 'bank_charge' && draft.parsed.detail === 'fee';
+
+    const upsert = isFeeRow
+      ? null
+      : planRuleUpsert(draft.parsed.merchant, subcategoryId, draft.hint, get().merchantRules);
     if (upsert) merchantRuleRepo.apply(upsert);
 
     /*

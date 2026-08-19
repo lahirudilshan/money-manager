@@ -38,7 +38,12 @@ import {
   splitItemisedFee,
   type ParsedSms,
 } from '~/features/sms/logic/smsParser';
-import { orderDraftsWithFees, reconcileSms, type SmsDraft } from '~/features/sms/logic/smsReconcile';
+import {
+  isBankChargeLine,
+  orderDraftsWithFees,
+  reconcileSms,
+  type SmsDraft,
+} from '~/features/sms/logic/smsReconcile';
 import { merchantKey, planRuleUpsert, type MerchantRule } from '~/features/sms/logic/merchantRules';
 import { observationsFrom, planCatalogMerge } from '~/features/sms/logic/catalogSync';
 import {
@@ -491,6 +496,46 @@ function repairGenericCategoryIcons(): void {
  * to exactly the order it is already displaying. Idempotent: once every
  * category has a distinct index there is nothing left to change.
  */
+/**
+ * Drop learned rules that send a whole merchant to the Bank charges line.
+ *
+ * A split fee is named after its parent — "HNB ATM Withdrawal" for both the
+ * 10,000 withdrawal and its 30.00 charge — so confirming the fee taught
+ * "hnb atm withdrawal -> Bank charges", and every later withdrawal from that
+ * merchant inherited it. A learned rule outranks the parser, the kind and the
+ * keywords, so the withdrawals sat on the charges line no matter what the
+ * parser said about them.
+ *
+ * `confirmDraft` no longer writes such a rule, but that only stops NEW ones:
+ * a device that already learned it stays wrong forever, because nothing
+ * revisits a stored rule. This clears the ones already written.
+ *
+ * Deliberately narrow. Only rules pointing at a bank-charges line, and only
+ * where the pattern is not itself fee vocabulary — a rule the user genuinely
+ * taught for a merchant that only ever charges fees ("cefts transfer charges")
+ * is correct and stays. What is removed is a rule whose pattern names a
+ * transaction ("atm withdrawal", "transfer") but resolves to charges.
+ */
+function repairFeePoisonedMerchantRules(): void {
+  const chargeLineIds = new Set(
+    subcategoryRepo
+      .all()
+      .filter((sub) => isBankChargeLine(sub.name))
+      .map((sub) => sub.id),
+  );
+  if (chargeLineIds.size === 0) return;
+
+  for (const rule of merchantRuleRepo.all()) {
+    if (rule.source !== 'learned') continue;
+    if (!rule.subcategoryId || !chargeLineIds.has(rule.subcategoryId)) continue;
+    // A pattern that names a fee belongs on the charges line; leave it.
+    if (/\b(?:charge|charges|fee|fees|stamp duty|commission)\b/i.test(rule.pattern)) continue;
+    // A pattern that names a movement does not.
+    if (!/\b(?:atm|withdrawal|withdraw|transfer|purchase|pos|cash)\b/i.test(rule.pattern)) continue;
+    merchantRuleRepo.remove(rule.id);
+  }
+}
+
 function repairCategorySortOrder(): void {
   const categories = categoryRepo.all();
 
@@ -564,6 +609,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     merchantRuleRepo.seed();
     repairGenericCategoryIcons();
     repairCategorySortOrder();
+    repairFeePoisonedMerchantRules();
     get().refresh();
     set({
       ready: true,
