@@ -10,7 +10,12 @@
  * testable and the store can call it after any refresh.
  */
 
-import { isMatchableAccount, parentReceiptOf, type ParsedSms } from './smsParser';
+import {
+  MAX_PLAUSIBLE_CHARGE_MINOR,
+  isMatchableAccount,
+  parentReceiptOf,
+  type ParsedSms,
+} from './smsParser';
 import { resolveCardId } from '~/features/budget/logic/planning';
 import { billMatchesHint, inferCategoryHint, type CategoryHint } from './smsCategoryHints';
 import {
@@ -450,6 +455,20 @@ function scoreSubcategory(
    * "transfer" in its name, so an explicit rule is what stops a 25-rupee fee
    * being scored against the user's real transfers.
    */
+  /*
+   * Never score a large amount onto the charges line.
+   *
+   * `parseSms` enforces the same ceiling, so this is belt-and-braces — but the
+   * reconciler is also handed rows the store rebuilt from stored columns when
+   * the current parser cannot read their text, and those carry whatever kind
+   * was written when they arrived. Without this, a row stored as bank_charge by
+   * an older build keeps proposing the charges line forever, because nothing
+   * re-examines it.
+   */
+  if (parsed.kind === 'bank_charge' && parsed.amountMinor > MAX_PLAUSIBLE_CHARGE_MINOR) {
+    return 0;
+  }
+
   if (parsed.kind === 'bank_charge') {
     /*
      * Matched on the LINE'S OWN NAME, not on the hint.

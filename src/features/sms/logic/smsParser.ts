@@ -461,18 +461,19 @@ const ITEMISED_FEE_RE = new RegExp(
 const MAX_FEE_SHARE_OF_PARENT = 0.5;
 
 /**
- * The largest amount that can plausibly be a bank charge, in minor units.
+ * The largest amount that can be a bank charge, in minor units.
  *
- * Fees are trivial by nature — transfer charges, stamp duty and ATM fees run to
- * tens or low hundreds of rupees. A "charge" of several thousand is a
- * transaction that mentioned a fee, not a fee. 2,000 LKR is far above any real
- * charge this app has seen while still comfortably below the withdrawal and
- * transfer amounts that were being mislabelled (4,000 / 9,000 / 10,000).
+ * A bank charge is small — transfer charges, stamp duty and ATM fees are tens
+ * of rupees, occasionally a few hundred. Nothing in four figures is a fee, and
+ * treating this as a hard ceiling rather than a heuristic is what makes the
+ * guarantee testable: no message, by any path, may be classified `bank_charge`
+ * above it.
  *
- * Only consulted when the message does NOT itemise a separate fee; when it
- * does, that comparison is exact and this never runs.
+ * 1,000 LKR is deliberately well above any real charge while far below the
+ * withdrawals and transfers that were reaching the board as five-figure
+ * "bank charges".
  */
-const MAX_PLAUSIBLE_CHARGE_MINOR = 200_000;
+export const MAX_PLAUSIBLE_CHARGE_MINOR = 100_000;
 
 /**
  * Read a fee itemised inside a message that is mostly about something else.
@@ -1449,6 +1450,27 @@ export function isRejectedAsNoise(input: string): boolean {
  * promo, balance report) or cannot be understood well enough to draft. Never
  * throws — a malformed message simply returns null.
  */
+/**
+ * Enforce the one invariant a bank charge must satisfy: it is small.
+ *
+ * Applied to every value `parseSms` returns rather than at the point each kind
+ * is decided, because there are several such points — the keyword classifier,
+ * the itemised-fee split, and the stored-fee marker path — and each one was
+ * separately capable of producing a five-figure "bank charge". Fixing them
+ * individually is how this bug survived three rounds of fixes: the paths that
+ * were checked were not the paths that fired.
+ *
+ * A message that names a fee but moves too much money for one is a
+ * TRANSACTION that mentions its fee. `transfer_out` is the honest reading for a
+ * debit; the fee itself, when the message itemises one, is raised separately by
+ * `splitItemisedFee`.
+ */
+function enforceChargeCeiling(parsed: ParsedSms): ParsedSms {
+  if (parsed.kind !== 'bank_charge') return parsed;
+  if (parsed.amountMinor <= MAX_PLAUSIBLE_CHARGE_MINOR) return parsed;
+  return { ...parsed, kind: parsed.direction === 'credit' ? 'transfer_in' : 'transfer_out' };
+}
+
 export function parseSms(input: string): ParsedSms | null {
   if (typeof input !== 'string') return null;
   const text = input.trim();
@@ -1547,7 +1569,7 @@ export function parseSms(input: string): ParsedSms | null {
       // from the database as the misread the split refused to create.
       fee.amountMinor <= base.amountMinor * MAX_FEE_SHARE_OF_PARENT
     ) {
-      return {
+      return enforceChargeCeiling({
         ...base,
         kind: 'bank_charge',
         amountMinor: fee.amountMinor,
@@ -1564,9 +1586,9 @@ export function parseSms(input: string): ParsedSms | null {
         merchant: feeMerchant(base.merchant),
         // Matches `splitItemisedFee`, so a reload cannot rename the row.
         detail: 'fee',
-      };
+      });
     }
   }
 
-  return base;
+  return enforceChargeCeiling(base);
 }
