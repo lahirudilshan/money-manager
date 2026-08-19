@@ -24,7 +24,10 @@ import {
   findLineForHint,
   proposalForHint,
 } from '../../src/core/hintCatalog';
+import { extractStatementBill } from '../../src/core/smsParser';
 import { accountLabelFor } from '../../src/core/smsReconcile';
+import { UsageChart } from '../../src/components/UsageChart';
+import { meterReadingRepo } from '../../src/db/repositories';
 import {
   categoryNameOf,
   selectDraftTargets,
@@ -131,6 +134,31 @@ export default function SmsDraftModal() {
    * user with no way to create one without abandoning the draft.
    */
   const [manageOpen, setManageOpen] = useState(false);
+
+  /*
+   * The statement this draft came from, and the usage history behind it.
+   *
+   * Computed here with the other hooks — before the "draft already handled"
+   * early return — for the reason the comment above spells out: a hook after
+   * that branch would vanish mid-life when a draft is resolved elsewhere.
+   *
+   * The history is read straight from the repo rather than through the store.
+   * Meter readings are written on SMS arrival and never edited, so there is
+   * nothing for the store to keep in sync; putting them in global state would
+   * add a slice that only this modal ever reads.
+   */
+  const statement = useMemo(
+    () => (draft ? extractStatementBill(draft.parsed.raw) : null),
+    [draft],
+  );
+
+  const usage = useMemo(() => {
+    if (!statement?.accountNumber) return [];
+    return meterReadingRepo
+      .byAccount(statement.accountNumber)
+      .filter((row): row is typeof row & { units: number } => row.units !== null)
+      .map((row) => ({ period: row.period, units: row.units }));
+  }, [statement?.accountNumber]);
 
   // The draft may have been resolved on another screen; close cleanly if gone.
   if (!draft) {
@@ -373,6 +401,68 @@ export default function SmsDraftModal() {
           </Text>
         </Surface>
 
+        {/*
+          A utility statement's own numbers: what makes up the total, and how
+          this month's consumption compares with the months before it.
+
+          Placed directly under the headline because it is what turns the figure
+          above into a decision. The amount alone says what is owed; the
+          breakdown says what it is made of, and the chart says whether it is
+          normal — which is the actual question someone has when an electricity
+          bill arrives.
+        */}
+        {statement ? (
+          <Surface style={{ gap: space.md }}>
+            <Row justify="space-between" align="center">
+              <Label>THIS BILL</Label>
+              {statement.readingDate ? (
+                <Text variant="caption" tone="muted">
+                  Read {statement.readingDate}
+                </Text>
+              ) : null}
+            </Row>
+
+            {/* The arithmetic, as rows rather than prose: a statement IS a
+                ledger, and the user is checking it against the one on their
+                phone. Each row is omitted when the bill does not state it. */}
+            <View style={{ gap: 6 }}>
+              {statement.monthlyBillMinor !== null ? (
+                <StatementRow
+                  label="This month's charge"
+                  value={formatMoney(statement.monthlyBillMinor, { showDecimals: true })}
+                />
+              ) : null}
+              {statement.outstandingMinor !== null && statement.outstandingMinor > 0 ? (
+                <StatementRow
+                  label="Carried over"
+                  value={formatMoney(statement.outstandingMinor, { showDecimals: true })}
+                />
+              ) : null}
+              <StatementRow
+                label="Total due"
+                value={formatMoney(statement.totalDueMinor, { showDecimals: true })}
+                strong
+              />
+            </View>
+
+            {/* The meter pair, so a suspicious bill can be checked against the
+                dial the user can go and look at. */}
+            {statement.readingCurrent !== null && statement.readingPrevious !== null ? (
+              <Text variant="caption" tone="muted">
+                Meter {statement.readingPrevious.toLocaleString()} →{' '}
+                {statement.readingCurrent.toLocaleString()}
+              </Text>
+            ) : null}
+
+            {statement.units !== null ? (
+              <View style={{ gap: space.sm }}>
+                <Label>USAGE</Label>
+                <UsageChart points={usage} />
+              </View>
+            ) : null}
+          </Surface>
+        ) : null}
+
         {/* The shared money input, so this field formats and validates exactly
             like every other amount in the app. */}
         <AmountField
@@ -515,6 +605,34 @@ export default function SmsDraftModal() {
 
       <ManagePlanSheet visible={manageOpen} onClose={() => setManageOpen(false)} />
     </BottomSheet>
+  );
+}
+
+/**
+ * One line of a statement's arithmetic — a label and its figure.
+ *
+ * `strong` marks the payable total, which is the row the user is being asked to
+ * accept; the components above it are context. Weight rather than colour, so
+ * the emphasis survives greyscale.
+ */
+function StatementRow({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
+  return (
+    <Row justify="space-between" align="center">
+      <Text variant={strong ? 'bodyStrong' : 'caption'} tone={strong ? undefined : 'muted'}>
+        {label}
+      </Text>
+      <Text variant={strong ? 'bodyStrong' : 'caption'} tone={strong ? undefined : 'secondary'}>
+        {value}
+      </Text>
+    </Row>
   );
 }
 

@@ -526,6 +526,27 @@ const DDL = [
   // (or a Shortcut that appends the same alert twice) cannot double-queue.
   `CREATE UNIQUE INDEX IF NOT EXISTS sms_inbox_fingerprint_idx ON sms_inbox(fingerprint)`,
   `CREATE INDEX IF NOT EXISTS sms_inbox_status_idx ON sms_inbox(status, received_at)`,
+  // Meter readings off utility statements — see `meterReadings` in schema.ts.
+  // A whole new table, so its index is safe here: both are created in the same
+  // pass, unlike an index over a column `ensureAdditiveColumns` has yet to add.
+  `CREATE TABLE IF NOT EXISTS meter_readings (
+    id TEXT PRIMARY KEY NOT NULL,
+    account_number TEXT NOT NULL,
+    biller TEXT NOT NULL,
+    period TEXT NOT NULL,
+    reading_date TEXT,
+    units INTEGER,
+    reading_current INTEGER,
+    reading_previous INTEGER,
+    total_due_minor INTEGER,
+    monthly_bill_minor INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  // Unique on (account, period): a re-delivered statement updates its row
+  // rather than drawing the same month on the chart twice.
+  `CREATE UNIQUE INDEX IF NOT EXISTS meter_readings_account_period_idx
+     ON meter_readings(account_number, period)`,
 ];
 
 /**

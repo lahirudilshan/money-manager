@@ -29,6 +29,7 @@ import {
 import { suggestCategoryIcon } from '../data/categoryIcons';
 import { groupColors } from '../theme';
 import {
+  extractStatementBill,
   isRejectedAsNoise,
   looksTruncated,
   parseSms,
@@ -74,6 +75,7 @@ import {
   incomeRepo,
   loanRepo,
   merchantRuleRepo,
+  meterReadingRepo,
   settingsRepo,
   smsInboxRepo,
   smsLogRepo,
@@ -1511,6 +1513,39 @@ export const useAppStore = create<AppState>((set, get) => ({
         occurredOn: fee.date,
         occurredAt: fee.time,
       });
+    }
+
+    /*
+     * A utility statement leaves its METER READING behind.
+     *
+     * Recorded here — on arrival — rather than when the user confirms the bill,
+     * because the reading is a fact the utility stated and is true whether or
+     * not the bill is ever logged against a budget line. Tying it to
+     * confirmation would punch a hole in the usage chart for every statement
+     * dismissed as a duplicate, and those are the months the user is most
+     * likely to want to compare against.
+     *
+     * Wrapped because a chart is not worth losing a bill over: if the reading
+     * cannot be stored, the draft above still stands.
+     */
+    const statement = extractStatementBill(parsed.raw);
+    if (statement?.accountNumber && statement.readingDate) {
+      try {
+        meterReadingRepo.record({
+          accountNumber: statement.accountNumber,
+          biller: parsed.merchant,
+          // "YYYY-MM" from the reading date — the month the usage belongs to.
+          period: statement.readingDate.slice(0, 7),
+          readingDate: statement.readingDate,
+          units: statement.units,
+          readingCurrent: statement.readingCurrent,
+          readingPrevious: statement.readingPrevious,
+          totalDueMinor: statement.totalDueMinor,
+          monthlyBillMinor: statement.monthlyBillMinor,
+        });
+      } catch {
+        // Non-fatal by design — see above.
+      }
     }
 
     // Rebuild from the table so the rows the user sees are exactly the rows

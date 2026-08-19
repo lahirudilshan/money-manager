@@ -5,10 +5,40 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { shortWhen } from '../core/dates';
 import { formatMoney } from '../core/money';
 import { HINT_META } from '../core/smsCategoryHints';
+import { extractStatementBill, type StatementBill } from '../core/smsParser';
 import { accountLabelFor, cardForAccount, type SmsDraft } from '../core/smsReconcile';
 import type { Card } from '../db/schema';
 import { useTheme } from '../theme/ThemeProvider';
 import { Text } from './ui';
+
+/**
+ * A statement's arithmetic, in one line: "189 units · Rs 9,071.79 + 23.84 due".
+ *
+ * Built as parts and joined, so a statement missing any of them (not every
+ * utility prints units, and a bill with no arrears has no outstanding row)
+ * degrades to the parts it does have rather than showing a gap or a zero.
+ */
+function statementSummary(bill: StatementBill): string {
+  const parts: string[] = [];
+
+  if (bill.units !== null) parts.push(`${bill.units} units`);
+
+  /*
+   * The arrears are shown as an ADDITION to this month's charge, not as a
+   * separate total, because that is the sum the amount on the card represents.
+   * Omitted entirely when there are none — "+ Rs 0.00 carried over" is noise on
+   * the overwhelming majority of bills.
+   */
+  if (bill.monthlyBillMinor !== null) {
+    const carried =
+      bill.outstandingMinor !== null && bill.outstandingMinor > 0
+        ? ` + ${formatMoney(bill.outstandingMinor, { showDecimals: true })} carried over`
+        : '';
+    parts.push(`${formatMoney(bill.monthlyBillMinor, { showDecimals: true })}${carried}`);
+  }
+
+  return parts.join(' · ');
+}
 
 /**
  * One parsed-from-SMS draft, as a compact card built around three tiers.
@@ -101,6 +131,16 @@ export function SmsDraftCard({
   // "22 Jul 8:54 PM" rather than "22 Jul 2026 8:54 PM" — since these are reviewed
   // within days of arriving and the year is what pushed the time off the line.
   const whenLabel = shortWhen(parsed.date, parsed.time);
+
+  /*
+   * Re-read from `raw` rather than stored on the draft.
+   *
+   * The breakdown is presentation, and `raw` is already the source of truth the
+   * queue re-parses on every load — so deriving it here keeps the extra figures
+   * out of both the ParsedSms shape and the inbox table, and a statement queued
+   * by an older build gains the breakdown as soon as this screen renders it.
+   */
+  const statement = parsed.kind === 'utility' ? extractStatementBill(parsed.raw) : null;
 
   const figure = `${isCredit ? '+' : ''}${formatMoney(draft.amountMinor, { showDecimals: true })}`;
 
@@ -208,6 +248,24 @@ export function SmsDraftCard({
                 </Text>
               ) : null}
             </View>
+
+            {/* A utility statement's own arithmetic.
+
+                The amount on the right is `Total Due`, and on a statement that
+                figure is a SUM — this month's charge plus whatever was carried
+                over. Without the breakdown the user has a number they cannot
+                tie back to the bill they just read, and no way to see that 24
+                rupees of it is last month's arrears. The units come along
+                because they are the one figure that explains why the charge
+                moved. */}
+            {statement ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="flash-outline" size={11} color={colors.inkMuted} />
+                <Text variant="caption" tone="muted" numberOfLines={1}>
+                  {statementSummary(statement)}
+                </Text>
+              </View>
+            ) : null}
 
             {/* What the bank actually said, when it said it in another currency.
                 The figure on the right is the converted, home-currency amount

@@ -449,6 +449,49 @@ export const merchantRules = sqliteTable(
 );
 
 /**
+ * Meter readings taken off utility statements — the usage history.
+ *
+ * A CEB e-bill states the meter pair and the units consumed for ONE period, and
+ * that single figure answers nothing on its own: 189 units is only meaningful
+ * next to the 210 the month before. So each statement's reading is kept as it
+ * arrives, and the detail screen charts the series.
+ *
+ * Written from the SMS itself rather than from a confirmed transaction, and
+ * deliberately so — the reading is a fact the utility stated, true whether or
+ * not the user logs the bill against a budget line. Tying it to confirmation
+ * would put a hole in the chart for every bill that was dismissed as a
+ * duplicate.
+ *
+ * Keyed by (account, period): a re-delivered statement updates its row instead
+ * of drawing the same month twice.
+ */
+export const meterReadings = sqliteTable(
+  'meter_readings',
+  {
+    id: text('id').primaryKey(),
+    /** The utility account — a house may have several meters. */
+    accountNumber: text('account_number').notNull(),
+    /** Which utility issued it, as named by `statementBiller`. */
+    biller: text('biller').notNull(),
+    /** "YYYY-MM" the reading belongs to, derived from the reading date. */
+    period: text('period').notNull(),
+    /** ISO "YYYY-MM-DD" the meter was read. */
+    readingDate: text('reading_date'),
+    /** Units consumed, as STATED by the biller — never recomputed. */
+    units: integer('units'),
+    /** The meter figures themselves, kept so a misread is diagnosable. */
+    readingCurrent: integer('reading_current'),
+    readingPrevious: integer('reading_previous'),
+    /** What the statement asked for, so cost can be charted beside usage. */
+    totalDueMinor: integer('total_due_minor'),
+    /** This period's charge alone, excluding arrears. */
+    monthlyBillMinor: integer('monthly_bill_minor'),
+    ...timestamps,
+  },
+  (t) => [index('meter_readings_account_idx').on(t.accountNumber, t.period)],
+);
+
+/**
  * The durable queue of bank messages waiting to be reviewed.
  *
  * Drafts used to live only in React state, which made the drain lossy in a way
@@ -1283,6 +1326,9 @@ export const READING_CONTEXT_LABEL: Record<ReadingContext, string> = {
 
 export type SmsInboxRow = typeof smsInbox.$inferSelect;
 export type NewSmsInboxRow = typeof smsInbox.$inferInsert;
+
+export type MeterReading = typeof meterReadings.$inferSelect;
+export type NewMeterReading = typeof meterReadings.$inferInsert;
 
 /** Where a queued message stands. See `smsInbox.status`. */
 export type SmsInboxStatus = SmsInboxRow['status'];

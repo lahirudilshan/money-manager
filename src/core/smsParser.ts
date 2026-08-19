@@ -481,6 +481,145 @@ export function extractItemisedFee(text: string): ItemisedFee | null {
 }
 
 /**
+ * A utility bill delivered as a LABELLED STATEMENT rather than a sentence.
+ *
+ * Every bill format above narrates itself — "your bill of LKR 3,450 is due on
+ * 15 Aug" — and the parser reads it with the same machinery it uses on a POS
+ * alert: find the verb, take the first amount. A CEB e-bill is a different
+ * document entirely. It is a ledger with named rows:
+ *
+ *   B/F: Rs. 9,470.76             last month's balance, carried forward
+ *   Payments: Rs. 9,500.00        what has already been paid
+ *   Outstanding: Rs. 23.84 by 2026-08-11
+ *   Reading: 12764 - 12575 = 189 Units
+ *   Monthly Bill: Rs. 9,071.79    this month's charge
+ *   Total Due: Rs. 9,095.63       what the utility actually wants
+ *
+ * Read by the general extractors, this message produced NOTHING — no direction
+ * matched, so it was dropped in silence. Read carelessly, it is worse than
+ * nothing: the first amount in the text is `B/F`, a figure the user has already
+ * paid and does not owe, sitting 375 rupees away from the real one. Neither
+ * error is visible on screen, which is why the total is read from its LABEL
+ * here rather than by position.
+ *
+ * Returns null for anything that is not a statement, so the ordinary path is
+ * untouched.
+ */
+export interface StatementBill {
+  /** What the utility is asking for — the payable figure. */
+  totalDueMinor: Minor;
+  /** This period's charge alone, before any carried balance. */
+  monthlyBillMinor: Minor | null;
+  /** Arrears carried in from previous periods. */
+  outstandingMinor: Minor | null;
+  /** Units consumed this period, as STATED by the biller. */
+  units: number | null;
+  /** Current meter reading. */
+  readingCurrent: number | null;
+  /** Previous meter reading. */
+  readingPrevious: number | null;
+  /** ISO date the meter was read. */
+  readingDate: string | null;
+  /** The utility account this bill is for. */
+  accountNumber: string | null;
+}
+
+/**
+ * A labelled money row: "Total Due: Rs. 9,095.63".
+ *
+ * Built per-label rather than as one generic "label: amount" scan, because the
+ * whole point is to know WHICH figure was found. A generic scan would hand back
+ * five numbers with no way to tell the total from the balance brought forward.
+ */
+function labelledAmount(text: string, label: RegExp): Minor | null {
+  const re = new RegExp(
+    `${label.source}\\s*[:.]?\\s*(?:${CURRENCY_ALTERNATION}|Rs\\.?)?\\s*([\\d,]+(?:\\.\\d{1,2})?)`,
+    'i',
+  );
+  const match = text.match(re);
+  if (!match) return null;
+  return amountBodyToMinor(match[1]);
+}
+
+/**
+ * The label that makes a statement payable.
+ *
+ * "Total Due" is the one row that must be present: without it there is no
+ * figure to put in front of the user, and a message carrying only a reading and
+ * a brought-forward balance is a notice, not a bill. Accepting "Amount Due" and
+ * "Payable" alongside it because utilities word the same row all three ways.
+ */
+const TOTAL_DUE_LABEL = /\b(?:total\s+due|amount\s+due|total\s+payable|payable\s+amount)\b/;
+
+/**
+ * Wording that proves money ALREADY MOVED, which a statement never claims.
+ *
+ * A statement projects forward: it says what is owed and when. The moment a
+ * message also reports a completed debit or credit, it is a transaction alert
+ * that happens to quote a balance — and reading it as a statement loses the
+ * transaction.
+ *
+ * This is not hypothetical. A credit-card alert states both:
+ *
+ *   "LKR 25,000.00 debited. Total Due: LKR 3,000.00 on your card ending 1234"
+ *
+ * Without this guard the `Total Due` label wins, the message becomes a
+ * 3,000-rupee utility bill, and the 25,000 that actually left the account is
+ * never recorded — the worst failure this parser can produce, because the
+ * missing spend is invisible rather than wrong on screen.
+ */
+const COMPLETED_MOVEMENT =
+  /\b(?:debited|credited|withdrawn|deposited|transferred|spent|purchased|reversed|refunded)\b/i;
+
+export function extractStatementBill(text: string): StatementBill | null {
+  if (typeof text !== 'string') return null;
+
+  /*
+   * A message reporting a completed movement is not a statement — see above.
+   * Checked first, because this decides what KIND of document it is before any
+   * figure is read out of it.
+   */
+  if (COMPLETED_MOVEMENT.test(text)) return null;
+
+  const totalDueMinor = labelledAmount(text, TOTAL_DUE_LABEL);
+  /*
+   * No labelled total means this is not a statement. Deliberately the ONLY way
+   * in: every other field below is optional, so without this gate a POS alert
+   * that happens to mention "outstanding" would produce a bill with no amount.
+   */
+  if (totalDueMinor === null || totalDueMinor <= 0) return null;
+
+  /*
+   * The meter line: "Reading: 12764 - 12575 = 189 Units".
+   *
+   * `units` is taken from the STATED figure, never from `current - previous`.
+   * A meter rolls over past its maximum and restarts at zero, which makes the
+   * subtraction hugely negative while the biller prints the true count — so
+   * recomputing it would put a negative bar on the usage chart on exactly the
+   * month the reading is most interesting.
+   */
+  const reading = text.match(
+    /\bReading\s*[:.]?\s*(\d+)\s*-\s*(\d+)\s*=\s*(\d+)\s*Units?\b/i,
+  );
+  // A statement may print only the consumption, with no meter pair.
+  const unitsOnly = reading ? null : text.match(/\b(\d+)\s*Units?\b/i);
+
+  const readingDate = text.match(/\bReading\s+Date\s*[:.]?\s*(\d{4}-\d{2}-\d{2})/i);
+  const account = text.match(/\bA\/C\s*(?:No)?\s*[:.]?\s*(\d{6,})/i);
+
+  return {
+    totalDueMinor,
+    monthlyBillMinor: labelledAmount(text, /\b(?:monthly\s+bill|current\s+bill|this\s+month)\b/),
+    outstandingMinor: labelledAmount(text, /\boutstanding\b/),
+    units: reading ? Number(reading[3]) : unitsOnly ? Number(unitsOnly[1]) : null,
+    readingCurrent: reading ? Number(reading[1]) : null,
+    readingPrevious: reading ? Number(reading[2]) : null,
+    readingDate: readingDate ? readingDate[1] : null,
+    accountNumber: account ? account[1] : null,
+  };
+}
+
+/**
  * The fee a message itemises, as a movement in its own right.
  *
  * Returns null unless the message states BOTH a transaction and a separate fee
@@ -943,8 +1082,51 @@ function firstMatch(patterns: RegExp[], text: string): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+/**
+ * Who issued a statement bill.
+ *
+ * A statement names no merchant anywhere — there is no "at KEELLS SUPER" clause
+ * to read, because the biller is not a shop and the document assumes you know
+ * who sent it. `extractMerchant` therefore returns an empty string, and a draft
+ * with no name reads as "Need a category" on a message that is unambiguously an
+ * electricity bill.
+ *
+ * The e-bill LINK is the reliable identifier: CEB's statement carries
+ * `ebill.ceb.lk`, and the domain is the one part of the format a utility cannot
+ * change without changing where its customers go to pay. Matched ahead of the
+ * body text for that reason.
+ *
+ * Falls back to a generic "Utility bill" rather than guessing, so an unknown
+ * biller still produces a usable draft the user can rename — the amount and the
+ * due figure are the parts that matter, and inventing a wrong name to sit above
+ * them would be worse than admitting we do not know.
+ */
+const STATEMENT_BILLERS: [host: RegExp, name: string][] = [
+  [/\bceb\.lk\b|\bceb\b/i, 'CEB Electricity'],
+  [/\bleco\b/i, 'LECO Electricity'],
+  [/\bwaterboard\.lk\b|\bnwsdb\b|\bwater\s+board\b/i, 'Water Board'],
+];
+
+function statementBiller(text: string): string {
+  for (const [pattern, name] of STATEMENT_BILLERS) {
+    if (pattern.test(text)) return name;
+  }
+  return 'Utility bill';
+}
+
 /** Direction from the wording; debit-issued bills fall through to 'bill'. */
 function classifyDirection(text: string): SmsDirection | null {
+  /*
+   * A labelled statement is a bill, and it is checked FIRST.
+   *
+   * It has to outrank the debit verbs below, because a statement narrates
+   * completed history on its way to stating what is owed: the CEB bill contains
+   * "Payments: Rs. 9,500.00" and a "Debits:" row, so `DEBIT_PATTERNS` would
+   * claim it as a 9,470-rupee spend that never happened. The `Total Due` label
+   * is what this message IS; the debit rows are its arithmetic.
+   */
+  if (extractStatementBill(text) !== null) return 'bill';
+
   if (firstMatch(CREDIT_PATTERNS, text)) return 'credit';
   if (firstMatch(DEBIT_PATTERNS, text)) return 'debit';
   if (firstMatch(BILL_PATTERNS, text)) return 'bill';
@@ -971,6 +1153,16 @@ function classifyDirection(text: string): SmsDirection | null {
  * ATM receipt are recognised before the generic transfer/purchase split.
  */
 function classifyKind(text: string, direction: SmsDirection): SmsKind {
+  /*
+   * A statement bill is a utility bill, stated outright.
+   *
+   * The generic rule below looks for "bill ... due" or "due on/by", and a
+   * statement says neither — its total is a labelled row. Without this the kind
+   * fell through to `other`, which costs the draft its "Bill due" label and the
+   * utility prior the categoriser uses to find the right line.
+   */
+  if (direction === 'bill' && extractStatementBill(text) !== null) return 'utility';
+
   /*
    * Checked FIRST, and only on a credit.
    *
@@ -1213,18 +1405,40 @@ export function parseSms(input: string): ParsedSms | null {
    */
   if (!account && firstMatch(ACCOUNTLESS_NOTIFICATION_PATTERNS, text)) return null;
 
+  /*
+   * A statement's amount comes from its `Total Due` LABEL, never from position.
+   *
+   * `extractAmount` returns the first figure that is not a balance or a fee,
+   * and on a CEB bill that is `B/F: Rs. 9,470.76` — the balance carried in from
+   * last month, which the user has already paid. Reading it would put a wrong
+   * five-figure amount in front of them with nothing on screen to reveal it,
+   * since one plausible rupee total looks much like another.
+   */
+  const statement = extractStatementBill(text);
+
   const amount = extractAmount(text);
-  if (amount === null || amount.amountMinor <= 0) return null;
+  if (!statement && (amount === null || amount.amountMinor <= 0)) return null;
 
   const base: ParsedSms = {
     direction,
     kind: classifyKind(text, direction),
-    amountMinor: amount.amountMinor,
-    currency: amount.currency,
-    merchant: extractMerchant(text),
-    account,
-    date: extractDate(text),
-    time: extractTime(text),
+    amountMinor: statement ? statement.totalDueMinor : amount!.amountMinor,
+    /*
+     * A statement quotes "Rs." with no ISO code, so `extractAmount`'s currency
+     * (read off whichever figure it happened to land on) is the only source —
+     * and it is null for these messages either way.
+     */
+    currency: amount?.currency ?? null,
+    merchant: statement ? statementBiller(text) : extractMerchant(text),
+    account: statement?.accountNumber ?? account,
+    /*
+     * A statement's own date is the READING date — when the meter was read, not
+     * when the money is due. It is the only date in the message that describes
+     * this bill (the outstanding-by date belongs to the previous one), so it is
+     * what the card shows as "when".
+     */
+    date: statement?.readingDate ?? extractDate(text),
+    time: statement ? null : extractTime(text),
     raw: text,
   };
 
