@@ -2,13 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, ScrollView, View } from 'react-native';
-import { Field, PillSelect } from '../../src/components/forms';
-import { AccountField } from '../../src/components/AccountPicker';
-import { BankLogo } from '../../src/components/BankLogo';
-import { AppHeader, BottomSheet, Button, Divider, Empty, GradientButton, GradientCard, Glyph, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
-import { useTabBarClearance } from '../../src/components/TabBar';
-import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '../../src/core/money';
-import { resolveBrand } from '../../src/data/banks';
+import { Field, PillSelect } from '~/shared/components/forms';
+import { AccountField } from '~/features/accounts/components/AccountPicker';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { AppHeader, BottomSheet, Button, Divider, Empty, GradientButton, GradientCard, Glyph, Label, ListRow, Row, Surface, Text } from '~/shared/components/ui';
+import { useTabBarClearance } from '~/shared/components/TabBar';
+import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
+import { resolveBrand } from '~/shared/data/banks';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -16,7 +16,7 @@ import {
   useAppStore,
 } from '../../src/store/useAppStore';
 import type { Income } from '../../src/db/schema';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Income sources, including foreign-currency ones converted at a stored rate. */
 export default function IncomeScreen() {

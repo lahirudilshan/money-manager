@@ -2,15 +2,15 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BottomSheet, Button, GradientButton, Row, Text } from '../../../src/components/ui';
-import { Field, PillSelect } from '../../../src/components/forms';
-import { DatePickerField } from '../../../src/components/DatePickerField';
-import { ImageUploader } from '../../../src/components/ImageUploader';
+import { BottomSheet, Button, GradientButton, Row, Text } from '~/shared/components/ui';
+import { Field, PillSelect } from '~/shared/components/forms';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { ImageUploader } from '~/shared/components/ImageUploader';
 import { healthDocumentRepo, healthVisitRepo } from '../../../src/db/repositories';
 import { DOCUMENT_KIND_LABEL, type DocumentKind } from '../../../src/db/schema';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 const KINDS: DocumentKind[] = [
   'prescription',

@@ -2,38 +2,38 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
-import { ManagePlanSheet } from '../../src/components/ManagePlanSheet';
-import { HousePicker } from '../../src/components/HousePicker';
-import { AmountField, Field } from '../../src/components/forms';
-import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { to12Hour } from '../../src/core/dates';
-import { defaultHouseId } from '../../src/core/houses';
+import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
+import { ManagePlanSheet } from '~/features/budget/components/ManagePlanSheet';
+import { HousePicker } from '~/features/budget/components/HousePicker';
+import { AmountField, Field } from '~/shared/components/forms';
+import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { to12Hour } from '~/shared/lib/dates';
+import { defaultHouseId } from '~/features/budget/logic/houses';
 import {
   formatAmountInput,
   formatMoney,
   parseAmount,
   toMajor,
   validateAmount,
-} from '../../src/core/money';
-import { HINT_META, type CategoryHint } from '../../src/core/smsCategoryHints';
-import type { CatalogSuggestion } from '../../src/core/catalogSync';
+} from '~/shared/lib/money';
+import { HINT_META, type CategoryHint } from '~/features/sms/logic/smsCategoryHints';
+import type { CatalogSuggestion } from '~/features/sms/logic/catalogSync';
 import {
   findGroupForProposal,
   findLineForHint,
   proposalForHint,
-} from '../../src/core/hintCatalog';
-import { extractStatementBill } from '../../src/core/smsParser';
-import { accountLabelFor } from '../../src/core/smsReconcile';
-import { UsageChart } from '../../src/components/UsageChart';
+} from '~/features/sms/logic/hintCatalog';
+import { extractStatementBill } from '~/features/sms/logic/smsParser';
+import { accountLabelFor } from '~/features/sms/logic/smsReconcile';
+import { UsageChart } from '~/features/budget/components/UsageChart';
 import { meterReadingRepo } from '../../src/db/repositories';
 import {
   categoryNameOf,
   selectDraftTargets,
   useAppStore,
 } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Detail modal for one SMS draft — the screen where the app's category

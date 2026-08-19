@@ -3,12 +3,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Image, Modal, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Empty, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
+import { Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
 import { healthDocumentRepo } from '../../../src/db/repositories';
 import { DOCUMENT_KIND_LABEL, type DocumentKind, type HealthDocument } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Prescriptions, reports and scans — as a gallery, and readable full-screen.

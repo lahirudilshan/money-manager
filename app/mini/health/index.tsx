@@ -10,8 +10,8 @@ import {
   Row,
   Surface,
   Text,
-} from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
+} from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
 import {
   describeDaysAway,
   formatReading,
@@ -22,8 +22,8 @@ import {
   type StoryBlock,
   type TimelineEntry,
   type TimelineReading,
-} from '../../../src/core/health';
-import { formatMoney } from '../../../src/core/money';
+} from '~/features/health/logic/health';
+import { formatMoney } from '~/shared/lib/money';
 import {
   healthDocumentRepo,
   healthMedicineRepo,
@@ -39,7 +39,7 @@ import {
   type HealthMetric,
 } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * One person's health record — what happened, and what the numbers are doing.

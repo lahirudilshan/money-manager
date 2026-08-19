@@ -5,19 +5,19 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, Text } from '../../src/components/ui';
-import { MINI_APPS, parseEnabled } from '../../src/core/miniApps';
-import { useTabBarClearance } from '../../src/components/TabBar';
-import { syncCategoryReminders, unavailableReason } from '../../src/services/notifications';
-import { PinPad } from '../../src/components/PinPad';
-import { SMART_DETECT_NAME } from '../../src/components/SmartDetectBadge';
-import { canUse, inheritedPerks, planById, PLANS, type Perk } from '../../src/core/plans';
-import { clearPin, setPin } from '../../src/services/appPin';
+import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, Text } from '~/shared/components/ui';
+import { MINI_APPS, parseEnabled } from '~/shared/lib/miniApps';
+import { useTabBarClearance } from '~/shared/components/TabBar';
+import { syncCategoryReminders, unavailableReason } from '~/shared/lib/notifications';
+import { PinPad } from '~/shared/components/PinPad';
+import { SMART_DETECT_NAME } from '~/features/sms/components/SmartDetectBadge';
+import { canUse, inheritedPerks, planById, PLANS, type Perk } from '~/features/budget/logic/plans';
+import { clearPin, setPin } from '~/shared/lib/appPin';
 import {
   canUseBiometrics,
   confirmWithBiometrics,
   describeBiometric,
-} from '../../src/services/biometrics';
+} from '~/shared/lib/biometrics';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -33,8 +33,8 @@ import {
   recordRate,
   serialiseHistory,
   type RateMode,
-} from '../../src/core/exchangeRate';
-import { useTheme } from '../../src/theme/ThemeProvider';
+} from '~/shared/lib/exchangeRate';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 
 /** Currencies offered, with a symbol and full name for the richer picker. */

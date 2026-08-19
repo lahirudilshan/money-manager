@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { buildSchedule, paymentsElapsed, remainingBalance } from '../core/amortization';
-import { setDisplayCurrency, sumMinor, type Minor } from '../core/money';
-import type { PlanId } from '../core/plans';
+import { buildSchedule, paymentsElapsed, remainingBalance } from '~/features/loans/logic/amortization';
+import { setDisplayCurrency, sumMinor, type Minor } from '~/shared/lib/money';
+import type { PlanId } from '~/features/budget/logic/plans';
 import {
   calculateRatios,
   daysUntil,
@@ -25,9 +25,9 @@ import {
   type PlannedCategory,
   type Ratios,
   type SubcategoryStatus,
-} from '../core/planning';
-import { suggestCategoryIcon } from '../data/categoryIcons';
-import { groupColors } from '../theme';
+} from '~/features/budget/logic/planning';
+import { suggestCategoryIcon } from '~/shared/data/categoryIcons';
+import { groupColors } from '~/shared/theme';
 import {
   extractStatementBill,
   isRejectedAsNoise,
@@ -35,20 +35,20 @@ import {
   parseSms,
   splitItemisedFee,
   type ParsedSms,
-} from '../core/smsParser';
-import { orderDraftsWithFees, reconcileSms, type SmsDraft } from '../core/smsReconcile';
-import { merchantKey, planRuleUpsert, type MerchantRule } from '../core/merchantRules';
-import { observationsFrom, planCatalogMerge } from '../core/catalogSync';
+} from '~/features/sms/logic/smsParser';
+import { orderDraftsWithFees, reconcileSms, type SmsDraft } from '~/features/sms/logic/smsReconcile';
+import { merchantKey, planRuleUpsert, type MerchantRule } from '~/features/sms/logic/merchantRules';
+import { observationsFrom, planCatalogMerge } from '~/features/sms/logic/catalogSync';
 import {
   findGroupForProposal,
   findLineForHint,
   proposalForHint,
-} from '../core/hintCatalog';
-import type { CategoryHint } from '../core/smsCategoryHints';
-import { logSmsIntake } from '../core/smsIntakeLog';
-import { isCatalogConfigured, pullRules, pushObservations } from '../services/catalogApi';
-import { getDeviceId } from '../services/deviceId';
-import { onForeground, onNetworkRestored } from '../services/network';
+} from '~/features/sms/logic/hintCatalog';
+import type { CategoryHint } from '~/features/sms/logic/smsCategoryHints';
+import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
+import { isCatalogConfigured, pullRules, pushObservations } from '~/shared/lib/catalogApi';
+import { getDeviceId } from '~/shared/lib/deviceId';
+import { onForeground, onNetworkRestored } from '~/shared/lib/network';
 import {
   cancelInternalTransfers,
   cancelReversals,
@@ -57,14 +57,14 @@ import {
   EMPTY_SUMMARY,
   fingerprintMessage,
   type DrainSummary,
-} from '../core/smsInbox';
+} from '~/features/sms/logic/smsInbox';
 import {
   countWaiting,
   drainInbox,
   ensureInboxExists,
   migrateLegacyInbox,
   watchInbox,
-} from '../services/smsInboxFile';
+} from '~/features/sms/logic/smsInboxFile';
 import { DEBT_CATEGORY_ID, initialiseDatabase, resetDatabase } from '../db/client';
 import {
   cardRepo,
@@ -87,12 +87,12 @@ import {
   SETTINGS_KEYS,
 } from '../db/repositories';
 import { seedSampleTemplate } from '../db/seed';
-import { seedFuelSample } from '../db/seedFuel';
-import { seedHealthSample } from '../db/seedHealth';
+import { seedFuelSample } from '~/features/fuel/logic/seedFuel';
+import { seedHealthSample } from '~/features/health/logic/seedHealth';
 import {
   cancelAllReminders,
   notifyDraftsImported,
-} from '../services/notifications';
+} from '~/shared/lib/notifications';
 import {
   isUnplanned,
   supportsSavingPlan,
@@ -101,8 +101,8 @@ import {
   type HealthPerson,
   type NewHealthPerson,
 } from '../db/schema';
-import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '../core/houses';
-import { toggleMiniApp, type MiniAppId } from '../core/miniApps';
+import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '~/features/budget/logic/houses';
+import { toggleMiniApp, type MiniAppId } from '~/shared/lib/miniApps';
 import type {
   Card,
   Category,

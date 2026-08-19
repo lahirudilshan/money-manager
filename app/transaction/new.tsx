@@ -2,23 +2,23 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
-import { AccountField } from '../../src/components/AccountPicker';
-import { CategoryGridPicker } from '../../src/components/CategoryGridPicker';
-import { DatePickerField } from '../../src/components/DatePickerField';
-import { HousePicker } from '../../src/components/HousePicker';
-import { ImageUploader } from '../../src/components/ImageUploader';
-import { ManagePlanSheet } from '../../src/components/ManagePlanSheet';
-import { StatusToggle } from '../../src/components/StatusToggle';
-import { AmountField } from '../../src/components/forms';
-import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { formatMoney, parseAmount } from '../../src/core/money';
-import { defaultHouseId } from '../../src/core/houses';
-import { resolveCardId, type SubcategoryStatus } from '../../src/core/planning';
+import { AccountField } from '~/features/accounts/components/AccountPicker';
+import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { HousePicker } from '~/features/budget/components/HousePicker';
+import { ImageUploader } from '~/shared/components/ImageUploader';
+import { ManagePlanSheet } from '~/features/budget/components/ManagePlanSheet';
+import { StatusToggle } from '~/features/budget/components/StatusToggle';
+import { AmountField } from '~/shared/components/forms';
+import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { formatMoney, parseAmount } from '~/shared/lib/money';
+import { defaultHouseId } from '~/features/budget/logic/houses';
+import { resolveCardId, type SubcategoryStatus } from '~/features/budget/logic/planning';
 import { isUnplanned } from '../../src/db/schema';
-import { resolveBrand } from '../../src/data/banks';
+import { resolveBrand } from '~/shared/data/banks';
 import { selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Log a transaction against a budget line — the dock's centre "+" action.

@@ -3,15 +3,15 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Button, Divider, FundingBar, Glyph, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
-import { AccountPickerSheet } from '../../src/components/AccountPicker';
-import { BankLogo } from '../../src/components/BankLogo';
-import { formatMoney } from '../../src/core/money';
-import { formatPeriod } from '../../src/core/planning';
-import { accountLabel, resolveBrand } from '../../src/data/banks';
+import { Button, Divider, FundingBar, Glyph, Label, ListRow, Row, Surface, Text } from '~/shared/components/ui';
+import { AccountPickerSheet } from '~/features/accounts/components/AccountPicker';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { formatMoney } from '~/shared/lib/money';
+import { formatPeriod } from '~/features/budget/logic/planning';
+import { accountLabel, resolveBrand } from '~/shared/data/banks';
 import { selectCategoryView, useAppStore } from '../../src/store/useAppStore';
-import { statusStyle } from '../../src/theme';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { statusStyle } from '~/shared/theme';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * A category's overview and settings.

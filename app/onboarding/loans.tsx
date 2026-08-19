@@ -6,7 +6,7 @@ import {
   ScrollView,
   View,
 } from 'react-native';
-import { BankLogo } from '../../src/components/BankLogo';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
 import {
   emptyLoanDraft,
   isLoanDraftValid,
@@ -14,12 +14,12 @@ import {
   loanDraftFrom,
   loanDraftToInput,
   type LoanDraft,
-} from '../../src/components/LoanForm';
-import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '../../src/components/ui';
-import { formatMoney } from '../../src/core/money';
-import { resolveBrand } from '../../src/data/banks';
+} from '~/features/loans/components/LoanForm';
+import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '~/shared/components/ui';
+import { formatMoney } from '~/shared/lib/money';
+import { resolveBrand } from '~/shared/data/banks';
 import { selectLoanViews, useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 const LOAN_KIND_LABEL: Record<string, string> = {
   personal: 'Personal loan',

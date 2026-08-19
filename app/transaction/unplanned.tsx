@@ -1,13 +1,13 @@
 import { useLocalSearchParams } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
-import { Field } from '../../src/components/forms';
-import { BottomSheet, GradientButton, Text } from '../../src/components/ui';
-import { DatePickerField } from '../../src/components/DatePickerField';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { parseAmount } from '../../src/core/money';
+import { Field } from '~/shared/components/forms';
+import { BottomSheet, GradientButton, Text } from '~/shared/components/ui';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { parseAmount } from '~/shared/lib/money';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Add one entry to an unplanned subcategory (e.g. a single grocery run under

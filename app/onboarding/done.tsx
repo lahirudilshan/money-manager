@@ -3,9 +3,9 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Button, Text } from '../../src/components/ui';
+import { Button, Text } from '~/shared/components/ui';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Final onboarding screen: confirmation, then hand off to the dashboard. */
 export default function OnboardingDoneScreen() {

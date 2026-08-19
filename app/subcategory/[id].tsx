@@ -12,14 +12,14 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AccountPickerSheet } from '../../src/components/AccountPicker';
-import { Field, FrequencyPicker } from '../../src/components/forms';
-import { BottomSheet, Button, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { DatePickerField } from '../../src/components/DatePickerField';
-import { DueDateCalendar } from '../../src/components/DueDateCalendar';
-import { ImageUploader } from '../../src/components/ImageUploader';
-import { formatAmountInput, formatMoney, parseAmount } from '../../src/core/money';
+import { AccountPickerSheet } from '~/features/accounts/components/AccountPicker';
+import { Field, FrequencyPicker } from '~/shared/components/forms';
+import { BottomSheet, Button, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { DueDateCalendar } from '~/features/budget/components/DueDateCalendar';
+import { ImageUploader } from '~/shared/components/ImageUploader';
+import { formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
 import {
   dueDateFor,
   formatPeriod,
@@ -27,25 +27,25 @@ import {
   periodKey,
   resolveCardId,
   type SubcategoryStatus,
-} from '../../src/core/planning';
+} from '~/features/budget/logic/planning';
 import {
   supportsSavingPlan,
   isUnplanned,
   type SubcategoryFrequency,
   type Transaction,
 } from '../../src/db/schema';
-import { resolveBrand } from '../../src/data/banks';
-import { BankLogo } from '../../src/components/BankLogo';
+import { resolveBrand } from '~/shared/data/banks';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
 import {
   savingPlanDraftFrom,
   SavingPlanFields,
   SavingPlanProgressCard,
   toSavingPlanPatch,
   type SavingPlanDraft,
-} from '../../src/components/SavingPlanFields';
+} from '~/features/budget/components/SavingPlanFields';
 import { selectSavingPlans, selectTransactions, useAppStore } from '../../src/store/useAppStore';
-import { statusStyle } from '../../src/theme';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { statusStyle } from '~/shared/theme';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Edit one subcategory: its plan, its actual cost, and its status this month. */
 export default function SubcategoryScreen() {

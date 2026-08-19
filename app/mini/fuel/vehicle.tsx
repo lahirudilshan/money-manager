@@ -2,14 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, Image, Pressable, View } from 'react-native';
-import { Divider, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
-import { Field, PillSelect } from '../../../src/components/forms';
-import { ImageUploader } from '../../../src/components/ImageUploader';
+import { Divider, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
+import { Field, PillSelect } from '~/shared/components/forms';
+import { ImageUploader } from '~/shared/components/ImageUploader';
 import { fuelEntryRepo } from '../../../src/db/repositories';
 import { FUEL_TYPE_LABEL, VEHICLE_KIND_LABEL, type FuelType, type VehicleKind } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Icon per vehicle kind, so the switcher chips read at a glance. */
 const KIND_ICON: Record<VehicleKind, keyof typeof Ionicons.glyphMap> = {

@@ -3,21 +3,21 @@ import { useRouter } from 'expo-router';
 import React from 'react';
 import { Alert, Pressable, Switch, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { SMART_DETECT_NAME, SmartDetectBadge } from '../../src/components/SmartDetectBadge';
-import { BottomSheet, Label, Row, Surface, Text } from '../../src/components/ui';
-import { describeDrain } from '../../src/core/smsInbox';
-import { copyToClipboard } from '../../src/services/clipboard';
+import { SMART_DETECT_NAME, SmartDetectBadge } from '~/features/sms/components/SmartDetectBadge';
+import { BottomSheet, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { describeDrain } from '~/features/sms/logic/smsInbox';
+import { copyToClipboard } from '~/shared/lib/clipboard';
 import {
   ensureInboxExists,
   FILES_APP_LOCATION,
   INBOX_FILE_PATH,
   inboxDiagnostics,
-} from '../../src/services/smsInboxFile';
-import { openTestAlertComposer } from '../../src/services/testAlert';
+} from '~/features/sms/logic/smsInboxFile';
+import { openTestAlertComposer } from '~/shared/lib/testAlert';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
 import { lastDrainReport, useAppStore } from '../../src/store/useAppStore';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Setup guide for the iOS Shortcuts automation behind Smart Detect.

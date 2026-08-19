@@ -1,4 +1,4 @@
-import { toMinor } from '../core/money';
+import { toMinor } from '~/shared/lib/money';
 import { cardRepo, categoryRepo, incomeRepo, subcategoryRepo } from './repositories';
 
 /**

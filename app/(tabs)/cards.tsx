@@ -2,17 +2,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, TextInput, View } from 'react-native';
-import { BankCardTile } from '../../src/components/BankCardTile';
-import { BankLogo } from '../../src/components/BankLogo';
-import { Field } from '../../src/components/forms';
-import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Surface, Text } from '../../src/components/ui';
-import { useTabBarClearance } from '../../src/components/TabBar';
-import { formatMoney, parseAmount, toMajor } from '../../src/core/money';
-import { accountLabel, BANKS } from '../../src/data/banks';
-import { useBrand } from '../../src/hooks/useBrand';
+import { BankCardTile } from '~/features/accounts/components/BankCardTile';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { Field } from '~/shared/components/forms';
+import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Surface, Text } from '~/shared/components/ui';
+import { useTabBarClearance } from '~/shared/components/TabBar';
+import { formatMoney, parseAmount, toMajor } from '~/shared/lib/money';
+import { accountLabel, BANKS } from '~/shared/data/banks';
+import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import type { Card } from '../../src/db/schema';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Accounts & Cards.

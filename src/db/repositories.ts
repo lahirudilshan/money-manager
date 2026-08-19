@@ -3,9 +3,9 @@ import {
   merchantKey,
   type MerchantRule,
   type RuleUpsert,
-} from '../core/merchantRules';
-import { SEED_MERCHANT_PATTERNS } from '../core/smsCategoryHints';
-import type { CatalogPlan } from '../core/catalogSync';
+} from '~/features/sms/logic/merchantRules';
+import { SEED_MERCHANT_PATTERNS } from '~/features/sms/logic/smsCategoryHints';
+import type { CatalogPlan } from '~/features/sms/logic/catalogSync';
 import { db, expoDb } from './client';
 import {
   cards,

@@ -2,13 +2,13 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BottomSheet, GradientButton, Label, Row, Text } from '../../src/components/ui';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { formatMoney } from '../../src/core/money';
-import { parseSms } from '../../src/core/smsParser';
-import { readClipboard } from '../../src/services/clipboard';
+import { BottomSheet, GradientButton, Label, Row, Text } from '~/shared/components/ui';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { formatMoney } from '~/shared/lib/money';
+import { parseSms } from '~/features/sms/logic/smsParser';
+import { readClipboard } from '~/shared/lib/clipboard';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * One extracted field — an icon and its value, sized to sit beside others.

@@ -1,15 +1,15 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, View } from 'react-native';
-import { BottomSheet, Button, GradientButton, Surface, Text } from '../../../src/components/ui';
-import { Field, PillSelect } from '../../../src/components/forms';
-import { DatePickerField } from '../../../src/components/DatePickerField';
-import { parseAmount } from '../../../src/core/money';
+import { BottomSheet, Button, GradientButton, Surface, Text } from '~/shared/components/ui';
+import { Field, PillSelect } from '~/shared/components/forms';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { parseAmount } from '~/shared/lib/money';
 import { healthVisitRepo } from '../../../src/db/repositories';
 import { VISIT_KIND_LABEL, type VisitKind } from '../../../src/db/schema';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 const KINDS: VisitKind[] = [
   'consultation',

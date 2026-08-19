@@ -2,11 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { Pressable, View } from 'react-native';
-import { Divider, Empty, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
+import { Divider, Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
 import { healthMedicineRepo } from '../../../src/db/repositories';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * What this person has been prescribed — current first, then finished.

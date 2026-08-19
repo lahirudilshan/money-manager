@@ -2,13 +2,13 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { Alert, View } from 'react-native';
-import { BottomSheet, Button, GradientButton, Row, Surface, Text } from '../../../src/components/ui';
-import { Field, PillSelect } from '../../../src/components/forms';
+import { BottomSheet, Button, GradientButton, Row, Surface, Text } from '~/shared/components/ui';
+import { Field, PillSelect } from '~/shared/components/forms';
 import { healthMedicineRepo, healthVisitRepo } from '../../../src/db/repositories';
 import { MEDICINE_FORM_LABEL, type MedicineForm } from '../../../src/db/schema';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 const FORMS: MedicineForm[] = [
   'tablet',

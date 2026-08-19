@@ -11,8 +11,8 @@ import {
   StepHeader,
   Surface,
   Text,
-} from '../../src/components/ui';
-import { normaliseTransport } from '../../src/core/onboardingDraft';
+} from '~/shared/components/ui';
+import { normaliseTransport } from '~/features/onboarding/logic/onboardingDraft';
 import {
   ageFrom,
   describePersona,
@@ -20,10 +20,10 @@ import {
   type Household,
   type PersonaAnswers,
   type Transport,
-} from '../../src/core/personas';
-import { CATALOG_SUBCATEGORY_BY_ID } from '../../src/data/categoryCatalog';
-import { hydrateOnboardingDraft, useOnboardingDraft } from '../../src/store/useOnboardingDraft';
-import { useTheme } from '../../src/theme/ThemeProvider';
+} from '~/features/onboarding/logic/personas';
+import { CATALOG_SUBCATEGORY_BY_ID } from '~/shared/data/categoryCatalog';
+import { hydrateOnboardingDraft, useOnboardingDraft } from '~/features/onboarding/logic/useOnboardingDraft';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Onboarding step 2: three questions that build a starting plan.

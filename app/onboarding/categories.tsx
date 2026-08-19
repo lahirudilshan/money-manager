@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { LayoutAnimation, Platform, Pressable, ScrollView, UIManager, View } from 'react-native';
-import { Divider, FOOTER_CLEARANCE, GradientButton, PinnedFooter, Row, StepHeader, Surface, Text } from '../../src/components/ui';
-import { ONBOARDING_CATALOG, type CatalogCategory } from '../../src/data/categoryCatalog';
-import { hydrateOnboardingDraft, useOnboardingDraft } from '../../src/store/useOnboardingDraft';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { Divider, FOOTER_CLEARANCE, GradientButton, PinnedFooter, Row, StepHeader, Surface, Text } from '~/shared/components/ui';
+import { ONBOARDING_CATALOG, type CatalogCategory } from '~/shared/data/categoryCatalog';
+import { hydrateOnboardingDraft, useOnboardingDraft } from '~/features/onboarding/logic/useOnboardingDraft';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);

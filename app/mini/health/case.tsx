@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
 import { Image, Pressable, View } from 'react-native';
-import { Divider, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
-import { describeDaysAway, formatReading } from '../../../src/core/health';
-import { formatMoney } from '../../../src/core/money';
+import { Divider, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
+import { describeDaysAway, formatReading } from '~/features/health/logic/health';
+import { formatMoney } from '~/shared/lib/money';
 import {
   healthDocumentRepo,
   healthMedicineRepo,
@@ -20,7 +20,7 @@ import {
   type ReadingContext,
 } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * One visit, and everything that came out of it — the "case" page.

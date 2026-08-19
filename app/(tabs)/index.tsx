@@ -4,18 +4,18 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, Switch, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BankLogo } from '../../src/components/BankLogo';
-import { SmartDetectBadge } from '../../src/components/SmartDetectBadge';
-import { SmsDraftCard } from '../../src/components/SmsDraftCard';
-import { UpgradeSheet } from '../../src/components/UpgradeSheet';
-import { useTabBarClearance } from '../../src/components/TabBar';
-import { BottomSheet, Divider, Empty, GradientCard, Glyph, Label, Row, Stat, Surface, Text } from '../../src/components/ui';
-import { formatMoney } from '../../src/core/money';
-import { formatPeriod, planHealth, shiftPeriod } from '../../src/core/planning';
-import { canUse } from '../../src/core/plans';
-import { enabledMiniApps, MINI_APPS, parseEnabled } from '../../src/core/miniApps';
-import { HEALTH_VISUALS, shadeHex } from '../../src/theme';
-import { accountLabel, resolveBrand } from '../../src/data/banks';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { SmartDetectBadge } from '~/features/sms/components/SmartDetectBadge';
+import { SmsDraftCard } from '~/features/sms/components/SmsDraftCard';
+import { UpgradeSheet } from '~/features/onboarding/components/UpgradeSheet';
+import { useTabBarClearance } from '~/shared/components/TabBar';
+import { BottomSheet, Divider, Empty, GradientCard, Glyph, Label, Row, Stat, Surface, Text } from '~/shared/components/ui';
+import { formatMoney } from '~/shared/lib/money';
+import { formatPeriod, planHealth, shiftPeriod } from '~/features/budget/logic/planning';
+import { canUse } from '~/features/budget/logic/plans';
+import { enabledMiniApps, MINI_APPS, parseEnabled } from '~/shared/lib/miniApps';
+import { HEALTH_VISUALS, shadeHex } from '~/shared/theme';
+import { accountLabel, resolveBrand } from '~/shared/data/banks';
 import {
   selectAccountTransfers,
   selectBoardTotals,
@@ -27,7 +27,7 @@ import {
   useAppStore,
   type ReminderView,
 } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Thickness of the gradient edge grouping the Smart Detect section. */
 const DETECT_BORDER = 1.5;

@@ -1,15 +1,15 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Switch, View } from 'react-native';
-import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { AmountField, Field, PillSelect } from '../../../src/components/forms';
-import { ImageUploader } from '../../../src/components/ImageUploader';
-import { FUEL_STATIONS } from '../../../src/data/fuelStations';
-import { parseAmount } from '../../../src/core/money';
+import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { AmountField, Field, PillSelect } from '~/shared/components/forms';
+import { ImageUploader } from '~/shared/components/ImageUploader';
+import { FUEL_STATIONS } from '~/features/fuel/logic/fuelStations';
+import { parseAmount } from '~/shared/lib/money';
 import { fuelEntryRepo } from '../../../src/db/repositories';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Log one visit to the pump.

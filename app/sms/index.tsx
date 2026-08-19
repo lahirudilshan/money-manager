@@ -2,10 +2,10 @@ import { Redirect, useGlobalSearchParams, useLocalSearchParams } from 'expo-rout
 import * as Linking from 'expo-linking';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { extractSmsFromUrl, decodeSmsParam, looksTruncated } from '../../src/core/smsIntakeUrl';
-import { logSmsIntake } from '../../src/core/smsIntakeLog';
+import { extractSmsFromUrl, decodeSmsParam, looksTruncated } from '~/features/sms/logic/smsIntakeUrl';
+import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Intake route for incoming SMS deep links:

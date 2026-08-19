@@ -2,16 +2,16 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { AccountField } from '../../../src/components/AccountPicker';
-import { DayPicker } from '../../../src/components/DayPicker';
-import { IconPicker, NameWithIconField } from '../../../src/components/forms';
-import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '../../../src/data/categoryIcons';
-import { BottomSheet, Button, GradientButton, Label, Row, Text } from '../../../src/components/ui';
-import { formatMoney } from '../../../src/core/money';
+import { AccountField } from '~/features/accounts/components/AccountPicker';
+import { DayPicker } from '~/features/budget/components/DayPicker';
+import { IconPicker, NameWithIconField } from '~/shared/components/forms';
+import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '~/shared/data/categoryIcons';
+import { BottomSheet, Button, GradientButton, Label, Row, Text } from '~/shared/components/ui';
+import { formatMoney } from '~/shared/lib/money';
 import { FREQUENCY_LABEL } from '../../../src/db/schema';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 export default function EditCategoryScreen() {
   const { colors, space } = useTheme();

@@ -1,6 +1,6 @@
 import { Stack } from 'expo-router';
 import React from 'react';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Onboarding is deliberately outside `(tabs)` — no dock, no back-swipe to the board. */
 export default function OnboardingLayout() {

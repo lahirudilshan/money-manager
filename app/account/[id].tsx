@@ -2,15 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
-import { BottomSheet, Button, DetailRow, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { BankLogo } from '../../src/components/BankLogo';
-import { formatMoney } from '../../src/core/money';
-import { effectiveAmount } from '../../src/core/planning';
-import { accountLabel } from '../../src/data/banks';
-import { useBrand } from '../../src/hooks/useBrand';
+import { BottomSheet, Button, DetailRow, Divider, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { formatMoney } from '~/shared/lib/money';
+import { effectiveAmount } from '~/features/budget/logic/planning';
+import { accountLabel } from '~/shared/data/banks';
+import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Full-screen account detail — opened from the dashboard's "money to move" list

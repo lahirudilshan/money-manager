@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { TabBar } from '../../src/components/TabBar';
+import { TabBar } from '~/shared/components/TabBar';
 
 /**
  * The tab bar floats above the content (see TabBar), so screens add their own

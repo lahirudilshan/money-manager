@@ -10,15 +10,15 @@ import {
   loanDraftFrom,
   loanDraftToInput,
   type LoanDraft,
-} from '../../src/components/LoanForm';
-import { BottomSheet, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
-import { useTabBarClearance } from '../../src/components/TabBar';
-import { buildSchedule } from '../../src/core/amortization';
-import { formatMoney } from '../../src/core/money';
-import { useBrand } from '../../src/hooks/useBrand';
+} from '~/features/loans/components/LoanForm';
+import { BottomSheet, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { useTabBarClearance } from '~/shared/components/TabBar';
+import { buildSchedule } from '~/features/loans/logic/amortization';
+import { formatMoney } from '~/shared/lib/money';
+import { useBrand } from '~/shared/hooks/useBrand';
 import { selectLoanViews, useAppStore, type LoanView } from '../../src/store/useAppStore';
-import { shadeHex } from '../../src/theme';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { shadeHex } from '~/shared/theme';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 export default function LoansScreen() {
   const { colors, radius, space } = useTheme();

@@ -10,8 +10,8 @@ import {
   Row,
   Surface,
   Text,
-} from '../../src/components/ui';
-import { Screen } from '../../src/components/Screen';
+} from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
 import {
   ALL_PARTS,
   describeSnapshot,
@@ -19,10 +19,10 @@ import {
   partsOf,
   validateSnapshot,
   type Snapshot,
-} from '../../src/core/backup';
-import { formatSize as formatDriveSize, type DriveFile } from '../../src/core/driveSync';
-import { restoreSnapshot } from '../../src/db/backupRepo';
-import { listBackups, readBackup, type StoredBackup } from '../../src/services/backupFile';
+} from '~/features/backup/logic/backup';
+import { formatSize as formatDriveSize, type DriveFile } from '~/features/backup/logic/driveSync';
+import { restoreSnapshot } from '~/features/backup/logic/backupRepo';
+import { listBackups, readBackup, type StoredBackup } from '~/features/backup/logic/backupFile';
 import {
   downloadDriveBackup,
   driveBlocker,
@@ -30,9 +30,9 @@ import {
   isSignedIn,
   listDriveBackups,
   signIn,
-} from '../../src/services/googleDrive';
+} from '~/features/backup/logic/googleDrive';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * The very first screen: start fresh, or bring back an existing backup.

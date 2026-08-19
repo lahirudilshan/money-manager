@@ -5,14 +5,14 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { AppLockGate } from '../src/components/AppLockGate';
-import { SplashOverlay, SPLASH_THEME } from '../src/components/SplashOverlay';
-import { ThemeProvider, useTheme } from '../src/theme/ThemeProvider';
-import { extractSmsFromUrl, looksTruncated } from '../src/core/smsIntakeUrl';
-import { logSmsIntake } from '../src/core/smsIntakeLog';
+import { AppLockGate } from '~/shared/components/AppLockGate';
+import { SplashOverlay, SPLASH_THEME } from '~/shared/components/SplashOverlay';
+import { ThemeProvider, useTheme } from '~/shared/theme/ThemeProvider';
+import { extractSmsFromUrl, looksTruncated } from '~/features/sms/logic/smsIntakeUrl';
+import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
-import { syncCategoryReminders } from '../src/services/notifications';
-import { Text } from '../src/components/ui';
+import { syncCategoryReminders } from '~/shared/lib/notifications';
+import { Text } from '~/shared/components/ui';
 
 /**
  * Options for a route whose screen renders its content inside the shared

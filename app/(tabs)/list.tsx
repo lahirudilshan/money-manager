@@ -13,13 +13,13 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AccountField } from '../../src/components/AccountPicker';
-import { BankLogo } from '../../src/components/BankLogo';
-import { BillFields, useBillDraft } from '../../src/components/BillFields';
-import { useTabBarClearance } from '../../src/components/TabBar';
-import { BottomSheet, Divider, Empty, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
-import { formatDateLabel, startOfDay } from '../../src/core/dates';
-import { formatMoney, parseAmount } from '../../src/core/money';
+import { AccountField } from '~/features/accounts/components/AccountPicker';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { BillFields, useBillDraft } from '~/features/budget/components/BillFields';
+import { useTabBarClearance } from '~/shared/components/TabBar';
+import { BottomSheet, Divider, Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { formatDateLabel, startOfDay } from '~/shared/lib/dates';
+import { formatMoney, parseAmount } from '~/shared/lib/money';
 import {
   dueDateFor,
   effectiveAmount,
@@ -31,8 +31,8 @@ import {
   resolveCardId,
   type BoardTotals,
   type PlanHealth,
-} from '../../src/core/planning';
-import { resolveBrand } from '../../src/data/banks';
+} from '~/features/budget/logic/planning';
+import { resolveBrand } from '~/shared/data/banks';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -41,8 +41,8 @@ import {
   useAppStore,
   type CategoryView,
 } from '../../src/store/useAppStore';
-import { HEALTH_VISUALS, statusStyle, washFor } from '../../src/theme';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { HEALTH_VISUALS, statusStyle, washFor } from '~/shared/theme';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);

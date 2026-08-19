@@ -2,8 +2,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Field, PillSelect } from '../../../src/components/forms';
+import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Field, PillSelect } from '~/shared/components/forms';
 import {
   BLOOD_GROUPS,
   isBloodGroup,
@@ -11,9 +11,9 @@ import {
   PERSON_RELATIONS,
   type PersonRelation,
 } from '../../../src/db/schema';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Colours a person can be marked with, so a family reads apart at a glance. */
 const PERSON_COLORS = ['#D6336C', '#0F6FDE', '#0E9F6E', '#F59E0B', '#8B5CF6', '#EF4444'];

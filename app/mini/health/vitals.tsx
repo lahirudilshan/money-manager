@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, View } from 'react-native';
-import { Empty, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
-import { HealthChart, METRIC_BAND } from '../../../src/components/HealthChart';
-import { formatReading, trend, type TimelineReading } from '../../../src/core/health';
+import { Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
+import { HealthChart, METRIC_BAND } from '~/features/health/components/HealthChart';
+import { formatReading, trend, type TimelineReading } from '~/features/health/logic/health';
 import { healthReadingRepo } from '../../../src/db/repositories';
 import {
   HEALTH_METRIC_LABEL,
@@ -16,7 +16,7 @@ import {
   type ReadingContext,
 } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Readings over time — the payoff for having recorded them.

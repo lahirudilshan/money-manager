@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
-import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '../../src/components/ui';
+import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import {
   ALL_PARTS,
   BACKUP_PARTS,
@@ -18,10 +18,10 @@ import {
   validateSnapshot,
   type BackupPartKey,
   type Snapshot,
-} from '../../src/core/backup';
-import { exportSnapshot, restoreSnapshot } from '../../src/db/backupRepo';
+} from '~/features/backup/logic/backup';
+import { exportSnapshot, restoreSnapshot } from '~/features/backup/logic/backupRepo';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
-import { useModalClose } from '../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import {
   BACKUP_FILES_LOCATION,
   deleteBackup,
@@ -29,7 +29,7 @@ import {
   readBackup,
   saveBackup,
   type StoredBackup,
-} from '../../src/services/backupFile';
+} from '~/features/backup/logic/backupFile';
 import {
   deleteDriveBackup,
   downloadDriveBackup,
@@ -40,10 +40,10 @@ import {
   signIn,
   signOut,
   uploadBackup,
-} from '../../src/services/googleDrive';
-import { formatSize as formatDriveSize, type DriveFile } from '../../src/core/driveSync';
+} from '~/features/backup/logic/googleDrive';
+import { formatSize as formatDriveSize, type DriveFile } from '~/features/backup/logic/driveSync';
 import { useAppStore } from '../../src/store/useAppStore';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * Google Drive's brand colours, used on the connected card so the section is

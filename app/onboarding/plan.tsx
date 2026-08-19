@@ -2,30 +2,30 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { AddAccountSheet } from '../../src/components/AddAccountSheet';
-import { BankLogo } from '../../src/components/BankLogo';
-import { DayPicker } from '../../src/components/DayPicker';
-import { DragList } from '../../src/components/DragList';
-import { FrequencyPicker } from '../../src/components/forms';
+import { AddAccountSheet } from '~/features/accounts/components/AddAccountSheet';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { DayPicker } from '~/features/budget/components/DayPicker';
+import { DragList } from '~/shared/components/DragList';
+import { FrequencyPicker } from '~/shared/components/forms';
 import {
   emptySavingPlanDraft,
   savingPlanDraftFrom,
   SavingPlanFields,
   toSavingPlanPatch,
   type SavingPlanDraft,
-} from '../../src/components/SavingPlanFields';
-import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '../../src/components/ui';
-import { isHouseCatalogId, isHouseScopedCatalogId } from '../../src/core/houses';
-import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '../../src/core/money';
-import { resolveBrand } from '../../src/data/banks';
+} from '~/features/budget/components/SavingPlanFields';
+import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '~/shared/components/ui';
+import { isHouseCatalogId, isHouseScopedCatalogId } from '~/features/budget/logic/houses';
+import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
+import { resolveBrand } from '~/shared/data/banks';
 import {
   CATALOG_SUBCATEGORY_BY_ID,
   CATEGORY_CATALOG,
   DEFAULT_CATALOG_IDS,
-} from '../../src/data/categoryCatalog';
+} from '~/shared/data/categoryCatalog';
 import { useAppStore } from '../../src/store/useAppStore';
-import { hydrateOnboardingDraft, useOnboardingDraft, type DraftLine } from '../../src/store/useOnboardingDraft';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { hydrateOnboardingDraft, useOnboardingDraft, type DraftLine } from '~/features/onboarding/logic/useOnboardingDraft';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 const ROW_HEIGHT = 68;
 

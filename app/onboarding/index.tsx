@@ -1,12 +1,12 @@
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { ScrollView, View } from 'react-native';
-import { BankSelectTile } from '../../src/components/BankLogo';
-import { FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Text } from '../../src/components/ui';
-import { BANKS } from '../../src/data/banks';
+import { BankSelectTile } from '~/features/accounts/components/BankLogo';
+import { FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Text } from '~/shared/components/ui';
+import { BANKS } from '~/shared/data/banks';
 import { useAppStore } from '../../src/store/useAppStore';
-import { hydrateOnboardingDraft, useOnboardingDraft } from '../../src/store/useOnboardingDraft';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { hydrateOnboardingDraft, useOnboardingDraft } from '~/features/onboarding/logic/useOnboardingDraft';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 const KIND_ICON = {
   bank: 'business-outline',

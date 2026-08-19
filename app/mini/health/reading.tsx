@@ -2,10 +2,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
-import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '../../../src/components/ui';
-import { Field, PillSelect } from '../../../src/components/forms';
-import { DatePickerField } from '../../../src/components/DatePickerField';
-import { formatReading, trend } from '../../../src/core/health';
+import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Field, PillSelect } from '~/shared/components/forms';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { formatReading, trend } from '~/features/health/logic/health';
 import { healthReadingRepo, healthVisitRepo } from '../../../src/db/repositories';
 import {
   HEALTH_METRIC_LABEL,
@@ -15,9 +15,9 @@ import {
   type HealthMetric,
   type ReadingContext,
 } from '../../../src/db/schema';
-import { useModalClose } from '../../../src/hooks/useModalClose';
+import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /** Metrics offered, in the order people actually record them. */
 const METRICS: HealthMetric[] = [

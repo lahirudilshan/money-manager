@@ -11,14 +11,14 @@ import {
   Row,
   Surface,
   Text,
-} from '../../../src/components/ui';
-import { Screen } from '../../../src/components/Screen';
-import { AmountField, Field, PillSelect } from '../../../src/components/forms';
-import { formatMoney, parseAmount } from '../../../src/core/money';
+} from '~/shared/components/ui';
+import { Screen } from '~/shared/components/Screen';
+import { AmountField, Field, PillSelect } from '~/shared/components/forms';
+import { formatMoney, parseAmount } from '~/shared/lib/money';
 import { serviceItemRepo, vehicleServiceRepo } from '../../../src/db/repositories';
 import { SERVICE_KIND_LABEL, type ServiceKind } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
-import { useTheme } from '../../../src/theme/ThemeProvider';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * An icon and colour per kind of work.

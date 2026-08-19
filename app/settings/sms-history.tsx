@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
-import { BottomSheet, Row, Surface, Text } from '../../src/components/ui';
-import { formatMoney } from '../../src/core/money';
+import { BottomSheet, Row, Surface, Text } from '~/shared/components/ui';
+import { formatMoney } from '~/shared/lib/money';
 import { smsLogRepo, type SmsLogRow } from '../../src/db/repositories';
-import { useModalClose } from '../../src/hooks/useModalClose';
-import { useTheme } from '../../src/theme/ThemeProvider';
+import { useModalClose } from '~/shared/hooks/useModalClose';
+import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
  * The detection log: every bank message the app saw, and what it did with it.
