@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseSms } from '~/features/sms/logic/smsParser';
+import { reconcileSms } from '~/features/sms/logic/smsReconcile';
 
 /**
  * A message that names a fee is not necessarily a fee.
@@ -82,5 +83,43 @@ describe('the typed reason survives a fee clause', () => {
     );
     expect(parsed?.merchant).toBe('');
     expect(parsed?.kind).not.toBe('bank_charge');
+  });
+});
+
+/**
+ * The parser is only half the path.
+ *
+ * `inferCategoryHint` is a keyword walk with no access to the amount, so it
+ * reads any fee wording as `bank_charge` — including on messages classifyKind
+ * has already ruled a transaction. Fixing only the parser left the hint
+ * overriding it, and the draft still proposed the Bank charges line: the tests
+ * above passed while the app was still wrong. These assert the DRAFT, which is
+ * what actually reaches the board.
+ */
+describe('the draft does not propose bank charges for a transaction', () => {
+  const board = {
+    subcategories: [
+      { id: 'bc', name: 'Bank charges', categoryId: 'g1', type: 'expense', plannedMinor: 0 },
+      { id: 'tf', name: 'Transfers', categoryId: 'g1', type: 'expense', plannedMinor: 0 },
+    ],
+    categories: [{ id: 'g1', name: 'Bank & fees' }],
+    cards: [],
+  } as never;
+
+  it.each([
+    ['a transfer that names its charge', 'LKR 10,000.00 transferred to A/C 123. Transfer charge LKR 50.00 debited.'],
+    ['a five-figure CEFTS debit', 'Your A/C 1380***4150 debited LKR 9,000.00 for CEFTS Transfer Charges on 06.08.26. Avl Bal LKR 12,345.00'],
+  ])('%s does not target the Bank charges line', (_label, raw) => {
+    const parsed = parseSms(raw)!;
+    const draft = reconcileSms(parsed, board, 'id');
+    expect(draft.hint).not.toBe('bank_charge');
+    expect(draft.subcategoryId).not.toBe('bc');
+  });
+
+  it('still targets Bank charges for a genuine fee', () => {
+    const parsed = parseSms('Your A/C 4150 debited LKR 25.00 as CEFTS Transfer Charges. Bal LKR 1,000.00')!;
+    const draft = reconcileSms(parsed, board, 'id');
+    expect(draft.hint).toBe('bank_charge');
+    expect(draft.subcategoryId).toBe('bc');
   });
 });

@@ -668,11 +668,29 @@ export function reconcileSms(
    * different questions. This one decides which budget line the money lands on,
    * so it must stay as trustworthy as it was before the fallback existed.
    */
+  const keywordHint = inferCategoryHint(`${parsed.merchant} ${categoryText}`);
+
+  /*
+   * The kind VETOES a bank_charge hint as well as promoting one.
+   *
+   * `inferCategoryHint` is a keyword walk with no access to the amount, so any
+   * message containing fee wording reads as `bank_charge` — including the ones
+   * `classifyKind` has already examined and ruled a transaction, because it
+   * could see that the amount was the transfer rather than the fee. Without the
+   * veto a 10,000 transfer still proposed the Bank charges line: the parser was
+   * right and the hint overrode it.
+   *
+   * Promotion (below) and veto are the same rule stated once: on this hint the
+   * kind is the better answer, because it is the only reader that saw the
+   * amount.
+   */
+  const vetoed = keywordHint === 'bank_charge' && parsed.kind !== 'bank_charge';
+
   const scoringHint =
     learned.hint ??
     (parsed.kind === 'bank_charge'
       ? 'bank_charge'
-      : (inferCategoryHint(`${parsed.merchant} ${categoryText}`) ?? hintFromGuesses(guesses)));
+      : ((vetoed ? null : keywordHint) ?? hintFromGuesses(guesses)));
 
   const matches: DraftMatch[] = board.subcategories
     .filter((sub) => sub.type === wantType)
