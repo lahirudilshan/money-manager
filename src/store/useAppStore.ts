@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createActionsSelector, type ActionsOf } from '~/store/selectActions';
 import { buildSchedule, paymentsElapsed, remainingBalance } from '~/features/loans/logic/amortization';
 import { setDisplayCurrency, sumMinor, type Minor } from '~/shared/lib/money';
 import type { PlanId } from '~/features/budget/logic/plans';
@@ -221,7 +222,29 @@ export interface AppState {
   deleteHealthPerson: (id: string) => void;
 
   initialise: () => Promise<void>;
+  /**
+   * Reload every slice. The launch/restore path, and the safe default when a
+   * mutation's blast radius is not obvious.
+   */
   refresh: () => void;
+  /**
+   * Reload only the board: cards, houses, categories, lines, this period's
+   * states and totals, incomes and loans.
+   *
+   * Most mutations touch nothing else, and the full `refresh` also re-reads a
+   * dozen settings keys, the merchant-rule table and the mini-app tables — so
+   * calling this instead keeps a bill tap from re-reading data it cannot have
+   * changed. Splitting on these lines (rather than per-table) keeps the
+   * invariant the store is built on: derived board values are always read back
+   * together, so they cannot drift from each other.
+   */
+  refreshBoard: () => void;
+  /** Reload the settings-backed slice, and republish the display currency. */
+  refreshSettings: () => void;
+  /** Reload the mini-app tables (vehicles, health people). */
+  refreshMiniAppData: () => void;
+  /** Reload the learned merchant → line map. */
+  refreshMerchantRules: () => void;
   setPeriod: (period: string) => void;
   setCurrency: (currency: string) => void;
   setUsdRate: (rate: number) => void;
@@ -660,14 +683,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
-  refresh() {
+  refreshBoard() {
     const { period } = get();
-    const currency = settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR';
-    // Publish to core/money so the ~100 `formatMoney` call sites that render an
-    // amount without knowing about settings pick up the user's choice. Done on
-    // every refresh (not just setCurrency) so a fresh launch is correct too.
-    setDisplayCurrency(currency);
-
     set({
       cards: cardRepo.all(),
       houses: houseRepo.all(),
@@ -679,7 +696,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       transactionTotals: transactionRepo.totalsByPeriod(period),
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
-      merchantRules: merchantRuleRepo.all(),
+    });
+  },
+
+  refreshSettings() {
+    const currency = settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR';
+    // Publish to shared/lib/money so the ~100 `formatMoney` call sites that
+    // render an amount without knowing about settings pick up the user's
+    // choice. Done on every settings refresh (not just setCurrency) so a fresh
+    // launch is correct too.
+    setDisplayCurrency(currency);
+
+    set({
       currency,
       usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
       themeMode:
@@ -693,6 +721,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       catalogSyncEnabled: settingsRepo.get(SETTINGS_KEYS.catalogSync) !== 'false',
       catalogSyncedAt: settingsRepo.get(SETTINGS_KEYS.catalogSyncedAt) ?? null,
       miniApps: settingsRepo.get(SETTINGS_KEYS.miniApps) ?? '',
+    });
+  },
+
+  refreshMiniAppData() {
+    set({
       vehicles: vehicleRepo.all(),
       /*
        * People only — never their records.
@@ -708,9 +741,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  refreshMerchantRules() {
+    set({ merchantRules: merchantRuleRepo.all() });
+  },
+
+  refresh() {
+    get().refreshBoard();
+    get().refreshSettings();
+    get().refreshMerchantRules();
+    get().refreshMiniAppData();
+  },
+
   setPeriod(period) {
     set({ period });
-    get().refresh();
+    get().refreshBoard();
   },
 
   setMiniAppEnabled(id, on) {
@@ -735,24 +779,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (on && id === 'health') seedHealthSample();
 
     set({ miniApps: next });
-    get().refresh();
+    get().refreshSettings();
   },
 
   addVehicle(input) {
     const created = vehicleRepo.create({ ...input, sortOrder: get().vehicles.length });
-    get().refresh();
+    get().refreshMiniAppData();
     return created;
   },
 
   updateVehicle(id, patch) {
     vehicleRepo.update(id, patch);
-    get().refresh();
+    get().refreshMiniAppData();
   },
 
   /** Cascades to the vehicle's fill-ups and services — see the schema. */
   deleteVehicle(id) {
     vehicleRepo.remove(id);
-    get().refresh();
+    get().refreshMiniAppData();
   },
 
   addHealthPerson(input) {
@@ -769,49 +813,49 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...input,
       sortOrder: get().healthPeople.length,
     });
-    get().refresh();
+    get().refreshMiniAppData();
     return created;
   },
 
   updateHealthPerson(id, patch) {
     healthPersonRepo.update(id, patch);
-    get().refresh();
+    get().refreshMiniAppData();
   },
 
   /** Cascades to every medicine, dose, visit, document and reading. */
   deleteHealthPerson(id) {
     healthPersonRepo.remove(id);
-    get().refresh();
+    get().refreshMiniAppData();
   },
 
   setCurrency(currency) {
     settingsRepo.set(SETTINGS_KEYS.currency, currency);
-    get().refresh();
+    get().refreshSettings();
   },
 
   setUsdRate(rate) {
     settingsRepo.set(SETTINGS_KEYS.usdRate, String(rate));
-    get().refresh();
+    get().refreshSettings();
   },
 
   setThemeMode(mode) {
     settingsRepo.set(SETTINGS_KEYS.themeMode, mode);
-    get().refresh();
+    get().refreshSettings();
   },
 
   setHapticsEnabled(enabled) {
     settingsRepo.set(SETTINGS_KEYS.haptics, enabled ? 'true' : 'false');
-    get().refresh();
+    get().refreshSettings();
   },
 
   setAppLockEnabled(enabled) {
     settingsRepo.set(SETTINGS_KEYS.appLock, enabled ? 'true' : 'false');
-    get().refresh();
+    get().refreshSettings();
   },
 
   setPlan(plan) {
     settingsRepo.set(SETTINGS_KEYS.plan, plan);
-    get().refresh();
+    get().refreshSettings();
   },
 
   /**
@@ -898,7 +942,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       // Only refresh when the catalog actually changed — an unconditional
       // refresh on every launch re-renders the whole board for nothing.
-      if (inserted > 0 || updated > 0) get().refresh();
+      if (inserted > 0 || updated > 0) get().refreshSettings();
       else set({ catalogSyncedAt: syncedAt });
 
       return { inserted, updated, shared };
@@ -1042,6 +1086,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // setup flow — the same state a fresh install starts from, minus the help.
     settingsRepo.set(SETTINGS_KEYS.onboarded, 'false');
     set({ period: periodKey(new Date()), needsOnboarding: true });
+    // A wipe clears every table, so this is one of the few places that really
+    // does need all of it — a board-only reload would leave stale settings,
+    // merchant rules and mini-app rows pointing at deleted data.
     get().refresh();
   },
 
@@ -1061,17 +1108,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Repo already normalises to pending/paid, so the cast is a formality.
     const current = (states.get(subcategoryId)?.status as SubcategoryStatus) ?? 'pending';
     stateRepo.setStatus(subcategoryId, period, nextStatus(current));
-    get().refresh();
+    get().refreshBoard();
   },
 
   setStatus(subcategoryId, status) {
     stateRepo.setStatus(subcategoryId, get().period, status);
-    get().refresh();
+    get().refreshBoard();
   },
 
   setActual(subcategoryId, actualMinor) {
     stateRepo.setActual(subcategoryId, get().period, actualMinor);
-    get().refresh();
+    get().refreshBoard();
   },
 
   logTransaction(subcategoryId, input) {
@@ -1080,19 +1127,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     // entry would silently file it under whichever period was being viewed.
     const period = input.date ? periodKey(input.date) : get().period;
     stateRepo.logTransaction(subcategoryId, period, input);
-    get().refresh();
+    get().refreshBoard();
   },
 
   markCategory(categoryId, status) {
     const { period, subcategories } = get();
     const ids = subcategories.filter((s) => s.categoryId === categoryId).map((s) => s.id);
     stateRepo.setStatusForSubcategories(ids, period, status);
-    get().refresh();
+    get().refreshBoard();
   },
 
   setCategoryTransfer(categoryId, status) {
     categoryStateRepo.setStatus(categoryId, get().period, status);
-    get().refresh();
+    get().refreshBoard();
   },
 
   /**
@@ -1151,7 +1198,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       categoryStateRepo.setStatus(id, period, next);
     }
 
-    get().refresh();
+    get().refreshBoard();
   },
 
   fundCategory(categoryId, amountMinor, note) {
@@ -1172,19 +1219,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     // it does not touch any individual bill's paid/pending state.
     categoryStateRepo.setStatus(categoryId, period, 'transferred');
 
-    get().refresh();
+    get().refreshBoard();
   },
 
   unfundCategory(categoryId) {
     const { period } = get();
     fundingRepo.clearForCategory(categoryId, period);
     categoryStateRepo.setStatus(categoryId, period, 'pending');
-    get().refresh();
+    get().refreshBoard();
   },
 
   reorderCategories(orderedIds) {
     categoryRepo.reorder(orderedIds);
-    get().refresh();
+    get().refreshBoard();
   },
 
   addCategory(input) {
@@ -1206,12 +1253,12 @@ export const useAppStore = create<AppState>((set, get) => ({
        */
       sortOrder: input.sortOrder ?? get().categories.length,
     });
-    get().refresh();
+    get().refreshBoard();
     return created;
   },
   updateCategory(id, patch) {
     categoryRepo.update(id, patch);
-    get().refresh();
+    get().refreshBoard();
   },
   deleteCategory(id) {
     /*
@@ -1237,7 +1284,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     categoryRepo.remove(id);
-    get().refresh();
+    get().refreshBoard();
     return { ok: true };
   },
 
@@ -1265,7 +1312,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       houseId: input.houseId ?? null,
       sortOrder: siblings.length,
     });
-    get().refresh();
+    get().refreshBoard();
     return created;
   },
   updateSubcategory(id, patch) {
@@ -1278,11 +1325,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         ? { planTargetMinor: null, planDueDate: null, planStartDate: null }
         : {};
     subcategoryRepo.update(id, { ...patch, ...clearPlan });
-    get().refresh();
+    get().refreshBoard();
   },
   deleteSubcategory(id) {
     subcategoryRepo.remove(id);
-    get().refresh();
+    get().refreshBoard();
   },
 
   /** Move a subcategory under a different parent category, appending it to the
@@ -1290,7 +1337,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   changeSubcategoryParent(id, newCategoryId) {
     const siblings = get().subcategories.filter((s) => s.categoryId === newCategoryId);
     subcategoryRepo.update(id, { categoryId: newCategoryId, sortOrder: siblings.length });
-    get().refresh();
+    get().refreshBoard();
   },
 
   addTransaction(input) {
@@ -1304,44 +1351,44 @@ export const useAppStore = create<AppState>((set, get) => ({
       imageUri: input.imageUri ?? null,
       houseId: input.houseId ?? null,
     });
-    get().refresh();
+    get().refreshBoard();
   },
   updateTransaction(id, patch) {
     // Keep the period in sync if the date moved to another month.
     const next = patch.date ? { ...patch, period: periodKey(patch.date) } : patch;
     transactionRepo.update(id, next);
-    get().refresh();
+    get().refreshBoard();
   },
   deleteTransaction(id) {
     transactionRepo.remove(id);
-    get().refresh();
+    get().refreshBoard();
   },
 
   addCard(input) {
     const created = cardRepo.create({ ...input, color: nextColor(get().cards.length) });
-    get().refresh();
+    get().refreshBoard();
     return created;
   },
   updateCard(id, patch) {
     cardRepo.update(id, patch);
-    get().refresh();
+    get().refreshBoard();
   },
   deleteCard(id) {
     cardRepo.remove(id);
-    get().refresh();
+    get().refreshBoard();
   },
 
   addIncome(input) {
     incomeRepo.create(input);
-    get().refresh();
+    get().refreshBoard();
   },
   updateIncome(id, patch) {
     incomeRepo.update(id, patch);
-    get().refresh();
+    get().refreshBoard();
   },
   deleteIncome(id) {
     incomeRepo.remove(id);
-    get().refresh();
+    get().refreshBoard();
   },
 
   /**
@@ -1385,7 +1432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       loanId: loan.id,
     });
 
-    get().refresh();
+    get().refreshBoard();
   },
   /**
    * Change a loan's terms, and re-derive the board line that follows from them.
@@ -1416,7 +1463,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
     }
 
-    get().refresh();
+    get().refreshBoard();
   },
 
   /** Remove a loan and the board line it created, so no orphan bill remains. */
@@ -1425,7 +1472,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       subcategoryRepo.remove(sub.id);
     }
     loanRepo.remove(id);
-    get().refresh();
+    get().refreshBoard();
   },
 
   ingestSmsText(text) {
@@ -2211,7 +2258,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       // The guard inside `drainSmsInbox` absorbs the events caused by the
       // drain's own writes to this folder.
       const summary = get().drainSmsInbox();
-      if (summary.queued > 0) get().refresh();
+      if (summary.queued > 0) {
+        get().refreshBoard();
+        get().refreshMerchantRules();
+      }
     });
 
     /*
@@ -2251,7 +2301,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().loadSmsDrafts();
     // Only a real import changes the board's figures; the queue itself is
     // already re-rendered by `loadSmsDrafts` above.
-    if (summary.queued > 0) get().refresh();
+    if (summary.queued > 0) {
+      get().refreshBoard();
+      get().refreshMerchantRules();
+    }
   },
 
   confirmDraft(draftId, overrides) {
@@ -2310,7 +2363,10 @@ export const useAppStore = create<AppState>((set, get) => ({
      */
     smsInboxRepo.resolve(draftId, 'confirmed');
     set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
-    get().refresh();
+    // Board (the logged payment) and rules (the merchant mapping just learned
+    // above) — settings and mini-app tables cannot have changed here.
+    get().refreshBoard();
+    get().refreshMerchantRules();
 
     // Share this resolution with the catalog. Un-awaited and failure-swallowing:
     // confirming a draft must feel instant and must never fail because a network
@@ -2371,18 +2427,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    get().refresh();
+    get().refreshBoard();
     return created;
   },
 
   updateHouse(id, patch) {
     houseRepo.update(id, patch);
-    get().refresh();
+    get().refreshBoard();
   },
 
   setPrimaryHouse(id) {
     houseRepo.setPrimary(id);
-    get().refresh();
+    get().refreshBoard();
   },
 
   deleteHouse(id) {
@@ -2400,10 +2456,52 @@ export const useAppStore = create<AppState>((set, get) => ({
       houseRepo.setPrimary(remaining[0].id);
     }
 
-    get().refresh();
+    get().refreshBoard();
   },
 
 }));
+
+// --------------------------------------------------------------- subscribing
+//
+// `useAppStore()` with no argument subscribes a component to EVERY field, so
+// any mutation anywhere re-renders it. These hooks narrow that.
+
+/**
+ * The store's actions, with a stable identity.
+ *
+ * Actions are created once inside `create()` and never reassigned, so this
+ * object's contents never change — subscribing to it therefore never triggers
+ * a re-render. Use it wherever a component only dispatches and does not read:
+ *
+ *   const { addTransaction } = useAppActions();
+ *
+ * Prefer this over `useAppStore()` for handlers and effects; it also makes the
+ * dependency honest, since an action in a `useEffect` dep list is now stable
+ * rather than a fresh reference each render.
+ */
+/**
+ * The function-valued half of AppState. Derived rather than hand-listed, so
+ * adding an action to the interface adds it here automatically.
+ */
+export type AppActions = ActionsOf<AppState>;
+
+/** See selectActions.ts for why this is cached and how it is tested. */
+const selectActions = createActionsSelector<AppState>();
+
+export function useAppActions(): AppActions {
+  return useAppStore(selectActions);
+}
+
+/**
+ * Subscribe to one derived slice.
+ *
+ * Equivalent to `useAppStore(selector)`, named so call sites read as an intent
+ * ("I need the card views") rather than a store access, and so the selector
+ * form is the obvious default in a file that already imports this.
+ */
+export function useAppSelector<T>(selector: (state: AppState) => T): T {
+  return useAppStore(selector);
+}
 
 // ------------------------------------------------------------- selectors
 
