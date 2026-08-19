@@ -128,7 +128,14 @@ export function matchMerchant(merchant: string, rules: readonly MerchantRule[]):
   const byStrength = (a: MerchantRule, b: MerchantRule) =>
     b.hitCount - a.hitCount || b.updatedAt - a.updatedAt;
 
-  const exact = rules.filter((rule) => rule.pattern === key).sort(byStrength)[0];
+  // Single pass for the strongest exact match. `filter().sort()[0]` allocated
+  // two arrays and did O(n log n) work to read one element, on every message a
+  // drain imports.
+  let exact: MerchantRule | undefined;
+  for (const rule of rules) {
+    if (rule.pattern !== key) continue;
+    if (!exact || byStrength(rule, exact) < 0) exact = rule;
+  }
   if (exact) {
     return {
       subcategoryId: exact.subcategoryId,
@@ -140,9 +147,15 @@ export function matchMerchant(merchant: string, rules: readonly MerchantRule[]):
 
   // Containment, longest pattern first — a more specific rule should beat a
   // broad one ("keells super" over "keells") before hit count is consulted.
-  const partial = rules
-    .filter((rule) => rule.pattern.length >= 3 && (key.includes(rule.pattern) || rule.pattern.includes(key)))
-    .sort((a, b) => b.pattern.length - a.pattern.length || byStrength(a, b))[0];
+  const byContainment = (a: MerchantRule, b: MerchantRule) =>
+    b.pattern.length - a.pattern.length || byStrength(a, b);
+
+  let partial: MerchantRule | undefined;
+  for (const rule of rules) {
+    if (rule.pattern.length < 3) continue;
+    if (!key.includes(rule.pattern) && !rule.pattern.includes(key)) continue;
+    if (!partial || byContainment(rule, partial) < 0) partial = rule;
+  }
 
   if (partial) {
     return {
