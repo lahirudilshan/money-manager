@@ -445,6 +445,20 @@ const ITEMISED_FEE_RE = new RegExp(
 const MAX_FEE_SHARE_OF_PARENT = 0.5;
 
 /**
+ * The largest amount that can plausibly be a bank charge, in minor units.
+ *
+ * Fees are trivial by nature — transfer charges, stamp duty and ATM fees run to
+ * tens or low hundreds of rupees. A "charge" of several thousand is a
+ * transaction that mentioned a fee, not a fee. 2,000 LKR is far above any real
+ * charge this app has seen while still comfortably below the withdrawal and
+ * transfer amounts that were being mislabelled (4,000 / 9,000 / 10,000).
+ *
+ * Only consulted when the message does NOT itemise a separate fee; when it
+ * does, that comparison is exact and this never runs.
+ */
+const MAX_PLAUSIBLE_CHARGE_MINOR = 200_000;
+
+/**
  * Read a fee itemised inside a message that is mostly about something else.
  *
  * Only meaningful when the message's OWN kind is not already a bank charge —
@@ -881,7 +895,7 @@ const EMPTY_REASON_MARKERS = /^(?:ref|n\/?a|nil|none|self|own|transfer|fund\s*tr
  */
 function transferReason(text: string): string {
   const match = text.match(
-    /Reason\s*:\s*(?:MB\s*:)?\s*([^\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE)|[.\n]|$)/i,
+    /Reason\s*:\s*(?:MB\s*:)?\s*([^\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|(?:transfer|txn|transaction|service|handling|processing|atm)\s+(?:charge|charges|fee|fees)\b|charges?\s*(?:applied|debited)\b)|[.\n]|$)/i,
   );
   if (!match) return '';
 
@@ -1010,9 +1024,14 @@ function extractMerchant(text: string): string {
    * So the capture now stops at a balance/scam-warning/hotline label as well as
    * at a sentence end, and a reference that is empty or has no letters in it is
    * rejected outright rather than returned as junk.
+   *
+   * A fee clause is one of those stops for the same reason. "Reason:MB:ref.
+   * Transfer charge LKR 25.00" is a bare marker followed by the bank's own fee
+   * line, and without the stop the merchant came out as "Transfer charge LKR
+   * 25" — the fee described as if it were the payee.
    */
   const ref = text.match(
-    /\bref\s*[:.]?\s*([^.\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|$)|[.\n])/i,
+    /\bref\s*[:.]?\s*([^.\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|(?:transfer|txn|transaction|service|handling|processing|atm)\s+(?:charge|charges|fee|fees)\b|charges?\s*(?:applied|debited)\b|$)|[.\n])/i,
   );
   if (ref) {
     const value = clean(ref[1]);
@@ -1152,7 +1171,11 @@ function classifyDirection(text: string): SmsDirection | null {
  * The finer kind, from cues in the text. Order matters: a loan reason and an
  * ATM receipt are recognised before the generic transfer/purchase split.
  */
-function classifyKind(text: string, direction: SmsDirection): SmsKind {
+/**
+ * @param amountMinor The amount `parseSms` settled on, so the bank-charge rule
+ * can tell a message that IS a fee from one that merely names its fee.
+ */
+function classifyKind(text: string, direction: SmsDirection, amountMinor: number): SmsKind {
   /*
    * A statement bill is a utility bill, stated outright.
    *
@@ -1221,7 +1244,33 @@ function classifyKind(text: string, direction: SmsDirection): SmsKind {
    * Requires a debit, so a credited "charges reversal" is not swept in here.
    */
   if (direction === 'debit' && BANK_CHARGE_PATTERNS.some((p) => p.test(text))) {
-    return 'bank_charge';
+    /*
+     * Only when the amount read IS the fee.
+     *
+     * These patterns fire on fee vocabulary anywhere in the message, which is
+     * right for "debited LKR 25.00 as CEFTS Transfer Charges" — the message is
+     * the fee. It is wrong for a message that reports a TRANSACTION and names
+     * its fee in passing: "LKR 10,000.00 transferred ... Transfer charge LKR
+     * 50.00" is a 10,000 transfer, and tagging the whole thing a charge put the
+     * transaction's amount on the Bank charges line. That is how five-figure
+     * "bank charges" reached the board.
+     *
+     * Two signals separate them, both already computed:
+     *
+     *  - an itemised fee that differs from the amount read means the message
+     *    itemises a fee SEPARATELY, so the amount is the parent transaction;
+     *    `splitItemisedFee` will raise the fee as its own draft.
+     *  - failing that, a charge that is a large share of nothing else to
+     *    compare against is judged on plausibility: real bank charges are
+     *    small. `MAX_PLAUSIBLE_CHARGE_MINOR` is deliberately generous — it
+     *    exists to reject a withdrawal misread as a fee, not to second-guess a
+     *    genuinely steep one.
+     */
+    const itemised = extractItemisedFee(text);
+    const amountIsTheFee = !itemised || itemised.amountMinor === amountMinor;
+    if (amountIsTheFee && amountMinor <= MAX_PLAUSIBLE_CHARGE_MINOR) {
+      return 'bank_charge';
+    }
   }
   // Inward money arrives under several names: a plain "transfer", or the
   // remittance wording a cross-border payment uses ("Inward SWIFT Payment",
@@ -1419,10 +1468,12 @@ export function parseSms(input: string): ParsedSms | null {
   const amount = extractAmount(text);
   if (!statement && (amount === null || amount.amountMinor <= 0)) return null;
 
+  const resolvedAmountMinor = statement ? statement.totalDueMinor : amount!.amountMinor;
+
   const base: ParsedSms = {
     direction,
-    kind: classifyKind(text, direction),
-    amountMinor: statement ? statement.totalDueMinor : amount!.amountMinor,
+    kind: classifyKind(text, direction, resolvedAmountMinor),
+    amountMinor: resolvedAmountMinor,
     /*
      * A statement quotes "Rs." with no ISO code, so `extractAmount`'s currency
      * (read off whichever figure it happened to land on) is the only source —
