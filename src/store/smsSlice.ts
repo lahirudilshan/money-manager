@@ -22,7 +22,7 @@ import {
   type ParsedSms,
 } from '~/features/sms/logic/smsParser';
 import { orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsReconcile';
-import { planRuleUpsert } from '~/features/sms/logic/merchantRules';
+import { payeeAccountKey, planRuleUpsert } from '~/features/sms/logic/merchantRules';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import {
   cancelInternalTransfers,
@@ -991,6 +991,30 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       get().merchantRules,
     );
     if (upsert) merchantRuleRepo.apply(upsert);
+
+    /*
+     * Learn the PAYEE ACCOUNT too, when the message named no merchant.
+     *
+     * This is the half that makes the payee tier fill: without it the rule is
+     * only ever read, never written, and an unnamed transfer stays uncategorised
+     * forever no matter how many times the user files it by hand.
+     *
+     * Only when the merchant is empty. A message that named a merchant is
+     * already learned above on the better key — the merchant says WHAT was
+     * bought, while an account only says who was paid, and the same account can
+     * receive a rent payment one month and a loan repayment the next.
+     */
+    const payeeAccount = draft.parsed.payeeAccount;
+    if (payeeAccount && !draft.parsed.merchant) {
+      const payeeUpsert = planRuleUpsert(
+        payeeAccountKey(payeeAccount),
+        subcategoryId,
+        draft.hint,
+        get().merchantRules,
+        true,
+      );
+      if (payeeUpsert) merchantRuleRepo.apply(payeeUpsert);
+    }
 
     /*
      * Resolve the stored row as well as the in-memory list.

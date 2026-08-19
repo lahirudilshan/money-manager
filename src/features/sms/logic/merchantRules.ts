@@ -180,13 +180,41 @@ export type RuleUpsert =
   | { kind: 'insert'; pattern: string; subcategoryId: string; hint: CategoryHint | null }
   | { kind: 'strengthen'; id: string; subcategoryId: string };
 
+/**
+ * The rule key for a payee account, namespaced so it can never collide with a
+ * merchant name.
+ *
+ * An unnamed transfer — the user typed no reason and the bank named no payee —
+ * has exactly one stable identifier: the masked destination account. Reusing
+ * the merchant-rule table for it means a payee the user has categorised ONCE is
+ * recognised on every later transfer to the same account, with no new storage,
+ * no new sync path and no second matcher to keep in step.
+ *
+ * The mask is kept (`13802XXXXX50`, not `50`) because the visible tail alone is
+ * shared by every account ending in those digits — see
+ * MIN_MATCHABLE_ACCOUNT_DIGITS in smsParser.ts.
+ */
+export function payeeAccountKey(payeeAccount: string): string {
+  const normalised = payeeAccount.trim().toLowerCase().replace(/\s+/g, '');
+  return normalised ? `acct:${normalised}` : '';
+}
+
 export function planRuleUpsert(
   merchant: string,
   subcategoryId: string,
   hint: CategoryHint | null,
   rules: readonly MerchantRule[],
+  /**
+   * Skip merchant normalisation, for a key that is already one.
+   *
+   * `merchantKey` strips punctuation, so feeding it a payee key turns
+   * "acct:13802xxxxx50" into "acct 13802xxxxx50" — a DIFFERENT string from the
+   * one the matcher looks up, so the rule would be written under a key that is
+   * never read and the payee tier would silently never fire.
+   */
+  preNormalised = false,
 ): RuleUpsert | null {
-  const key = merchantKey(merchant);
+  const key = preNormalised ? merchant : merchantKey(merchant);
   if (!key || !subcategoryId) return null;
 
   // An existing rule on this exact merchant is updated in place: confirming it

@@ -19,7 +19,12 @@ import {
   SUGGEST_THRESHOLD,
   type CategoryGuess,
 } from './merchantSignals';
-import { matchMerchant, type MatchConfidence, type MerchantRule } from './merchantRules';
+import {
+  matchMerchant,
+  payeeAccountKey,
+  type MatchConfidence,
+  type MerchantRule,
+} from './merchantRules';
 import type { CatalogSuggestion } from './catalogSync';
 import type { Minor } from '~/shared/lib/money';
 
@@ -622,6 +627,26 @@ export function reconcileSms(
   const learned = matchMerchant(parsed.merchant, rules);
 
   /*
+   * Tier 1b: the payee ACCOUNT, when the merchant told us nothing.
+   *
+   * An unnamed transfer ("Reason:MB:ref", masked destination, no payee) is
+   * unresolvable from text — there is nothing in it to keyword-match, so it
+   * reached the board as "Need a category" every single time, including on the
+   * fourth transfer to an account the user had already categorised three times.
+   * The destination is the one stable thing about it.
+   *
+   * Below the merchant rule and above the keyword walk: a named merchant is
+   * better evidence (it says WHAT was bought, not merely who was paid), while
+   * an account the user has taught us beats any keyword read of a message whose
+   * text is entirely boilerplate.
+   */
+  const payeeKey = parsed.payeeAccount ? payeeAccountKey(parsed.payeeAccount) : '';
+  const learnedPayee =
+    !learned.subcategoryId && payeeKey
+      ? (rules.find((rule) => rule.pattern === payeeKey) ?? null)
+      : null;
+
+  /*
    * Read what the SMS is *for*: the learned hint when we have one, else the
    * transaction's own KIND, else the static keywords over merchant + full text.
    *
@@ -688,6 +713,7 @@ export function reconcileSms(
 
   const scoringHint =
     learned.hint ??
+    learnedPayee?.hint ??
     (parsed.kind === 'bank_charge'
       ? 'bank_charge'
       : ((vetoed ? null : keywordHint) ?? hintFromGuesses(guesses)));
@@ -723,13 +749,33 @@ export function reconcileSms(
       ? learned.subcategoryId
       : null;
 
+  /*
+   * A payee-account rule resolves the same way, and to the same standard: the
+   * line must still exist and still be the right direction. Ranked under the
+   * merchant rule and over the score, mirroring the hint cascade.
+   */
+  const payeeTarget =
+    learnedPayee?.subcategoryId &&
+    board.subcategories.find((sub) => sub.id === learnedPayee.subcategoryId && sub.type === wantType)
+      ? learnedPayee.subcategoryId
+      : null;
+
   const best = matches[0];
   const scoreTarget = best && best.score >= CONFIDENT_MATCH_SCORE ? best.subcategoryId : '';
-  const subcategoryId = learnedTarget ?? scoreTarget;
+  const subcategoryId = learnedTarget ?? payeeTarget ?? scoreTarget;
 
   // `exact` is reserved for a learned rule that resolved to a real line: only
   // then can the UI honestly offer a one-tap confirm. A rule whose line was
   // since deleted degrades to the score-based guess.
+  /*
+   * `exact` stays reserved for a learned MERCHANT rule.
+   *
+   * A payee-account rule says the money went to someone the user has
+   * categorised before, not that this purchase was that thing — the same
+   * account can receive a rent payment one month and a loan repayment the next.
+   * That is a strong suggestion, so it fills the target and reads as 'likely',
+   * but it should not offer the one-tap confirm that 'exact' unlocks.
+   */
   const confidence: MatchConfidence = learnedTarget
     ? learned.confidence
     : subcategoryId

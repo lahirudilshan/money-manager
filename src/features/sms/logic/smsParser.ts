@@ -93,6 +93,22 @@ export interface ParsedSms {
   detail?: string;
   /** Account / card fragment the message referenced (often last 4). */
   account: string;
+  /**
+   * The masked account the money went TO, verbatim ("13802XXXXX50"), or ''.
+   *
+   * Kept whole rather than reduced to a visible tail, which is what `account`
+   * holds. HNB's payee tail is a mere "50" — useless as an identity, since
+   * every account ending in 50 shares it (see MIN_MATCHABLE_ACCOUNT_DIGITS) —
+   * while the full masked string is distinctive enough to recognise the SAME
+   * payee across messages. That is exactly what an unnamed transfer needs: the
+   * user typed no reason and the bank named no merchant, so the destination is
+   * the only stable thing about it.
+   *
+   * Absent on anything that is not a transfer out to a named account — which
+   * is most messages, hence optional rather than an empty string every caller
+   * would have to supply.
+   */
+  payeeAccount?: string;
   /** ISO date (YYYY-MM-DD) the message referenced, or null if none found. */
   date: string | null;
   /**
@@ -850,6 +866,21 @@ function extractAccount(text: string): string {
 }
 
 /**
+ * The masked account the money was sent TO, verbatim, or ''.
+ *
+ * Only "to Ac No:…" / "to A/C …" shapes — the preposition is what makes it a
+ * destination rather than the source account the alert is about. Returned with
+ * its mask intact because the mask is what makes it identifying: the visible
+ * tail alone ("50") is shared by every account ending in those digits.
+ */
+function extractPayeeAccount(text: string): string {
+  const match = text.match(
+    /\bto\s+(?:A\/C|Ac(?:count)?)(?:\s*No)?\s*[:.]?\s*([X*\d]{6,})/i,
+  );
+  return match ? match[1].trim() : '';
+}
+
+/**
  * How many trailing digits of an account number a message actually revealed.
  *
  * `extractAccount` returns the visible tail, but the tail's LENGTH decides what
@@ -1482,6 +1513,7 @@ export function parseSms(input: string): ParsedSms | null {
     currency: amount?.currency ?? null,
     merchant: statement ? statementBiller(text) : extractMerchant(text),
     account: statement?.accountNumber ?? account,
+    payeeAccount: extractPayeeAccount(text) || undefined,
     /*
      * A statement's own date is the READING date — when the meter was read, not
      * when the money is due. It is the only date in the message that describes
