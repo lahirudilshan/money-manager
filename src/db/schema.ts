@@ -25,7 +25,6 @@ const timestamps = {
 /** A bank account, wallet or savings pot that groups draw from. */
 export const cards = sqliteTable('cards', {
   id: text('id').primaryKey(),
-  name: text('name').notNull(),
   kind: text('kind', { enum: ['bank', 'wallet', 'savings', 'goal'] })
     .notNull()
     .default('bank'),
@@ -40,11 +39,16 @@ export const cards = sqliteTable('cards', {
   /**
    * The user's own name for this account — "Salary", "Joint", "Rent money".
    *
-   * Distinct from `name` (which is often just the bank, picked from the catalog)
-   * and from `bankName`. Someone with three HNB accounts cannot tell them apart
-   * from the bank and last-4 alone, so this is what the lists lead with when it
-   * is set. Null when the user has not given one, in which case the bank/name
-   * pairing is used exactly as before.
+   * THE only name the user types. There used to be a second `name` column as
+   * well, so the form asked for a "full name" and a "short name" and the lists
+   * had to decide between them; two fields for one question is what made three
+   * HNB accounts read as three rows of "HNB". The bank supplies the identity
+   * (`bankName` / the catalog's short name) and this supplies the distinction,
+   * so nothing is lost by asking once.
+   *
+   * Null when the user has not named it, in which case `accountLabel` falls
+   * back to the bank — which is exactly right for someone with one account per
+   * bank, the case where a nickname is pure friction.
    */
   nickname: text('nickname'),
   /** Last 4 digits of the account/card number, for a masked "•••• 1234" look. */
@@ -131,12 +135,15 @@ export const subcategories = sqliteTable(
     /**
      * How often this line recurs.
      *
-     * `unplanned` is special: the line has no single planned amount paid once a
+     * `ongoing` is special: the line has no single planned amount paid once a
      * period. Instead it holds many individual transactions (see the
      * `transactions` table), its "actual" is the SUM of those, and it is never
      * marked paid as a whole — the money is tracked entry by entry.
+     *
+     * Stored as `unplanned` before the rename; `ensureOngoingFrequency` in
+     * client.ts rewrites those rows on launch.
      */
-    frequency: text('frequency', { enum: ['monthly', 'one_time', 'yearly', 'unplanned'] })
+    frequency: text('frequency', { enum: ['monthly', 'one_time', 'yearly', 'ongoing'] })
       .notNull()
       .default('monthly'),
     /** Overrides the parent category's `dueDay` when set. */
@@ -204,14 +211,14 @@ export const subcategories = sqliteTable(
 );
 
 /**
- * Individual money movements under an `unplanned` subcategory.
+ * Individual money movements under an `ongoing` subcategory.
  *
  * A normal (monthly/yearly/one_time) subcategory has a single planned amount
- * paid once a period. An *unplanned* one (e.g. "Groceries", "Eating out") has
+ * paid once a period. An *ongoing* one (e.g. "Groceries", "Eating out") has
  * no fixed amount — it accumulates many small entries. Each row here is one
  * such entry; the subcategory's effective spend for a period is the SUM of its
  * transactions in that period. This is also where a confirmed SMS draft can be
- * logged when it maps to an unplanned line.
+ * logged when it maps to an ongoing line.
  */
 export const transactions = sqliteTable(
   'transactions',
@@ -243,6 +250,59 @@ export const transactions = sqliteTable(
     // Per-house totals scan by house within a month — "what did Weligama cost
     // in August" is the question this feature exists to answer.
     index('transactions_house_idx').on(t.houseId, t.period),
+  ],
+);
+
+/**
+ * The parts of a SPLIT transaction — one real payment covering several budget
+ * lines.
+ *
+ * A 5,000 shop at Keells is one debit on the bank statement and one SMS, but it
+ * is not one budget line: 3,000 of it was groceries and 2,000 was pet food. The
+ * naive fix — write two transactions — makes the app disagree with the bank
+ * statement, and there is then no row that corresponds to the payment the user
+ * actually made, so a receipt, a refund or a correction has nothing to attach
+ * to.
+ *
+ * So the transaction stays whole and authoritative (`transactions.amountMinor`
+ * is what left the account), and its allocation across lines lives here. A
+ * transaction with NO rows here is unsplit and counts entirely against its own
+ * `subcategoryId` — which is every transaction that existed before this table,
+ * so nothing has to be backfilled.
+ *
+ * ## The invariant
+ *
+ * When rows do exist they must sum to the parent's `amountMinor` exactly. Minor
+ * units make that checkable with integer arithmetic (see
+ * `features/budget/logic/splits.ts`), and the UI never lets a split be saved
+ * short — an unallocated remainder is silently missing money.
+ *
+ * `subcategoryId` here is deliberately NOT unique per transaction: two parts of
+ * one payment can legitimately land on the same line if the user split by
+ * receipt section rather than by category.
+ */
+export const transactionSplits = sqliteTable(
+  'transaction_splits',
+  {
+    id: text('id').primaryKey(),
+    transactionId: text('transaction_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    /** The budget line this part of the payment counts against. */
+    subcategoryId: text('subcategory_id')
+      .notNull()
+      .references(() => subcategories.id, { onDelete: 'cascade' }),
+    amountMinor: integer('amount_minor').notNull(),
+    /** What this part was, when the user named it — "pet food", "wine". */
+    note: text('note'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    ...timestamps,
+  },
+  (t) => [
+    // Loading a transaction's parts, and the reverse: summing every part that
+    // landed on one line, which is how a split contributes to a line's total.
+    index('transaction_splits_txn_idx').on(t.transactionId),
+    index('transaction_splits_sub_idx').on(t.subcategoryId),
   ],
 );
 
@@ -1097,6 +1157,8 @@ export type Subcategory = typeof subcategories.$inferSelect;
 export type NewSubcategory = typeof subcategories.$inferInsert;
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;
+export type TransactionSplit = typeof transactionSplits.$inferSelect;
+export type NewTransactionSplit = typeof transactionSplits.$inferInsert;
 export type SubcategoryState = typeof subcategoryStates.$inferSelect;
 export type NewSubcategoryState = typeof subcategoryStates.$inferInsert;
 export type CategoryState = typeof categoryStates.$inferSelect;
@@ -1339,13 +1401,13 @@ export const SUBCATEGORY_FREQUENCIES: SubcategoryFrequency[] = [
   'monthly',
   'one_time',
   'yearly',
-  'unplanned',
+  'ongoing',
 ];
 
 /**
  * Canonical human labels for every frequency — the single source of truth so
  * every picker in the app shows the same words in the same order. `category`
- * excludes `unplanned` (a category's *default* cadence for new bills; unplanned
+ * excludes `ongoing` (a category's *default* cadence for new bills; ongoing
  * is a per-bill choice made on the subcategory itself).
  */
 export const FREQUENCY_LABEL: Record<SubcategoryFrequency, string> = {
@@ -1355,53 +1417,59 @@ export const FREQUENCY_LABEL: Record<SubcategoryFrequency, string> = {
   /*
    * "Unplanned" was the wrong word: these lines are very much planned — the
    * user sets a monthly budget for groceries — it is the individual *spends*
-   * that are not known in advance. "Spending budget" says what the line is
-   * (a pot you draw down) rather than describing it by what it lacks. The
-   * stored enum value stays `unplanned` so no migration is needed.
+   * that are not known in advance. "Ongoing" says what the line does (it keeps
+   * happening rather than landing on a schedule) and sits on the same axis as
+   * its three siblings, which all describe a payment pattern.
    */
-  unplanned: 'Spending budget',
+  ongoing: 'Ongoing',
 };
 
 /**
  * Pill-sized labels, for pickers that put every option on one row.
  *
- * Only differs where the full label is too long to sit beside its siblings —
- * everything else falls back to `FREQUENCY_LABEL`, so there is one word to
- * change and no risk of two spellings of the same option drifting apart.
- *
- * The full wording is still what appears in prose ("Spending budget ·
- * Rs 20,000") and in accessibility labels, where there is room for it and the
- * extra word is what makes the option self-explanatory.
+ * Currently identical to `FREQUENCY_LABEL` — every label is short enough to sit
+ * beside its siblings. Kept as its own map so a future label too long for a
+ * pill has somewhere to be shortened without splitting the wording used in
+ * prose and in accessibility labels.
  */
+/**
+ * The icon for a loan's board line and its card on the Loans tab, by kind.
+ *
+ * Shared so the two never drift: the line is created in the store, the card is
+ * rendered on the tab, and they are the same loan. Per KIND rather than one
+ * debt mark, so a lease and a mortgage are told apart at a glance — and so no
+ * line wears `cash-outline`, which belongs to the Debt category above them.
+ */
+export const LOAN_LINE_ICON: Record<string, string> = {
+  personal: 'person-outline',
+  lease: 'car-sport-outline',
+  mortgage: 'home-outline',
+  other: 'ellipsis-horizontal',
+};
+
 export const FREQUENCY_SHORT_LABEL: Record<SubcategoryFrequency, string> = {
   ...FREQUENCY_LABEL,
-  /*
-   * "Ongoing" rather than "Spending budget".
-   *
-   * The picker asks how a bill is paid, and the other three options answer it
-   * ("Monthly", "One-time", "Yearly"). "Spending budget" answers a different
-   * question — what kind of line it is — so as a fourth option it read as a
-   * category error. "Ongoing" sits on the same axis as its siblings: they all
-   * describe a payment pattern, and this is the one that simply keeps
-   * happening rather than landing on a schedule.
-   */
-  unplanned: 'Ongoing',
 };
 
 /**
- * One line of help per cadence, shown under the picker. The spending-budget
- * option needs it most — it behaves differently from the other three (many
- * entries summed, never ticked "paid" as a whole) and that is not obvious
- * from a two-word label.
+ * One line of help per cadence, shown under the picker. The ongoing option
+ * needs it most — it behaves differently from the other three (many entries
+ * summed, never ticked "paid" as a whole) and that is not obvious from a
+ * one-word label.
  */
 export const FREQUENCY_HINT: Record<SubcategoryFrequency, string> = {
-  monthly: 'The same bill every month.',
+  /*
+   * Each hint leads with how many payments the line takes in a month, because
+   * that is the real difference between them and the thing a two-word pill
+   * cannot carry: a bill is settled once, a budget accumulates.
+   */
+  monthly: 'One payment a month, on a date — ticked off when paid.',
   one_time: 'A single cost, counted in one month only.',
   yearly: 'Once a year — you can save toward it monthly.',
-  unplanned: 'Lots of small spends against a monthly budget, like groceries.',
+  ongoing: 'Many charges through the month, added up against a monthly amount.',
 };
 
-/** Frequencies offered as a category's default cadence (no unplanned). */
+/** Frequencies offered as a category's default cadence (no ongoing). */
 export const CATEGORY_DEFAULT_FREQUENCIES: SubcategoryFrequency[] = [
   'monthly',
   'one_time',
@@ -1431,7 +1499,7 @@ export function supportsSavingPlan(frequency: SubcategoryFrequency): boolean {
 }
 
 /**
- * True for a "spending budget" line (stored as `unplanned`).
+ * True for an "ongoing" line.
  *
  * Such a line holds many child transactions rather than one amount paid once,
  * and is never marked paid as a whole — its spend is the SUM of its entries.
@@ -1439,8 +1507,8 @@ export function supportsSavingPlan(frequency: SubcategoryFrequency): boolean {
  * entries are drawn against, which is what makes "Rs 8,400 of Rs 20,000" a
  * meaningful thing to show.
  */
-export function isUnplanned(frequency: SubcategoryFrequency): boolean {
-  return frequency === 'unplanned';
+export function isOngoing(frequency: SubcategoryFrequency): boolean {
+  return frequency === 'ongoing';
 }
 
 /**

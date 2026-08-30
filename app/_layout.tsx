@@ -413,7 +413,7 @@ function RootNavigator() {
           <Stack.Screen name="category/edit/[id]" options={SHEET_ROUTE} />
           <Stack.Screen name="subcategory/[id]" options={SHEET_ROUTE} />
           <Stack.Screen name="transaction/new" options={SHEET_ROUTE} />
-          <Stack.Screen name="transaction/unplanned" options={SHEET_ROUTE} />
+          <Stack.Screen name="transaction/ongoing" options={SHEET_ROUTE} />
           <Stack.Screen name="account/[id]" options={SHEET_ROUTE} />
           <Stack.Screen name="sms/index" />
           <Stack.Screen name="sms/new" options={SHEET_ROUTE} />

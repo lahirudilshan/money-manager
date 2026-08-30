@@ -97,6 +97,11 @@ export function base64UrlEncode(bytes: Uint8Array): string {
  * REFRESH token. Without both, a second sign-in returns only an access token
  * that expires in an hour, and the user is asked to sign in again every time
  * they open the app — which reads as the integration being broken.
+ *
+ * `select_account` rides alongside so the ACCOUNT CHOOSER always appears.
+ * Google otherwise reuses whichever account the browser is already signed into,
+ * which makes "use a different account" silently return the same one — and
+ * someone whose backups sit in their other account has no way through.
  */
 export function buildAuthUrl(options: {
   clientId: string;
@@ -112,7 +117,8 @@ export function buildAuthUrl(options: {
     code_challenge_method: 'S256',
     state: options.state,
     access_type: 'offline',
-    prompt: 'consent',
+    // Space-separated, per the OAuth spec — both prompts apply.
+    prompt: 'consent select_account',
   });
 
   return `${AUTH_ENDPOINT}?${params}`;
@@ -225,6 +231,27 @@ export function parseTokenResponse(payload: unknown, now = Date.now()): TokenSet
     refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
     expiresAt: now + Math.max(0, expiresIn - 60) * 1000,
   };
+}
+
+/**
+ * Whether a token response says the REFRESH TOKEN itself is dead.
+ *
+ * Google answers a refresh with `invalid_grant` when the token has been
+ * revoked, expired through disuse, or belongs to an account whose password
+ * changed. That is permanent: no retry will fix it, and only signing in again
+ * will.
+ *
+ * Worth telling apart from every other failure — no network, a 500, a timeout —
+ * because the response to those is to try later, whereas the response to this
+ * is to forget the connection and ask the user to sign in. Treating the two
+ * alike is what leaves an account showing "Connected" while every upload fails.
+ */
+export function isRefreshTokenDead(payload: unknown): boolean {
+  if (payload === null || typeof payload !== 'object') return false;
+  const error = (payload as Record<string, unknown>).error;
+  // `invalid_client` is included because a client id that no longer exists
+  // cannot be recovered from either; both need a fresh sign-in to resolve.
+  return error === 'invalid_grant' || error === 'invalid_client';
 }
 
 /** Whether a stored token still has life in it. */

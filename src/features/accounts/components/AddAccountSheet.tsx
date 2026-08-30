@@ -83,9 +83,8 @@ export function AddAccountSheet({
     if (!brand) return;
 
     const created = state.addCard({
-      // The bank's short name is the fallback identity; the nickname is what
-      // the lists lead with once it is set.
-      name: brand.shortName,
+      // The bank IS the fallback identity — `accountLabel` leads with it when
+      // no nickname is given, so there is nothing to copy into a second field.
       kind: 'bank',
       bankId: brand.id,
       bankName: brand.name,

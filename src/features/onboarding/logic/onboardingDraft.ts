@@ -44,8 +44,8 @@ export interface DraftLine {
   type: 'income' | 'expense';
   plannedMinor: Minor;
   dueDay: number;
-  /** Includes `unplanned` — a house line accumulates its bills. */
-  frequency: 'monthly' | 'one_time' | 'yearly' | 'unplanned';
+  /** Includes `ongoing` — a house line accumulates its bills. */
+  frequency: 'monthly' | 'one_time' | 'yearly' | 'ongoing';
   /** Account this line is funded from; null means "use the category default". */
   cardId: string | null;
   /**

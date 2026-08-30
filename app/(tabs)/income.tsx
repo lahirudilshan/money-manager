@@ -8,7 +8,7 @@ import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { AppHeader, BottomSheet, Button, Divider, Empty, GradientButton, GradientCard, Glyph, Label, ListRow, Row, Surface, Text } from '~/shared/components/ui';
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
-import { resolveBrand } from '~/shared/data/banks';
+import { accountName, resolveBrand } from '~/shared/data/banks';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -151,11 +151,40 @@ export default function IncomeScreen() {
                   <ListRow
                     leading={<Glyph icon={item.icon as never} color={item.color} />}
                     title={item.name}
-                    subtitle={
-                      item.foreignAmount
-                        ? `$${item.foreignAmount.toLocaleString()} @ ${item.foreignRate}`
-                        : (state.cards.find((c) => c.id === item.cardId)?.name ?? 'No account')
-                    }
+                    subtitle={(() => {
+                      if (item.foreignAmount) {
+                        return `$${item.foreignAmount.toLocaleString()} @ ${item.foreignRate}`;
+                      }
+
+                      const card = state.cards.find((c) => c.id === item.cardId);
+                      if (!card) return 'No account';
+
+                      /*
+                        The bank's mark beside the account it names.
+
+                        The row's LEADING glyph belongs to the income source
+                        itself — its own icon and colour — so the bank cannot
+                        take that slot without losing what the source is. It
+                        goes next to the account name instead, where the app's
+                        other rows already put it, at a size that reads as a
+                        mark on a caption line rather than a second avatar
+                        competing with the one on the left.
+                      */
+                      return (
+                        <Row gap={5} align="center">
+                          <BankLogo
+                            brand={resolveBrand({
+                              bankId: card.bankId,
+                              bankName: card.bankName,
+                            })}
+                            size={14}
+                          />
+                          <Text variant="caption" tone="muted" numberOfLines={1}>
+                            {accountName(card)}
+                          </Text>
+                        </Row>
+                      );
+                    })()}
                     trailing={
                       <Text variant="figure" color={colors.completed}>
                         {formatMoney(item.amountMinor)}

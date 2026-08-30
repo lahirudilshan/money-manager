@@ -10,7 +10,7 @@
  * Rather than invent a new naming scheme for lines created this way, a hint
  * resolves to an entry in CATEGORY_CATALOG — the identical group/line pairs
  * offered during onboarding. A "Loan" detected from an SMS therefore proposes
- * exactly the "Personal loan" line under "Loans & credit" that the user would
+ * exactly the "Personal loan" line under "Debt" that the user would
  * have seen in step 2, so a board grown by detection is indistinguishable from
  * one built by hand.
  *
@@ -197,10 +197,27 @@ function normalise(name: string): string {
  * one the user already has — the single most visible way this feature could
  * make a board worse.
  */
+/**
+ * Names a catalog category has been known by, so a board built under an older
+ * build still matches.
+ *
+ * Matching is by NAME, which means renaming a category in the catalog silently
+ * orphans every group a user already created under the old one — their loan
+ * SMS would stop finding "Loans & credit" and offer to create a second group
+ * beside it. Listing the former names costs nothing and keeps those boards
+ * working.
+ */
+const FORMER_CATEGORY_NAMES: Record<string, readonly string[]> = {
+  Debt: ['Loans & credit'],
+};
+
 export function findGroupForProposal(
   proposal: HintProposal,
   groups: readonly ExistingGroup[],
 ): ExistingGroup | null {
-  const wanted = normalise(proposal.category.name);
-  return groups.find((group) => normalise(group.name) === wanted) ?? null;
+  const wanted = [
+    proposal.category.name,
+    ...(FORMER_CATEGORY_NAMES[proposal.category.name] ?? []),
+  ].map(normalise);
+  return groups.find((group) => wanted.includes(normalise(group.name))) ?? null;
 }

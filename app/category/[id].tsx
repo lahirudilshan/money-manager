@@ -1,13 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Alert, Pressable, ScrollView, View } from 'react-native';
+import { Pressable as GHPressable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { DragReorderList } from '~/shared/components/DragReorderList';
 import { Button, Divider, FundingBar, Glyph, Label, ListRow, Row, Surface, Text } from '~/shared/components/ui';
-import { AccountPickerSheet } from '~/features/accounts/components/AccountPicker';
 import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { formatMoney } from '~/shared/lib/money';
-import { formatPeriod } from '~/features/budget/logic/planning';
+import { effectiveAmount, formatPeriod } from '~/features/budget/logic/planning';
 import { accountLabel, resolveBrand } from '~/shared/data/banks';
 import { selectCategoryView, useAppStore } from '../../src/store/useAppStore';
 import { statusStyle } from '~/shared/theme';
@@ -21,14 +22,13 @@ import { useTheme } from '~/shared/theme/ThemeProvider';
  * an exact amount when it wasn't the full plan), and change its settings.
  */
 export default function CategoryDetailScreen() {
-  const { colors, space } = useTheme();
+  const { colors, radius, space } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const state = useAppStore();
   const view = useMemo(() => selectCategoryView(state, id!), [state, id]);
-  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
 
   if (!view) {
     return (
@@ -47,12 +47,9 @@ export default function CategoryDetailScreen() {
     );
   }
 
-  const { category, card, summary } = view;
+  const { category, card, cards, summary } = view;
   const transferred = view.transferStatus === 'transferred';
   const transferStyle = statusStyle('transferred', colors);
-  const brand = card
-    ? resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name })
-    : undefined;
 
   // A short summary of how this category's bills recur — e.g. "3 monthly · 1
   // yearly". Shown on the summary card so the cadence reads at a glance.
@@ -61,7 +58,7 @@ export default function CategoryDetailScreen() {
       monthly: 'monthly',
       yearly: 'yearly',
       one_time: 'one-time',
-      unplanned: 'unplanned',
+      ongoing: 'ongoing',
     };
     const counts = new Map<string, number>();
     for (const sub of view.rawSubcategories) {
@@ -241,16 +238,172 @@ export default function CategoryDetailScreen() {
           </View>
         )}
 
-        {/* Settings summary. */}
+        {/*
+          THE BILLS, in the order the user arranged them.
+
+          The board already lets a line be dragged within its category, but the
+          board is where you go to work through the month — filtered, searched,
+          and with every other category in the way. This page is the one place
+          that shows this category and nothing else, which makes it the natural
+          place to settle the order, and the two write the same `sortOrder`
+          through the same action so an arrangement made here is the one the
+          board shows.
+
+          No filter or search exists on this screen, so the visible rows are
+          always the whole category in its real order — the condition the board
+          has to check for before it dares enable the gesture.
+        */}
+        {view.subcategories.length > 0 ? (
+          <View style={{ gap: space.sm }}>
+            <Row justify="space-between" align="center">
+              <Label>BILLS</Label>
+              <Text variant="caption" tone="muted">
+                Hold to reorder
+              </Text>
+            </Row>
+            <Surface padded={false} style={{ overflow: 'hidden' }}>
+              {/*
+                `gap={0}` — these rows are separated by dividers rather than by
+                space, and a gap would break the continuous card face. The
+                divider sits inside each row below the first, so it travels
+                with the row it belongs to rather than being pinned to a
+                position the drag then moves out from under it.
+              */}
+              <DragReorderList
+                items={view.subcategories}
+                gap={0}
+                estimatedHeight={62}
+                onReorder={(orderedIds) =>
+                  state.reorderSubcategories(category.id, orderedIds)
+                }
+                renderItem={(line, index, dragging) => {
+                  const raw = view!.rawSubcategories.find((sub) => sub.id === line.id);
+                  // A spending budget is never "paid" as a whole — its spend is
+                  // a running total of entries — so it reports what has gone
+                  // out rather than a plan-or-actual figure.
+                  const ongoing = raw?.frequency === 'ongoing';
+                  const amount = ongoing
+                    ? (line.actualMinor ?? 0)
+                    : effectiveAmount(line);
+                  const lineStyle = statusStyle(line.status, colors);
+
+                  return (
+                    <View
+                      style={
+                        dragging
+                          ? {
+                              backgroundColor: colors.surfaceRaised,
+                              borderRadius: radius.md,
+                            }
+                          : undefined
+                      }
+                    >
+                      {index === 0 || dragging ? null : (
+                        <Divider style={{ marginLeft: space.lg }} />
+                      )}
+                      {/* Gesture-handler's Pressable, so the drag is not
+                          swallowed by the ScrollView above it. */}
+                      <GHPressable
+                        onPress={() => router.push(`/subcategory/${line.id}`)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${line.name}, ${formatMoney(amount)}. Open detail.`}
+                        style={({ pressed }) => ({
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: space.md,
+                          paddingHorizontal: space.lg,
+                          paddingVertical: space.md,
+                          opacity: pressed ? 0.6 : 1,
+                        })}
+                      >
+                        <Ionicons
+                          name="reorder-three-outline"
+                          size={18}
+                          color={colors.inkMuted}
+                        />
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text variant="body" numberOfLines={1}>
+                            {line.name}
+                          </Text>
+                          <Text variant="caption" tone="muted">
+                            {ongoing
+                              ? 'Ongoing'
+                              : line.status === 'paid'
+                                ? 'Paid'
+                                : 'Not paid'}
+                          </Text>
+                        </View>
+                        <Text
+                          variant="bodyStrong"
+                          color={line.status === 'paid' ? lineStyle.fg : colors.ink}
+                        >
+                          {formatMoney(amount)}
+                        </Text>
+                      </GHPressable>
+                    </View>
+                  );
+                }}
+              />
+            </Surface>
+          </View>
+        ) : null}
+
+        {/*
+          The accounts this category's BILLS are paid from.
+
+          Read-only, and derived rather than set here. A category is a container
+          — the account is a per-bill fact, and each bill's own screen is where
+          it is chosen. Offering a category-level account as well created a
+          fourth answer to a question the bills had already answered, and one
+          that could silently disagree with all of them.
+
+          Each row is a route INTO the bills paying from that account, so the
+          list still leads somewhere actionable rather than being a dead label.
+        */}
         <View style={{ gap: space.sm }}>
-          <Label>SETTINGS</Label>
+          <Label>PAID FROM</Label>
           <Surface padded={false}>
-            <SettingRow
-              label="Funded to"
-              value={card ? accountLabel(card).primary : 'No account'}
-              leading={brand ? <BankLogo brand={brand} size={28} /> : undefined}
-              onPress={() => setAccountPickerOpen(true)}
-            />
+            {cards.length === 0 ? (
+              <ListRow
+                title={<Text variant="body" tone="secondary">No account yet</Text>}
+                trailing={
+                  <Text variant="caption" tone="muted">
+                    Set one on a bill
+                  </Text>
+                }
+              />
+            ) : (
+              cards.map((account) => {
+                // How many of this category's bills pay from this account —
+                // the number is what explains why two banks are listed at all.
+                const billCount = view.rawSubcategories.filter(
+                  (sub) => (sub.cardId ?? category.cardId) === account.id,
+                ).length;
+                const label = accountLabel(account);
+
+                return (
+                  <ListRow
+                    key={account.id}
+                    leading={
+                      <BankLogo
+                        brand={resolveBrand({
+                          bankId: account.bankId,
+                          bankName: account.bankName,
+                        })}
+                        size={28}
+                      />
+                    }
+                    title={<Text variant="body">{label.primary}</Text>}
+                    subtitle={label.secondary ?? undefined}
+                    trailing={
+                      <Text variant="caption" tone="muted">
+                        {billCount} {billCount === 1 ? 'bill' : 'bills'}
+                      </Text>
+                    }
+                  />
+                );
+              })
+            )}
           </Surface>
         </View>
 
@@ -262,42 +415,7 @@ export default function CategoryDetailScreen() {
         />
       </ScrollView>
 
-      {/* Reassign the funding account inline, using the shared picker. */}
-      <AccountPickerSheet
-        visible={accountPickerOpen}
-        cards={state.cards}
-        selectedId={category.cardId}
-        allowNone
-        onSelect={(cardId) => {
-          state.updateCategory(category.id, { cardId });
-          setAccountPickerOpen(false);
-        }}
-        onClose={() => setAccountPickerOpen(false)}
-      />
     </>
   );
 }
 
-/** A tappable settings summary row with an optional leading visual. */
-function SettingRow({
-  label,
-  value,
-  leading,
-  onPress,
-}: {
-  label: string;
-  value: string;
-  leading?: React.ReactNode;
-  onPress: () => void;
-}) {
-  return (
-    <ListRow
-      leading={leading}
-      title={<Text variant="body" tone="secondary">{label}</Text>}
-      trailing={<Text variant="bodyStrong">{value}</Text>}
-      chevron
-      onPress={onPress}
-      accessibilityLabel={`${label}: ${value}`}
-    />
-  );
-}

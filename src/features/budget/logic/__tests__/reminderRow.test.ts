@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isUnplanned } from '~/db/schema';
+import { isOngoing } from '~/db/schema';
 import type { SubcategoryFrequency } from '~/db/schema';
 
 /**
@@ -16,7 +16,7 @@ function isReminderCandidate(
   status: 'pending' | 'paid',
 ): boolean {
   if (type === 'income') return false;
-  if (isUnplanned(frequency)) return false;
+  if (isOngoing(frequency)) return false;
   return status !== 'paid';
 }
 
@@ -35,7 +35,7 @@ describe('which lines can be overdue', () => {
    * cries wolf is one people stop reading.
    */
   it('never treats a spending budget as due', () => {
-    expect(isReminderCandidate('unplanned', 'expense', 'pending')).toBe(false);
+    expect(isReminderCandidate('ongoing', 'expense', 'pending')).toBe(false);
   });
 
   it('still reminds about real bills', () => {

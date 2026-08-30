@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { AccountField } from '~/features/accounts/components/AccountPicker';
 import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
@@ -10,12 +10,14 @@ import { ImageUploader } from '~/shared/components/ImageUploader';
 import { ManagePlanSheet } from '~/features/budget/components/ManagePlanSheet';
 import { StatusToggle } from '~/features/budget/components/StatusToggle';
 import { AmountField } from '~/shared/components/forms';
-import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { BottomSheet, GradientButton, Label, Row, Segmented, Surface, Text } from '~/shared/components/ui';
 import { useModalClose } from '~/shared/hooks/useModalClose';
-import { formatMoney, parseAmount } from '~/shared/lib/money';
+import { formatAmountInput, formatMoney, parseAmount, toMajor } from '~/shared/lib/money';
 import { defaultHouseId } from '~/features/budget/logic/houses';
 import { resolveCardId, type SubcategoryStatus } from '~/features/budget/logic/planning';
-import { isUnplanned } from '../../src/db/schema';
+import { MessagePasteField } from '~/features/sms/components/MessagePasteField';
+import type { ParsedSms } from '~/features/sms/logic/smsParser';
+import { isOngoing } from '../../src/db/schema';
 import { resolveBrand } from '~/shared/data/banks';
 import { selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -67,7 +69,55 @@ export default function NewTransactionScreen() {
   const [newSheetOpen, setNewSheetOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
 
+  /**
+   * FILL THE FORM IN BY HAND, or PASTE THE BANK MESSAGE.
+   *
+   * Two routes to the same record, and they were previously two different
+   * screens: this form, and "Paste a message" reachable only from a dashboard
+   * tile. Someone standing at a till with the SMS already copied had to back
+   * out of the form they had opened, find the other door, and start again —
+   * and the pasted message then landed in a review queue rather than in the
+   * entry they were part-way through making.
+   *
+   * As a mode switch, the message is read INTO this form: the parse fills the
+   * amount, the date and the destination, and everything else on the screen —
+   * the account, the note, the photo, the split — keeps working exactly as it
+   * does for a typed entry. Paste becomes a faster way to fill the form, not a
+   * separate feature with its own rules.
+   */
+  const [entryMode, setEntryMode] = useState<'manual' | 'paste'>('manual');
+  const [messageText, setMessageText] = useState('');
+
   const creatingNew = subcategoryId === '__new__';
+
+  /**
+   * Fold a parsed message into the form's own fields.
+   *
+   * Deliberately only fills what the message actually SAYS, and only where the
+   * user has not already typed something — a re-parse on every keystroke must
+   * never overwrite a figure the user corrected by hand. The destination is
+   * left alone entirely: the parser guesses a merchant, not a budget line, and
+   * silently picking a category from a guess is how a transaction ends up
+   * filed somewhere nobody chose.
+   */
+  const applyParsed = useCallback((result: ParsedSms | null) => {
+    if (!result) return;
+
+    setAmount((current) => (current ? current : formatAmountInput(toMajor(result.amountMinor).toFixed(2))));
+    /*
+     * `result.date` is ISO (YYYY-MM-DD) with no time. Built from its PARTS
+     * rather than `new Date(iso)`, which parses a bare date as UTC midnight —
+     * that lands on the previous day everywhere west of Greenwich, and the date
+     * here decides which month the entry counts toward.
+     */
+    if (result.date) {
+      const [year, month, day] = result.date.split('-').map(Number);
+      if (year && month && day) setDate(new Date(year, month - 1, day));
+    }
+    // The merchant is the best available name for a line the user may go on to
+    // create, so it seeds that field rather than being discarded.
+    if (result.merchant) setNewName((current) => current || result.merchant!);
+  }, []);
 
   /**
    * Every budget line a transaction can be logged against, flattened with its
@@ -155,11 +205,11 @@ export default function NewTransactionScreen() {
       return;
     }
 
-    // An unplanned line holds many individual dated entries rather than one
+    // An ongoing line holds many individual dated entries rather than one
     // status per month, so it takes a transaction row; everything else records
     // the month's status. Both carry the chosen date, which decides the period.
     const target = state.subcategories.find((s) => s.id === targetId);
-    if (target && isUnplanned(target.frequency)) {
+    if (target && isOngoing(target.frequency)) {
       state.addTransaction({
         subcategoryId: targetId,
         name: (selected?.line.name ?? newName.trim()) || 'Transaction',
@@ -229,6 +279,48 @@ export default function NewTransactionScreen() {
         />
       }
     >
+      {/*
+        How the entry gets filled in: by hand, or from the bank's own message.
+
+        A switch rather than a separate screen. The paste route reads the
+        message INTO these same fields, so everything below it — the
+        destination grid, the account, the note, the photo — works identically
+        whichever way the amount arrived, and the user never has to leave a
+        half-filled form to go and find the other one.
+      */}
+      <Segmented
+        options={[
+          { key: 'manual', label: 'Fill in', icon: 'create-outline' },
+          { key: 'paste', label: 'Paste message', icon: 'chatbox-ellipses-outline' },
+        ]}
+        selectedKey={entryMode}
+        onSelect={(key) => setEntryMode(key === 'paste' ? 'paste' : 'manual')}
+      />
+
+      {/*
+        The paste box sits ABOVE the amount, in reading order: the message is
+        the source, and the fields below it are what was read out of it. Kept
+        MOUNTED (hidden, not unmounted) when switching back to manual so the
+        pasted text and its parse survive a toggle — retyping a message the user
+        already pasted is the one thing a mode switch must not cost.
+      */}
+      <View style={{ display: entryMode === 'paste' ? 'flex' : 'none', gap: space.md }}>
+        <MessagePasteField
+          value={messageText}
+          onChangeText={setMessageText}
+          onParsed={applyParsed}
+          // Only read the pasteboard once this mode is actually chosen — an
+          // "allow paste?" banner on a form the user opened to type in would be
+          // an interruption they did not ask for.
+          autoFillFromClipboard={entryMode === 'paste'}
+          autoFocus={false}
+          label="BANK MESSAGE"
+        />
+        <Text variant="caption" tone="muted">
+          The amount and date fill in below — pick what it was for, then save.
+        </Text>
+      </View>
+
         {/* 1 · Amount — the number in hand, front and centre. */}
       <View style={{ paddingVertical: space.sm }}>
         <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} />

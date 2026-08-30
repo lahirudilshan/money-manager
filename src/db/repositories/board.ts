@@ -3,7 +3,7 @@
  * per-period state, funding moves and income.
  */
 
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '~/db/client';
 import {
   cards,
@@ -15,6 +15,7 @@ import {
   subcategories,
   subcategoryStates,
   transactions,
+  transactionSplits,
   type Card,
   type Category,
   type CategoryFundingStatus,
@@ -33,6 +34,7 @@ import {
   type SubcategoryState,
   type SubcategoryStatus,
   type Transaction,
+  type TransactionSplit,
 } from '~/db/schema';
 import { createId, now, readSubState } from './internal';
 
@@ -226,10 +228,27 @@ export const subcategoryRepo = {
   remove(id: string): void {
     db.delete(subcategories).where(eq(subcategories.id, id)).run();
   },
+  /**
+   * Persist a new order for the bills WITHIN one category.
+   *
+   * `sortOrder` is only ever compared between siblings (every query that reads
+   * it is already scoped to a category), so the indexes restart at 0 for each
+   * category rather than being unique board-wide. Callers pass one category's
+   * ids; passing a mixed list would renumber lines against bills they are never
+   * sorted against.
+   */
+  reorder(orderedIds: readonly string[]): void {
+    orderedIds.forEach((id, index) => {
+      db.update(subcategories)
+        .set({ sortOrder: index, updatedAt: now() })
+        .where(eq(subcategories.id, id))
+        .run();
+    });
+  },
 };
 
 /**
- * Individual entries under an `unplanned` subcategory. Its per-period "actual"
+ * Individual entries under an `ongoing` subcategory. Its per-period "actual"
  * is the SUM of these rows, so there is no single planned amount to store.
  */
 export const transactionRepo = {
@@ -254,20 +273,47 @@ export const transactionRepo = {
   },
 
   /**
-   * Total spent per unplanned subcategory for a period, computed in SQL. Used
+   * Total spent per ongoing subcategory for a period, computed in SQL. Used
    * as the subcategory's effective "actual" so the two can never disagree.
+   *
+   * ## Splits
+   *
+   * A split transaction is ONE payment allocated across several lines (see
+   * `transactionSplits`), so its own `subcategoryId` is no longer the whole
+   * story — counting it there would charge the full 5,000 to Groceries when
+   * 2,000 of it was pet food, and counting it in both places would double the
+   * month's spend.
+   *
+   * So the total is a union of two disjoint sets:
+   *
+   *   - UNSPLIT transactions, counted whole against their own line. The
+   *     `NOT EXISTS` is what makes them disjoint: the moment a transaction
+   *     gains parts it drops out of this half.
+   *   - the PARTS of split transactions, each counted against the line it was
+   *     allocated to.
+   *
+   * Since the parts of a split are required to sum to the parent's amount, the
+   * grand total across all lines is unchanged by splitting — only its
+   * distribution moves, which is exactly the intent.
    */
   totalsByPeriod(period: string): Map<string, number> {
-    const rows = db
-      .select({
-        subcategoryId: transactions.subcategoryId,
-        total: sql<number>`COALESCE(SUM(${transactions.amountMinor}), 0)`,
-      })
-      .from(transactions)
-      .where(eq(transactions.period, period))
-      .groupBy(transactions.subcategoryId)
-      .all();
-    return new Map(rows.map((row) => [row.subcategoryId, Number(row.total)]));
+    const rows = db.all<{ subcategory_id: string; total: number }>(sql`
+      SELECT subcategory_id, SUM(amount_minor) AS total FROM (
+        SELECT t.subcategory_id AS subcategory_id, t.amount_minor AS amount_minor
+          FROM ${transactions} t
+         WHERE t.period = ${period}
+           AND NOT EXISTS (
+             SELECT 1 FROM ${transactionSplits} s WHERE s.transaction_id = t.id
+           )
+        UNION ALL
+        SELECT s.subcategory_id AS subcategory_id, s.amount_minor AS amount_minor
+          FROM ${transactionSplits} s
+          JOIN ${transactions} t ON t.id = s.transaction_id
+         WHERE t.period = ${period}
+      )
+      GROUP BY subcategory_id
+    `);
+    return new Map(rows.map((row) => [row.subcategory_id, Number(row.total)]));
   },
 
   create(input: Omit<NewTransaction, 'id'> & { id?: string }): Transaction {
@@ -289,6 +335,92 @@ export const transactionRepo = {
 
   remove(id: string): void {
     db.delete(transactions).where(eq(transactions.id, id)).run();
+  },
+};
+
+/**
+ * The parts of split transactions.
+ *
+ * Deliberately thin: a split is only ever written as a WHOLE (replace every
+ * part, or none), because the parts carry an invariant between them — they must
+ * sum to the parent's amount — and a per-row `update` would let a caller break
+ * it one row at a time with no single place to check.
+ */
+export const transactionSplitRepo = {
+  /** The parts of one transaction, in the order the user arranged them. */
+  byTransaction(transactionId: string): TransactionSplit[] {
+    return db
+      .select()
+      .from(transactionSplits)
+      .where(eq(transactionSplits.transactionId, transactionId))
+      .orderBy(asc(transactionSplits.sortOrder))
+      .all();
+  },
+
+  /**
+   * The parts of many transactions at once, grouped by transaction id.
+   *
+   * The entry list on a budget line renders a "split across N lines" note per
+   * row, and doing that with one query per row is the N+1 that makes a busy
+   * month's list stutter.
+   */
+  byTransactions(transactionIds: readonly string[]): Map<string, TransactionSplit[]> {
+    const grouped = new Map<string, TransactionSplit[]>();
+    if (transactionIds.length === 0) return grouped;
+
+    const rows = db
+      .select()
+      .from(transactionSplits)
+      .where(inArray(transactionSplits.transactionId, [...transactionIds]))
+      .orderBy(asc(transactionSplits.sortOrder))
+      .all();
+
+    for (const row of rows) {
+      const existing = grouped.get(row.transactionId);
+      if (existing) existing.push(row);
+      else grouped.set(row.transactionId, [row]);
+    }
+    return grouped;
+  },
+
+  /**
+   * Replace a transaction's parts wholesale.
+   *
+   * Delete-then-insert inside ONE transaction, so a split is never observable
+   * half-written — an interrupted save that left the old parts deleted and the
+   * new ones missing would silently drop the payment out of every line's total
+   * while leaving the parent transaction in place.
+   *
+   * Passing an empty list is how a split is UNDONE: the parts go, and the
+   * parent reverts to counting whole against its own `subcategoryId`, which is
+   * the same state as a transaction that was never split.
+   */
+  replace(
+    transactionId: string,
+    parts: readonly { subcategoryId: string; amountMinor: number; note?: string | null }[],
+  ): TransactionSplit[] {
+    return db.transaction((tx) => {
+      tx.delete(transactionSplits)
+        .where(eq(transactionSplits.transactionId, transactionId))
+        .run();
+
+      if (parts.length === 0) return [];
+
+      return tx
+        .insert(transactionSplits)
+        .values(
+          parts.map((part, index) => ({
+            id: createId(),
+            transactionId,
+            subcategoryId: part.subcategoryId,
+            amountMinor: part.amountMinor,
+            note: part.note ?? null,
+            sortOrder: index,
+          })),
+        )
+        .returning()
+        .all();
+    });
   },
 };
 

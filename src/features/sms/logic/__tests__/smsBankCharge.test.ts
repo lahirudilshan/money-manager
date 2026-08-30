@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isBankChargeLine, reconcileSms } from '../smsReconcile';
 import { parseSms } from '../smsParser';
+import { merchantKey } from '../merchantRules';
 import { proposalForHint } from '../hintCatalog';
 import { inferCategoryHint } from '../smsCategoryHints';
 
@@ -110,6 +111,85 @@ describe('nothing is created before the user confirms', () => {
       'LKR 10,000.00 debited from AC XXXXXXXX6796 on 04 Aug 2026 12:02 as CEFTS Outward Transfer. Avl Bal 8,747.20',
     )!;
     expect(inferCategoryHint(`${transfer.merchant} ${transfer.raw}`)).toBe('transfer');
+  });
+
+  /*
+   * Fee wording that names the NETWORK but not a fee noun in front of it.
+   *
+   * The patterns wanted either "<noun> charges" or the word "as", and several
+   * real alerts send neither — so a 25-rupee CEFTS fee fell through to the
+   * transfer rule (which claimed it, "CEFTS" being transfer vocabulary) and
+   * reached the board as a transfer to categorise.
+   */
+  it.each([
+    'Your A/C XXXX6796 debited LKR 25.00 CEFTS fee on 04 Aug 2026',
+    'LKR25.00 debited from AC XXXX6796. CEFTS Charge.',
+    'Rs 25.00 debited from A/C XXXX6796 being CEFTS charges',
+  ])('reads %s as a bank charge, not a transfer', (text) => {
+    const parsed = parseSms(text)!;
+    expect(parsed.kind).toBe('bank_charge');
+  });
+
+  /*
+   * The guard on the rule above: a REAL transfer that merely travels over CEFTS
+   * must stay a transfer. The fee patterns require fee vocabulary near the
+   * network name, so the network name alone cannot recategorise a payment.
+   */
+  it.each([
+    'LKR 10,000.00 debited from AC XXXXXXXX6796 on 04 Aug 2026 12:02 as CEFTS Outward Transfer. Avl Bal 8,747.20',
+    'LKR 5,000.00 debited from AC XXXXXXXX6796 on 04 Aug 2026 12:02 as CEFTS Fund Transfer. Avl Bal 8,747.20',
+  ])('leaves %s as a transfer', (text) => {
+    const parsed = parseSms(text)!;
+    expect(parsed.kind).not.toBe('bank_charge');
+  });
+
+  /*
+   * A learned rule must not outlive the bug that taught it.
+   *
+   * `learned.hint` sat at the top of the hint cascade with no veto, so a
+   * merchant confirmed once under the wrong reading kept it forever: while the
+   * parser was still misreading this fee, confirming it as a Transfer wrote a
+   * rule that then overrode the FIXED parser on every later message. Re-parsing
+   * `raw` could not help, because the learned hint was consulted first.
+   */
+  it('ignores a stale learned "transfer" rule on a fee', () => {
+    const parsed = parseSms(CHARGE)!;
+    const staleRule = {
+      id: 'r1',
+      pattern: merchantKey(parsed.merchant),
+      subcategoryId: 'sub-xfer',
+      hint: 'transfer' as const,
+      source: 'learned' as const,
+      hitCount: 3,
+      updatedAt: Date.now(),
+    };
+
+    const draft = reconcileSms(parsed, BOARD, 'd1', [staleRule]);
+
+    expect(draft.hint).toBe('bank_charge');
+    expect(draft.subcategoryId).not.toBe('sub-xfer');
+  });
+
+  /*
+   * The guard: the veto is scoped to bank charges only. A learned rule on any
+   * ORDINARY merchant still wins, which is the whole point of the rule system.
+   */
+  it('still honours a learned rule on a non-fee message', () => {
+    const groceries = parseSms(
+      'LKR 3,500.00 debited from AC XXXXXXXX6796 on 04 Aug 2026 12:02 at KEELLS SUPER. Avl Bal 8,747.20',
+    )!;
+    const rule = {
+      id: 'r2',
+      pattern: merchantKey(groceries.merchant),
+      subcategoryId: 'sub-elec',
+      hint: 'groceries' as const,
+      source: 'learned' as const,
+      hitCount: 2,
+      updatedAt: Date.now(),
+    };
+
+    const draft = reconcileSms(groceries, BOARD, 'd2', [rule]);
+    expect(draft.subcategoryId).toBe('sub-elec');
   });
 
   it('does NOT tag an ATM withdrawal as a bank charge', () => {

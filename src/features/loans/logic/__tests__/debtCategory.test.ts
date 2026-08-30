@@ -15,7 +15,7 @@ interface Line {
   plannedMinor: number;
   status: 'pending' | 'paid';
   type?: 'income' | 'expense';
-  frequency?: 'monthly' | 'yearly' | 'one_time' | 'unplanned';
+  frequency?: 'monthly' | 'yearly' | 'one_time' | 'ongoing';
   loanId?: string | null;
 }
 

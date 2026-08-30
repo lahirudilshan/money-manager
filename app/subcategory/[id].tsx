@@ -2,21 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import {
-  Alert,
-  Image,
-  Modal,
-  Pressable,
-  ScrollView,
-  TextInput,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Alert, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { AccountPickerSheet } from '~/features/accounts/components/AccountPicker';
 import { Field, FrequencyPicker } from '~/shared/components/forms';
 import { BottomSheet, Button, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { DatePickerField } from '~/shared/components/DatePickerField';
+import { DayPicker } from '~/features/budget/components/DayPicker';
 import { DueDateCalendar } from '~/features/budget/components/DueDateCalendar';
 import { ImageUploader } from '~/shared/components/ImageUploader';
 import { formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
@@ -30,11 +22,11 @@ import {
 } from '~/features/budget/logic/planning';
 import {
   supportsSavingPlan,
-  isUnplanned,
+  isOngoing,
   type SubcategoryFrequency,
   type Transaction,
 } from '../../src/db/schema';
-import { resolveBrand } from '~/shared/data/banks';
+import { accountLabel, accountName, resolveBrand } from '~/shared/data/banks';
 import { BankLogo } from '~/features/accounts/components/BankLogo';
 import {
   savingPlanDraftFrom,
@@ -50,7 +42,6 @@ import { useTheme } from '~/shared/theme/ThemeProvider';
 /** Edit one subcategory: its plan, its actual cost, and its status this month. */
 export default function SubcategoryScreen() {
   const { colors, space } = useTheme();
-  const insets = useSafeAreaInsets();
   const router = useRouter();
   const closeModal = useModalClose();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -100,10 +91,25 @@ export default function SubcategoryScreen() {
   const [planned, setPlanned] = useState(
     subcategory ? formatAmountInput(String(subcategory.plannedMinor / 100)) : '',
   );
+  const [note, setNote] = useState(stateRow?.note ?? '');
+  /*
+   * What a DATED bill actually cost, as one figure.
+   *
+   * Right shape for a line paid once a month: there is a single amount, so a
+   * list of entries would be a list of one. Ongoing lines use the entry list
+   * instead, which is where several charges a month belong.
+   */
   const [actual, setActual] = useState(
     stateRow?.actualMinor != null ? formatAmountInput(String(stateRow.actualMinor / 100)) : '',
   );
-  const [note, setNote] = useState(stateRow?.note ?? '');
+  /*
+   * The slip for a DATED bill's payment, stored on the month.
+   *
+   * Ongoing lines attach theirs per ENTRY, beside the amount it is evidence
+   * for. A dated bill has no entries, so its receipt belongs to the month — the
+   * same place its actual and note already live.
+   */
+  const [imageUri, setImageUri] = useState<string | null>(stateRow?.imageUri ?? null);
   const [frequency, setFrequency] = useState<SubcategoryFrequency>(
     subcategory?.frequency ?? 'monthly',
   );
@@ -113,6 +119,16 @@ export default function SubcategoryScreen() {
     subcategory?.onceInPeriod ?? (subcategory ? periodKey(subcategory.createdAt) : ''),
   );
   const [parentId, setParentId] = useState(subcategory?.categoryId ?? '');
+  /**
+   * WHICH DAY this bill falls due.
+   *
+   * `null` means "follow the category", which is the state most lines are in
+   * and the one that must stay reachable — a bill pinned to a day of its own
+   * silently stops tracking a category-wide change. The screen showed this day
+   * on a calendar but gave no way to alter it, so a bill that moved from the
+   * 5th to the 25th could only be fixed by deleting and re-adding it.
+   */
+  const [dueDay, setDueDay] = useState<number | null>(subcategory?.dueDay ?? null);
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [categoryQuery, setCategoryQuery] = useState('');
@@ -122,8 +138,6 @@ export default function SubcategoryScreen() {
       planDueDate: subcategory?.planDueDate,
     }),
   );
-  const [imageUri, setImageUri] = useState<string | null>(stateRow?.imageUri ?? null);
-  const [imageViewerOpen, setImageViewerOpen] = useState(false);
   /**
    * Paid/pending as an UNSAVED edit, like every other field on this screen.
    *
@@ -138,10 +152,38 @@ export default function SubcategoryScreen() {
   /** The entry being edited in the inline sheet, or null when none is open. */
   const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
 
-  // Unplanned lines behave differently: they hold a list of individual
+  // Ongoing lines behave differently: they hold a list of individual
   // transactions, have no single planned/actual amount, and are never marked
   // paid as a whole — so several fields below are hidden for them.
-  const unplanned = isUnplanned(frequency);
+  const ongoing = isOngoing(frequency);
+  /**
+   * Whether a saving plan is currently driving this line's monthly amount.
+   *
+   * When it is, `plannedMinor` is derived from the plan (see the save handler)
+   * and the "Plan amount" field is hidden — a box whose value is discarded on
+   * save is worse than no box.
+   */
+  const savingPlanActive = supportsSavingPlan(frequency) && plan.enabled;
+  /**
+   * The day this line actually falls due: its own when pinned, otherwise its
+   * category's, otherwise the 1st. Derived once so the calendar, the picker and
+   * the overdue test can never disagree about which day they are describing.
+   */
+  const effectiveDueDay = dueDay ?? category?.dueDay ?? 1;
+
+  /**
+   * The loan this line is the installment for, when it is one.
+   *
+   * A loan-linked line is not freely editable: its name and its amount are
+   * DERIVED from the loan's principal, rate and term (see `updateLoan`), so
+   * typing a different figure here would be overwritten the next time the loan
+   * was touched — and in the meantime the plan would fund an installment the
+   * lender is not charging. The screen says so and points at the loan instead
+   * of silently accepting an edit it cannot keep.
+   */
+  const linkedLoan = subcategory?.loanId
+    ? state.loans.find((entry) => entry.id === subcategory.loanId)
+    : undefined;
   /*
    * Read ABOVE the "not found" guard, not below it.
    *
@@ -150,9 +192,12 @@ export default function SubcategoryScreen() {
    * render and throws, which crashed the app on every subcategory delete. Every
    * hook on this screen has to be unconditional for that reason.
    */
+  // Loaded for EVERY line, not just ongoing ones. An ongoing line accumulates
+  // many entries; a dated bill holds exactly one — the payment itself — and
+  // recording it is what marks the bill paid.
   const transactions = useMemo(
-    () => (id && unplanned ? selectTransactions(state, id) : []),
-    [state, id, unplanned],
+    () => (id ? selectTransactions(state, id) : []),
+    [state, id],
   );
 
   if (!subcategory) {
@@ -175,11 +220,11 @@ export default function SubcategoryScreen() {
   // The repo already collapses legacy values, so this is pending/paid.
   const savedStatus: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
 
-  const unplannedTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
+  const ongoingTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
   // The budget these entries draw against, read from the field being edited so
   // the bar responds as the user types a new figure rather than after saving.
   const plannedMinor = parseAmount(planned) ?? 0;
-  const overBudget = plannedMinor > 0 && unplannedTotal > plannedMinor;
+  const overBudget = plannedMinor > 0 && ongoingTotal > plannedMinor;
 
   function handleSave() {
     const trimmed = name.trim();
@@ -205,6 +250,9 @@ export default function SubcategoryScreen() {
       // Only when the user actually chose one — `undefined` means untouched, so
       // spreading nothing leaves the stored account exactly as it was.
       ...(cardId === undefined ? null : { cardId }),
+      // Null is a real value here, not "unset": it puts the line back onto its
+      // category's day rather than pinning it to one of its own.
+      dueDay,
     });
 
     // Move to a different parent category if the user changed it.
@@ -212,15 +260,17 @@ export default function SubcategoryScreen() {
       state.changeSubcategoryParent(subcategory!.id, parentId);
     }
 
-    // Per-month status/slip/note/actual only apply to normal (non-budget)
-    // lines, whose spend is tracked as one figure per period. A spending-budget
-    // line tracks each entry separately and is never "paid" as a whole, so
-    // there is nothing to log here for it.
-    if (!unplanned) {
-      const parsedActual = actual.trim() === '' ? null : parseAmount(actual);
+    /*
+     * Per-month status, note and slip — dated bills only; an ongoing line is
+     * never "paid" as a whole, so there is nothing to log here for it.
+     *
+     * The typed actual is the amount: one payment, one figure. An ongoing line
+     * has no per-month actual at all — its spend is the sum of its entries.
+     */
+    if (!ongoing) {
       state.logTransaction(subcategory!.id, {
         status,
-        actualMinor: parsedActual,
+        actualMinor: actual.trim() === '' ? null : parseAmount(actual),
         note: note.trim() || null,
         imageUri,
       });
@@ -244,11 +294,7 @@ export default function SubcategoryScreen() {
   }
 
   const brand = fundingCard
-    ? resolveBrand({
-        bankId: fundingCard.bankId,
-        bankName: fundingCard.bankName,
-        name: fundingCard.name,
-      })
+    ? resolveBrand({ bankId: fundingCard.bankId, bankName: fundingCard.bankName })
     : undefined;
   const style = statusStyle(status, colors);
   const paid = status === 'paid';
@@ -264,10 +310,18 @@ export default function SubcategoryScreen() {
   const isDirty =
     name.trim() !== subcategory.name ||
     parentId !== subcategory.categoryId ||
-    (parseAmount(planned) ?? 0) !== subcategory.plannedMinor ||
+    /*
+      Only when the field is actually on screen.
+
+      With a saving plan running the line the box is hidden and its value is
+      discarded on save, so a `planned` string left over from before the plan
+      was switched on would hold Save enabled forever — the comparison could
+      never come true, because saving writes the plan's figure instead.
+    */
+    (savingPlanActive ? false : (parseAmount(planned) ?? 0) !== subcategory.plannedMinor) ||
     (actual.trim() === '' ? null : parseAmount(actual)) !== (stateRow?.actualMinor ?? null) ||
-    note.trim() !== (stateRow?.note ?? '') ||
     imageUri !== (stateRow?.imageUri ?? null) ||
+    note.trim() !== (stateRow?.note ?? '') ||
     // Ticking "paid" is an edit like any other — it enables Save and is only
     // written when Save is pressed.
     status !== savedStatus ||
@@ -278,6 +332,7 @@ export default function SubcategoryScreen() {
     // not either, which is why this compares values rather than just testing
     // that the picker was opened.
     (cardId !== undefined && cardId !== (subcategory.cardId ?? null)) ||
+    dueDay !== (subcategory.dueDay ?? null) ||
     planChanged;
 
   return (
@@ -299,41 +354,28 @@ export default function SubcategoryScreen() {
         />
       }
     >
-        {/* Hero: identity, amount, and where it's paid from at a glance. */}
+        {/*
+          Money and account — NOT the name.
+
+          The sheet header directly above already carries this line's icon, its
+          name and its category as the eyebrow. Repeating all three here meant
+          the top of the screen said "Groceries / Home Expenses" twice in a row,
+          pushing the figure the user opened the screen to see below the fold.
+          The header is the identity; this card is the money.
+        */}
         <Surface style={{ gap: space.md }}>
-          <Row gap={space.md}>
-            <View
-              style={{
-                width: 46,
-                height: 46,
-                borderRadius: 15,
-                backgroundColor: `${category?.color ?? colors.accent}1F`,
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Ionicons
-                name={(subcategory.icon ?? 'pricetag-outline') as never}
-                size={22}
-                color={category?.color ?? colors.accent}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text variant="heading" numberOfLines={1}>
-                {subcategory.name}
+          {/* The cadence, which the header does not say. Monthly is the
+              default and goes without saying. */}
+          {subcategory.frequency !== 'monthly' ? (
+            <Row gap={6}>
+              <Ionicons name="repeat-outline" size={13} color={colors.inkMuted} />
+              <Text variant="caption" tone="muted">
+                {subcategory.frequency.replace('_', '-')}
               </Text>
-              <Text variant="caption" tone="muted" numberOfLines={1}>
-                {category?.name ?? 'Category'}
-                {subcategory.frequency !== 'monthly'
-                  ? ` · ${subcategory.frequency.replace('_', '-')}`
-                  : ''}
-              </Text>
-            </View>
-          </Row>
+            </Row>
+          ) : null}
 
-          <Divider />
-
-          {unplanned ? (
+          {ongoing ? (
             /* A spending budget answers "how much of my budget is left", so it
                shows spend against the planned amount rather than a bare total.
                The bar is the fastest read; the figures underneath give the
@@ -348,7 +390,7 @@ export default function SubcategoryScreen() {
                     variant="figureLarge"
                     color={overBudget ? colors.danger : colors.accent}
                   >
-                    {formatMoney(unplannedTotal)}
+                    {formatMoney(ongoingTotal)}
                   </Text>
                 </View>
                 {plannedMinor > 0 ? (
@@ -362,8 +404,8 @@ export default function SubcategoryScreen() {
                       style={{ fontWeight: '700' }}
                     >
                       {overBudget
-                        ? `${formatMoney(unplannedTotal - plannedMinor)} over`
-                        : `${formatMoney(plannedMinor - unplannedTotal)} left`}
+                        ? `${formatMoney(ongoingTotal - plannedMinor)} over`
+                        : `${formatMoney(plannedMinor - ongoingTotal)} left`}
                     </Text>
                   </View>
                 ) : null}
@@ -371,7 +413,7 @@ export default function SubcategoryScreen() {
 
               {plannedMinor > 0 ? (
                 <FundingBar
-                  pct={(unplannedTotal / plannedMinor) * 100}
+                  pct={(ongoingTotal / plannedMinor) * 100}
                   color={overBudget ? colors.danger : category?.color ?? colors.accent}
                   height={8}
                 />
@@ -413,23 +455,75 @@ export default function SubcategoryScreen() {
             offering no control at all.
           */}
           <Divider />
+          {/*
+            The account, drawn at the size a bank is actually RECOGNISED at.
+
+            This was a 26px mark beside a line of secondary grey text — legible,
+            but not something the eye lands on, which is a poor fit for the one
+            fact on this screen the user most often opens it to check ("which
+            card does this come off?"). At 34px with the account name in full
+            strength it reads as a first-class row, and the brand tint behind it
+            ties the row to the bank without a second label saying so.
+          */}
           <Pressable
             onPress={() => setAccountPickerOpen(true)}
             accessibilityRole="button"
             accessibilityLabel={
-              fundingCard ? `Paid from ${fundingCard.name}. Change account` : 'Choose an account'
+              fundingCard
+                ? `Paid from ${accountName(fundingCard)}. Change account`
+                : 'Choose an account'
             }
             style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
           >
-            <Row gap={space.sm}>
+            <Row gap={space.md}>
               {fundingCard && brand ? (
-                <BankLogo brand={brand} size={26} />
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 12,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    // A tint of the bank's own hue, not a neutral chip: it is
+                    // what makes two accounts distinguishable at a glance in a
+                    // list of otherwise identical rows.
+                    backgroundColor: `${brand.color}1A`,
+                  }}
+                >
+                  <BankLogo brand={brand} size={34} />
+                </View>
               ) : (
-                <Ionicons name="card-outline" size={22} color={colors.inkMuted} />
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 12,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.surfaceSunken,
+                  }}
+                >
+                  <Ionicons name="card-outline" size={20} color={colors.inkMuted} />
+                </View>
               )}
-              <Text variant="small" tone="secondary" style={{ flex: 1 }}>
-                {fundingCard ? `Paid from ${fundingCard.name}` : 'Choose an account'}
-              </Text>
+
+              <View style={{ flex: 1, gap: 1 }}>
+                <Text variant="caption" tone="muted">
+                  PAID FROM
+                </Text>
+                <Text variant="bodyStrong" numberOfLines={1}>
+                  {fundingCard ? accountLabel(fundingCard).primary : 'Choose an account'}
+                </Text>
+                {/* The bank underneath, when the headline is a nickname — a row
+                    of nicknames alone cannot be checked against a banking app. */}
+                {fundingCard && accountLabel(fundingCard).secondary ? (
+                  <Text variant="caption" tone="muted" numberOfLines={1}>
+                    {accountLabel(fundingCard).secondary}
+                    {fundingCard.last4 ? ` ·  ••${fundingCard.last4}` : ''}
+                  </Text>
+                ) : null}
+              </View>
+
               <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
                 Change
               </Text>
@@ -437,27 +531,15 @@ export default function SubcategoryScreen() {
           </Pressable>
         </Surface>
 
-        {/* Status toggle — for normal bills only. Unplanned lines are never
-            "paid" as a whole; their spend is the running total of entries. */}
-        {unplanned ? (
-          <UnplannedTransactions
-            transactions={transactions}
-            total={unplannedTotal}
-            plannedMinor={plannedMinor}
-            onAdd={() => router.push(`/transaction/unplanned?subcategoryId=${subcategory.id}`)}
-            onEdit={(txn) => setEditingTxn(txn)}
-            onRemove={(txnId, txnName) =>
-              Alert.alert(`Delete “${txnName}”?`, 'This entry is removed from the month.', [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Delete',
-                  style: 'destructive',
-                  onPress: () => state.deleteTransaction(txnId),
-                },
-              ])
-            }
-          />
-        ) : (
+        {/*
+         * Status toggle — dated bills only. An ongoing line is never "paid" as
+         * a whole; its spend is the running total of its entries.
+         *
+         * It sits ABOVE the entry list on a bill, because settling is the
+         * primary act there and the entries are the supporting detail. On an
+         * ongoing line there is no toggle and the list is the whole screen.
+         */}
+        {ongoing ? null : (
           <Pressable
             onPress={() => setStatus(paid ? 'pending' : 'paid')}
             accessibilityRole="button"
@@ -486,6 +568,35 @@ export default function SubcategoryScreen() {
           </Pressable>
         )}
 
+        {/*
+         * Entries — ONGOING lines only.
+         *
+         * A dated bill is one payment a month, so a list of entries is the
+         * wrong shape for it: there is only ever one, and what it cost is a
+         * single figure typed into the field above. Smart Detect already agrees
+         * — confirming an SMS writes a transaction for an ongoing line and the
+         * month's actual for a dated one (see `confirmDraft`).
+         */}
+        {ongoing ? (
+        <OngoingTransactions
+          transactions={transactions}
+          total={ongoingTotal}
+          plannedMinor={plannedMinor}
+          onAdd={() => router.push(`/transaction/ongoing?subcategoryId=${subcategory.id}`)}
+          onEdit={(txn) => setEditingTxn(txn)}
+          onRemove={(txnId, txnName) =>
+            Alert.alert(`Delete “${txnName}”?`, 'This entry is removed from the month.', [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: () => state.deleteTransaction(txnId),
+              },
+            ])
+          }
+        />
+        ) : null}
+
         {/* Saving-plan progress, when this bill has one. */}
         {subcategory.planTargetMinor != null && subcategory.planDueDate ? (
           <SavingPlanProgressCard
@@ -499,7 +610,18 @@ export default function SubcategoryScreen() {
         {/* Editable plan. */}
         <View style={{ gap: space.md }}>
           <Label>DETAILS</Label>
-          <Field label="Name" value={name} onChangeText={setName} />
+
+          {/*
+            Read-only on a loan line: the name is DERIVED from the loan, and
+            `updateLoan` rewrites it whenever the terms change, so an edit made
+            here would be silently reverted.
+          */}
+          <Field
+            label="Name"
+            value={name}
+            onChangeText={setName}
+            editable={!linkedLoan}
+          />
 
           {/* Parent category — tap to open a searchable picker, so moving a line
               between categories stays simple even with a long list. */}
@@ -540,50 +662,119 @@ export default function SubcategoryScreen() {
             </Pressable>
           </View>
 
-          {/* Both kinds carry a planned amount, but it means different things:
-              a bill's is what will be paid, a spending budget's is the monthly
-              cap its entries draw down. The label says which. */}
-          <Field
-            // "Plan amount", matching the onboarding step and BillFields — the
-            // same figure should not be called three different things across
-            // the screens that edit it.
-            label={unplanned ? 'Monthly budget' : 'Plan amount'}
-            value={planned}
-            onChangeText={setPlanned}
-            money
-            placeholder="0"
-          />
-          {unplanned ? (
-            <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
-              What you intend to spend here each month. Entries below count
-              against it.
-            </Text>
-          ) : null}
+          {/*
+            Hidden while a saving plan is running the line.
 
-          {/* Actual/note only apply to normal per-period bills. */}
-          {!unplanned ? (
+            With "Collect this monthly?" on, `plannedMinor` is DERIVED — the
+            save path writes `planPatch.monthlyMinor` and discards whatever is
+            typed here (see the save handler). So the screen was showing an
+            amount box that looked authoritative, sat above a second amount box
+            inside the plan, and was silently thrown away: three amounts on one
+            screen, one of which did nothing.
+
+            The plan's own card already states the monthly figure it computed,
+            so nothing is lost by removing the field — the number is still on
+            screen, it is simply the real one. `BillFields` reached the same
+            conclusion for the same reason and swaps its hero for a read-only
+            figure; here the plan card IS that figure.
+          */}
+          {savingPlanActive ? null : (
+            <Field
+              // "Plan amount", matching the onboarding step and BillFields — the
+              // same figure should not be called three different things across
+              // the screens that edit it.
+              label={
+                linkedLoan
+                  ? 'Installment'
+                  : ongoing
+                    ? 'Monthly amount (optional)'
+                    : 'Plan amount'
+              }
+              value={planned}
+              onChangeText={setPlanned}
+              money
+              placeholder="0"
+              // Derived from the loan's terms — see the banner above.
+              editable={!linkedLoan}
+            />
+          )}
+          {ongoing ? (
+            <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
+              What you intend to spend here each month — entries below count
+              against it. Leave it at 0 to just track what goes out, with no
+              limit to go over.
+            </Text>
+          ) : (
+            /*
+             * What it actually came to, for a bill paid once a month. Sits
+             * directly under the plan so the two figures read as a pair —
+             * planned versus actual — which is the comparison the board makes.
+             *
+             * Ongoing lines have no such field: their spend is the sum of the
+             * entries below, and a second place to type an amount would be a
+             * rival answer to the same question.
+             */
             <Field
               label="Actual amount (optional)"
               value={actual}
               onChangeText={setActual}
               money
-              placeholder="Leave empty if it matched the plan"
+              // "the plan" is the Plan amount field above — which is hidden
+              // while a saving plan owns the figure, so the hint names the
+              // expected amount instead of pointing at a box that is not there.
+              placeholder={
+                savingPlanActive
+                  ? 'What it actually cost'
+                  : 'Leave empty if it matched the plan'
+              }
             />
-          ) : null}
+          )}
 
-          {/* When it is due, in month context — the reminder rows open this
-              screen, and "29 days overdue" says how urgent it is but never
-              which day the money actually leaves. Hidden for unplanned lines
-              and for bills with no fixed day, which have no date to show. */}
-          {!unplanned && !isFlexibleDueDay(subcategory.dueDay ?? category?.dueDay ?? 1) ? (
-            <DueDateCalendar
-              dueDate={dueDateFor(state.period, subcategory.dueDay ?? category?.dueDay ?? 1)}
-              tint={category?.color}
-              overdue={status !== 'paid' && dueDateFor(state.period, subcategory.dueDay ?? category?.dueDay ?? 1) < new Date()}
-            />
-          ) : null}
+          {/*
+            WHEN IT IS DUE — one calendar, and it is editable.
 
-          <FrequencyPicker label="Frequency" value={frequency} onChange={setFrequency} includeUnplanned />
+            A DATED bill shows the month with its due day marked, and tapping
+            another day moves it. This grid used to be read-only with a second,
+            near-identical picker stacked beneath it; the picker went, and now
+            the reporting grid does the setting too. One question, asked once,
+            by the thing already answering it.
+
+            An ONGOING line gets the full picker instead. Its spend is spread
+            across the month so there is no single dated cell to point at, and
+            it needs the "Flexible — no fixed day" option the calendar has no
+            room for.
+          */}
+          {!ongoing ? (
+            !isFlexibleDueDay(effectiveDueDay) ? (
+              <DueDateCalendar
+                dueDate={dueDateFor(state.period, effectiveDueDay)}
+                onDayPress={setDueDay}
+              />
+            ) : null
+          ) : (
+            <View style={{ gap: space.sm }}>
+              <DayPicker
+                label="WHEN IT IS DUE"
+                value={effectiveDueDay}
+                onChange={setDueDay}
+              />
+
+              {/*
+                An ongoing budget genuinely may have no day — it is money spent
+                across the whole month — so the picker's "Flexible" option is
+                the expected answer here rather than an edge case, and the
+                caption says as much instead of leaving a blank day looking
+                like something unfinished.
+              */}
+              <Text variant="caption" tone="muted">
+                When this budget&apos;s money is normally due to go out. Leave it
+                flexible if it is spent across the month.
+              </Text>
+
+            </View>
+          )}
+
+          <FrequencyPicker label="Frequency" value={frequency} onChange={setFrequency} includeOngoing />
 
           {/* A one-time cost counts in exactly one month — the month it was
               logged in — and in no other. Stated plainly so the bill silently
@@ -594,12 +785,12 @@ export default function SubcategoryScreen() {
             </Text>
           ) : null}
 
-          {/* "Save up for this" — yearly lines only. */}
+          {/* "Collect this monthly?" — yearly lines only. */}
           {supportsSavingPlan(frequency) ? (
             <SavingPlanFields draft={plan} onChange={setPlan} />
           ) : null}
 
-          {!unplanned ? (
+          {!ongoing ? (
             <Field
               label="Note (optional)"
               value={note}
@@ -608,22 +799,20 @@ export default function SubcategoryScreen() {
               multiline
             />
           ) : null}
-        </View>
 
-        {/* Slip / receipt — the shared uploader, so attaching a photo looks
-            and behaves the same here as on the transaction sheet. Replacing
-            must not delete the saved file: the row still points at it until
-            this edit is saved, and backing out would break that record. */}
-        {!unplanned ? (
-          <ImageUploader
-            label="Slip / receipt"
-            value={imageUri}
-            onChange={setImageUri}
-            deleteOnReplace={false}
-            size={140}
-            onViewFullScreen={() => setImageViewerOpen(true)}
-          />
-        ) : null}
+          {/* `deleteOnReplace={false}` — the saved row still points at the old
+              file until Save, so removing it here would break that record if
+              the user backed out. */}
+          {!ongoing ? (
+            <ImageUploader
+              label="Slip / receipt"
+              value={imageUri}
+              onChange={setImageUri}
+              deleteOnReplace={false}
+              size={140}
+            />
+          ) : null}
+        </View>
 
         <Pressable
           onPress={confirmDelete}
@@ -643,40 +832,8 @@ export default function SubcategoryScreen() {
           </Text>
         </Pressable>
 
-    {imageUri ? (
-      <Modal
-        visible={imageViewerOpen}
-        animationType="fade"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setImageViewerOpen(false)}
-      >
-        <View style={{ flex: 1, backgroundColor: '#000000' }}>
-          <Pressable
-            onPress={() => setImageViewerOpen(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-            style={{
-              position: 'absolute',
-              top: insets.top + space.md,
-              right: space.lg,
-              zIndex: 1,
-              width: 36,
-              height: 36,
-              borderRadius: 18,
-              backgroundColor: 'rgba(255,255,255,0.15)',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Ionicons name="close" size={20} color="#FFFFFF" />
-          </Pressable>
-          <Image source={{ uri: imageUri }} style={{ flex: 1 }} resizeMode="contain" />
-        </View>
-      </Modal>
-    ) : null}
-
-    {/* Edit one entry of a spending budget. Writes immediately (it is its own
-        confirmed action with its own Save), unlike the fields on this screen. */}
+    {/* Edit one entry. Writes immediately (it is its own confirmed action with
+        its own Save), unlike the fields on this screen. */}
     {editingTxn ? (
       <EditTransactionSheet
         txn={editingTxn}
@@ -794,16 +951,19 @@ export default function SubcategoryScreen() {
 }
 
 /**
- * The entry list for a spending-budget subcategory: spend against budget, an
- * "add" action, and every transaction this month. Replaces the paid toggle,
- * which is meaningless when spend is tracked entry by entry.
+ * The entry list for an ONGOING line: what has gone out this month, an "add"
+ * action, and every transaction.
+ *
+ * Ongoing only. A dated bill is paid once a month, so a list is the wrong shape
+ * for it — there is only ever one payment, and what it cost is a single figure
+ * typed into "Actual amount" on the screen above.
  *
  * Each row is tappable to edit and carries an explicit delete. Both are needed:
  * an amount typed wrong (or a mis-parsed SMS draft) previously had to be deleted
  * and re-entered, losing its date and note, and the running total is only
  * trustworthy if a wrong entry can be corrected in place.
  */
-function UnplannedTransactions({
+function OngoingTransactions({
   transactions,
   total,
   plannedMinor,
@@ -813,7 +973,7 @@ function UnplannedTransactions({
 }: {
   transactions: Transaction[];
   total: number;
-  /** The monthly budget, when set — drives the header's remaining figure. */
+  /** The monthly amount, when set — drives the header's remaining figure. */
   plannedMinor: number;
   onAdd: () => void;
   onEdit: (txn: Transaction) => void;
@@ -830,10 +990,12 @@ function UnplannedTransactions({
         style={{ padding: space.lg, paddingBottom: space.sm }}
       >
         <View>
-          <Label>THIS MONTH</Label>
+          <Label>SPENT THIS MONTH</Label>
           <Text variant="figureLarge" color={overBudget ? colors.danger : colors.accent}>
             {formatMoney(total)}
           </Text>
+          {/* Progress against the monthly amount, when one is set. Without a
+              cap there is nothing to be over, so it just counts entries. */}
           {plannedMinor > 0 ? (
             <Text variant="caption" tone="muted">
               {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'} ·{' '}
@@ -843,7 +1005,7 @@ function UnplannedTransactions({
             </Text>
           ) : (
             <Text variant="caption" tone="muted">
-              {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'}
+              {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'} · no monthly amount set
             </Text>
           )}
         </View>
@@ -852,7 +1014,8 @@ function UnplannedTransactions({
 
       {transactions.length === 0 ? (
         <Text variant="caption" tone="muted" style={{ padding: space.lg, paddingTop: 0 }}>
-          No entries yet this month. Tap Add, or confirm an SMS draft against this line.
+          No entries yet this month. Tap Add, or confirm an SMS draft against
+          this line.
         </Text>
       ) : (
         transactions.map((txn, index) => (
@@ -875,9 +1038,16 @@ function UnplannedTransactions({
               })}
             >
               <View style={{ flex: 1 }}>
-                <Text variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
-                  {txn.name}
-                </Text>
+                <Row gap={4} align="center">
+                  <Text variant="small" style={{ fontWeight: '600' }} numberOfLines={1}>
+                    {txn.name}
+                  </Text>
+                  {/* A slip is worth knowing about from the list — otherwise a
+                      receipt is invisible until the entry is opened. */}
+                  {txn.imageUri ? (
+                    <Ionicons name="receipt-outline" size={12} color={colors.inkMuted} />
+                  ) : null}
+                </Row>
                 <Text variant="caption" tone="muted" numberOfLines={1}>
                   {new Date(txn.date).toLocaleDateString(undefined, {
                     day: 'numeric',
@@ -920,7 +1090,13 @@ function EditTransactionSheet({
 }: {
   txn: Transaction;
   onClose: () => void;
-  onSave: (patch: { name: string; amountMinor: number; date: Date; note: string | null }) => void;
+  onSave: (patch: {
+    name: string;
+    amountMinor: number;
+    date: Date;
+    note: string | null;
+    imageUri: string | null;
+  }) => void;
   onDelete: () => void;
 }) {
   const { colors, space } = useTheme();
@@ -928,6 +1104,7 @@ function EditTransactionSheet({
   const [amount, setAmount] = useState(String(txn.amountMinor / 100));
   const [date, setDate] = useState(() => new Date(txn.date));
   const [note, setNote] = useState(txn.note ?? '');
+  const [imageUri, setImageUri] = useState<string | null>(txn.imageUri ?? null);
 
   const amountMinor = parseAmount(amount) ?? 0;
   const canSave = name.trim().length > 0 && amountMinor > 0;
@@ -937,7 +1114,7 @@ function EditTransactionSheet({
       visible
       onClose={onClose}
       title="Edit entry"
-      eyebrow="Spending budget"
+      eyebrow={txn.name}
       icon="create-outline"
       iconColor={colors.accent}
       scroll
@@ -952,6 +1129,7 @@ function EditTransactionSheet({
               amountMinor,
               date,
               note: note.trim() || null,
+              imageUri,
             })
           }
         />
@@ -972,6 +1150,17 @@ function EditTransactionSheet({
         onChangeText={setNote}
         placeholder="Anything worth remembering?"
         multiline
+      />
+
+      {/* `deleteOnReplace={false}` — the stored row still points at the old
+          file until Save, so removing it here would break that record if the
+          user backed out. */}
+      <ImageUploader
+        label="Slip / receipt"
+        value={imageUri}
+        onChange={setImageUri}
+        deleteOnReplace={false}
+        size={140}
       />
 
       <Pressable

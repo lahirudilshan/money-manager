@@ -48,6 +48,7 @@ import {
   smsLogRepo,
   stateRepo,
   transactionRepo,
+  transactionSplitRepo,
   SETTINGS_KEYS,
 } from '~/db/repositories';
 import type { AppState } from '~/store/useAppStore';
@@ -959,8 +960,44 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const amountMinor = overrides?.amountMinor ?? draft.amountMinor;
     const target = get().subcategories.find((s) => s.id === subcategoryId);
 
-    if (target && target.frequency === 'unplanned') {
-      // An unplanned line accumulates individual entries, so a confirmed SMS
+    /*
+     * A SPLIT is always recorded as a transaction, whatever its lines are.
+     *
+     * The other branch below writes a month-level "actual" onto a dated bill,
+     * and that shape simply cannot carry an allocation: there is one status row
+     * per line per month, so a payment divided across three lines would have to
+     * be written as three unrelated actuals and the single real payment would
+     * no longer exist anywhere. One transaction plus its parts keeps the app
+     * agreeing with the bank statement, which is the whole point of the split
+     * table.
+     *
+     * The parent transaction is filed against the FIRST part's line so it has a
+     * home in the ordinary queries; the parts are what the totals actually read
+     * (see `transactionRepo.totalsByPeriod`), so its own line is not
+     * double-counted.
+     */
+    const splits = overrides?.splits;
+    if (splits && splits.length > 0) {
+      const created = transactionRepo.create({
+        subcategoryId: splits[0].subcategoryId,
+        period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
+        name: draft.parsed.merchant || 'SMS transaction',
+        amountMinor,
+        date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
+        note: overrides?.note ?? draft.parsed.raw,
+        houseId: overrides?.houseId ?? null,
+      });
+
+      transactionSplitRepo.replace(
+        created.id,
+        splits.map((part) => ({
+          subcategoryId: part.subcategoryId,
+          amountMinor: part.amountMinor,
+          note: part.note ?? null,
+        })),
+      );
+    } else if (target && target.frequency === 'ongoing') {
+      // An ongoing line accumulates individual entries, so a confirmed SMS
       // becomes one transaction rather than the month's single "actual".
       transactionRepo.create({
         subcategoryId,

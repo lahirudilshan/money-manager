@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, View } from 'react-native';
+import { File } from 'expo-file-system';
 import Svg, { Path } from 'react-native-svg';
 import {
   Divider,
@@ -17,6 +18,8 @@ import {
   describeSnapshot,
   parseSnapshot,
   partsOf,
+  stampToIso,
+  titleFor,
   validateSnapshot,
   type Snapshot,
 } from '~/features/backup/logic/backup';
@@ -28,8 +31,10 @@ import {
   driveBlocker,
   isDriveAvailable,
   isSignedIn,
-  listDriveBackups,
+  connectedAccount,
+  listDriveBackupsResult,
   signIn,
+  signOut,
 } from '~/features/backup/logic/googleDrive';
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -68,6 +73,11 @@ export default function OnboardingWelcomeScreen() {
   const [localBackups, setLocalBackups] = useState<StoredBackup[]>([]);
   const [driveFiles, setDriveFiles] = useState<DriveFile[] | null>(null);
   const [signedIn, setSignedIn] = useState(false);
+  /** Why the Drive listing is empty, when it is empty for a reason. */
+  const [driveError, setDriveError] = useState<string | null>(null);
+  /** The connected account's email, once known. Null while loading, or if the
+   *  lookup failed — the row falls back to a generic label rather than break. */
+  const [account, setAccount] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | 'drive' | 'restore'>(null);
 
   const driveAvailable = isDriveAvailable();
@@ -82,10 +92,28 @@ export default function OnboardingWelcomeScreen() {
    */
   const blocker = driveBlocker();
 
+  /**
+   * Load the Drive listing, keeping WHY it failed.
+   *
+   * An empty array cannot say whether the account holds no backups or whether
+   * we could not look — and this screen states one of those as fact. Telling
+   * someone mid-restore that their Drive folder is empty, when really their
+   * sign-in expired, is the worst version of this bug: a new phone has nothing
+   * local to fall back on, so that sentence reads as "your data is gone".
+   */
   const refreshDrive = useCallback(async () => {
     setBusy('drive');
     try {
-      setDriveFiles(await listDriveBackups());
+      const result = await listDriveBackupsResult();
+      setDriveFiles(result.files);
+      setDriveError(result.ok ? null : (result.error ?? null));
+      // Alongside the listing, so the row can name the account rather than
+      // saying only that SOME account is connected.
+      if (result.ok) void connectedAccount().then(setAccount);
+      // A dead refresh token signs the account out inside `accessToken`, so the
+      // screen must fall back to offering sign-in rather than claiming a
+      // connection it no longer has.
+      if (result.signedOut) setSignedIn(false);
     } finally {
       setBusy(null);
     }
@@ -114,10 +142,35 @@ export default function OnboardingWelcomeScreen() {
         return;
       }
       setSignedIn(true);
-      setDriveFiles(await listDriveBackups());
+      setDriveError(null);
+      await refreshDrive();
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * Sign out and straight back in, to reach a DIFFERENT Google account.
+   *
+   * Signing out first is what makes the account chooser appear: Google skips it
+   * and reuses the existing grant otherwise, so "switch" would silently return
+   * the same account and look broken.
+   *
+   * The local list is untouched — those files live on the phone and have
+   * nothing to do with which account is connected.
+   */
+  async function switchAccount() {
+    setBusy('drive');
+    try {
+      await signOut();
+      setSignedIn(false);
+      setDriveFiles(null);
+      setDriveError(null);
+      setAccount(null);
+    } finally {
+      setBusy(null);
+    }
+    await connectDrive();
   }
 
   /**
@@ -158,6 +211,78 @@ export default function OnboardingWelcomeScreen() {
     Alert.alert('Restored', `${label} is back. Welcome back.`, [
       { text: 'Open my board', onPress: () => router.replace('/(tabs)') },
     ]);
+  }
+
+  /**
+   * Restore a file the user picks from ANYWHERE on the phone.
+   *
+   * The list below only shows what is already in the app's own Documents
+   * folder, so a backup sitting in iCloud Drive, Downloads, or just received
+   * over AirDrop was unreachable — the screen told people to copy it across in
+   * the Files app first, which is a detour at the exact moment they are trying
+   * to get their data back.
+   *
+   * Goes through the same `applyRestore` as every other path, so a picked file
+   * gets the same validation gate: a corrupt or foreign JSON is refused before
+   * anything is written.
+   */
+  async function restoreFromFile() {
+    /*
+     * Probe the NATIVE registry before requiring the JS wrapper.
+     *
+     * `expo-document-picker` calls `requireNativeModule` at module scope, which
+     * throws on a binary built before this dependency was added — and that
+     * throw does not reliably land in a try/catch around `require`, because
+     * Metro evaluates the failing module outside this call stack. Same lesson
+     * as `expo-web-browser` in googleDrive.ts. Checking the registry asks the
+     * question that matters — is it in this binary — without evaluating
+     * anything that can throw.
+     */
+    const registry = (globalThis as { expo?: { modules?: Record<string, unknown> } }).expo?.modules;
+    if (!registry?.ExpoDocumentPicker) {
+      Alert.alert(
+        'Not available in this build',
+        'Choosing a file needs a rebuild of the app. Sign in with Google, or copy your backup into the money-manager folder in Files.',
+      );
+      return;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const DocumentPicker = require('expo-document-picker') as typeof import('expo-document-picker');
+
+    setBusy('restore');
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        // Not `application/json`: iOS types a file by its extension only when
+        // it recognises it, and a backup that arrived over AirDrop is often
+        // typed as generic data — which would grey it out in the picker.
+        type: ['application/json', 'public.json', 'public.data'],
+        copyToCacheDirectory: true,
+      });
+
+      if (picked.canceled) return;
+
+      const file = picked.assets?.[0];
+      if (!file) return;
+
+      // `textSync`, matching backupFile.ts — the picker already copied the
+      // file into the cache, so this is a local read.
+      const contents = new File(file.uri).textSync();
+      const snapshot = parseSnapshot(contents);
+      if (!snapshot) {
+        Alert.alert(
+          'That file is not a backup',
+          'It could not be read as a money-manager backup. Pick the .json file you saved from this app.',
+        );
+        return;
+      }
+
+      applyRestore(snapshot, file.name ?? 'Your backup');
+    } catch {
+      Alert.alert('Could not open that file', 'Try picking it again.');
+    } finally {
+      setBusy(null);
+    }
   }
 
   function restoreLocal(backup: StoredBackup) {
@@ -207,7 +332,9 @@ export default function OnboardingWelcomeScreen() {
     const local = localBackups.map((backup) => ({
       key: `local:${backup.filename}`,
       source: 'local' as const,
-      title: backup.label || readableStamp(backup.createdAt),
+      // Name then moment — see `titleFor`. This is the screen where picking the
+      // wrong copy overwrites a fresh board, so two rows must never read alike.
+      title: titleFor(backup.label, backup.createdAt),
       detail: backup.summary || 'Could not read this file',
       sortKey: stampToIso(backup.createdAt),
       backup,
@@ -217,7 +344,15 @@ export default function OnboardingWelcomeScreen() {
     const drive = (driveFiles ?? []).map((file) => ({
       key: `drive:${file.id}`,
       source: 'drive' as const,
-      title: readableStamp(file.name.replace(/^money-manager-/, '').replace(/\.json$/i, '')),
+      /*
+       * The user's own name leads, as it does everywhere else. This showed the
+       * timestamp unconditionally, so a backup the user had carefully named
+       * appeared here as a bare date with the name nowhere on the screen.
+       */
+      title: titleFor(
+        file.description?.trim(),
+        file.name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
+      ),
       // Drive cannot say what is INSIDE without downloading it, so the row
       // shows size instead of the contents summary a local row carries.
       detail: formatDriveSize(file.size),
@@ -284,6 +419,13 @@ export default function OnboardingWelcomeScreen() {
         look identical to someone who knows their backups are in Drive.
       */}
       {!signedIn ? (
+        /*
+         * Google's own button shape: white ground, hairline border, the "G"
+         * at the left of centred label text. People recognise it as "this
+         * opens Google and is safe", which a generic row with a chevron does
+         * not communicate — and this button hands an account to a third party,
+         * so looking like what it is matters more than matching our own rows.
+         */
         <Pressable
           onPress={() => (driveAvailable ? void connectDrive() : undefined)}
           disabled={busy !== null || !driveAvailable}
@@ -293,44 +435,96 @@ export default function OnboardingWelcomeScreen() {
             opacity: pressed || busy !== null ? 0.7 : driveAvailable ? 1 : 0.55,
             flexDirection: 'row',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: space.md,
             paddingHorizontal: space.lg,
-            paddingVertical: space.md,
+            height: 52,
             borderRadius: radius.md,
+            // Google's guidance is a white button in both themes; on a dark
+            // ground it keeps the surface colour so it does not glare.
             backgroundColor: colors.surface,
             borderWidth: 1,
-            borderColor: colors.hairline,
+            borderColor: colors.hairlineStrong,
           })}
         >
           {busy === 'drive' ? (
             <ActivityIndicator size="small" color={colors.accent} />
           ) : (
-            /* The Google "G" — this row is about the ACCOUNT, not the folder.
-               Drive's own logo belongs on the files that came out of it. */
             <GoogleMark size={20} />
           )}
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text variant="bodyStrong">
-              {busy === 'drive' ? 'Looking for backups…' : 'Sign in with Google'}
-            </Text>
-            <Text variant="caption" tone="muted">
-              {driveAvailable
-                ? 'To find backups saved from your old phone'
-                : blocker === 'needs-rebuild'
-                  ? 'Ready — rebuild the app to switch this on'
-                  : 'Not set up in this build'}
-            </Text>
-          </View>
-          <Ionicons
-            name={driveAvailable ? 'chevron-forward' : 'lock-closed-outline'}
-            size={16}
-            color={colors.inkMuted}
-          />
+          <Text variant="bodyStrong">
+            {busy === 'drive' ? 'Looking for backups…' : 'Sign in with Google'}
+          </Text>
         </Pressable>
       ) : null}
 
+      {/* Why the button is there, or why it cannot be used — kept OUT of the
+          button so its face stays the standard Google one. */}
+      {!signedIn ? (
+        <Text variant="caption" tone="muted" style={{ paddingHorizontal: space.xs }}>
+          {driveAvailable
+            ? 'To find backups saved from your old phone'
+            : blocker === 'needs-rebuild'
+              ? 'Ready — rebuild the app to switch this on'
+              : 'Not set up in this build'}
+        </Text>
+      ) : null}
+
       {/*
-        Signed in — say so, and offer a way out of the wrong account.
+        The other way in: a file the user already has.
+
+        Offered ALONGSIDE Google rather than below the list, because it is the
+        second half of the same question — "where is your backup?" — and someone
+        whose copy came over AirDrop or sits in iCloud Drive has no Google
+        account to sign into. Without it the screen's only answer was to open
+        the Files app, copy the file into the app's folder, and come back.
+      */}
+      <Pressable
+        onPress={() => void restoreFromFile()}
+        disabled={busy !== null}
+        accessibilityRole="button"
+        accessibilityLabel="Choose a backup file from this phone"
+        style={({ pressed }) => ({
+          opacity: pressed || busy !== null ? 0.7 : 1,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: space.md,
+          paddingHorizontal: space.lg,
+          paddingVertical: space.md,
+          borderRadius: radius.md,
+          backgroundColor: colors.surface,
+          borderWidth: 1,
+          borderColor: colors.hairline,
+        })}
+      >
+        <View
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: radius.sm,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.accentSoft,
+          }}
+        >
+          <Ionicons name="folder-open-outline" size={18} color={colors.accent} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text variant="bodyStrong">Choose a backup file</Text>
+          <Text variant="caption" tone="muted">
+            From iCloud Drive, Files, or one someone sent you
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+      </Pressable>
+
+      {/*
+        Signed in — name the ACCOUNT, and offer the way out of the wrong one.
+
+        The email is the point: someone with a personal and a work account
+        cannot tell which one the phone signed them into, and "Signed in to
+        Google" beside an empty backup list is indistinguishable from having no
+        backups at all. Naming it turns a dead end into an obvious next step.
       */}
       {signedIn ? (
         <Row
@@ -340,14 +534,41 @@ export default function OnboardingWelcomeScreen() {
             paddingHorizontal: space.lg,
             paddingVertical: space.md,
             borderRadius: radius.md,
-            backgroundColor: colors.completedSoft,
+            backgroundColor: colors.surface,
+            borderWidth: 1,
+            borderColor: colors.hairline,
           }}
         >
-          <Ionicons name="checkmark-circle" size={19} color={colors.completed} />
-          <Text variant="small" style={{ flex: 1 }}>
-            Signed in to Google
-          </Text>
-          {busy === 'drive' ? <ActivityIndicator size="small" color={colors.completed} /> : null}
+          <DriveMark size={20} />
+          <View style={{ flex: 1, gap: 1 }}>
+            <Text variant="small" numberOfLines={1}>
+              {account ?? 'Signed in to Google'}
+            </Text>
+            <Text variant="caption" tone="muted">
+              Google Drive connected
+            </Text>
+          </View>
+          {busy === 'drive' ? (
+            <ActivityIndicator size="small" color={colors.accent} />
+          ) : (
+            <Pressable
+              onPress={() => void switchAccount()}
+              accessibilityRole="button"
+              accessibilityLabel="Use a different Google account"
+              hitSlop={8}
+              style={({ pressed }) => ({
+                opacity: pressed ? 0.6 : 1,
+                paddingHorizontal: space.sm,
+                paddingVertical: 4,
+                borderRadius: radius.sm,
+                backgroundColor: colors.surfaceSunken,
+              })}
+            >
+              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                Switch
+              </Text>
+            </Pressable>
+          )}
         </Row>
       ) : null}
 
@@ -387,13 +608,25 @@ export default function OnboardingWelcomeScreen() {
         </View>
       ) : null}
 
-      {/* Signed in, but the folder is empty — worth saying, since silence here
-          reads as "still loading" to someone who knows they have a backup. */}
-      {signedIn && driveFiles !== null && driveFiles.length === 0 && busy !== 'drive' ? (
+      {/*
+        Why the Drive list is empty — the folder really is, or we could not
+        read it. Silence here reads as "still loading" to someone who knows
+        they have a backup, and claiming the folder is empty after a FAILED
+        listing tells them their data is gone at the one moment they have
+        nothing local to fall back on.
+      */}
+      {driveError && busy !== 'drive' ? (
+        <Row gap={space.sm} style={{ alignItems: 'flex-start', paddingHorizontal: space.xs }}>
+          <DriveMark size={15} />
+          <Text variant="caption" color={colors.pending} style={{ flex: 1 }}>
+            {driveError}
+          </Text>
+        </Row>
+      ) : signedIn && driveFiles !== null && driveFiles.length === 0 && busy !== 'drive' ? (
         <Row gap={space.sm} style={{ alignItems: 'flex-start', paddingHorizontal: space.xs }}>
           <DriveMark size={15} />
           <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-            No backups in this Google account's money-manager folder.
+            No backups in this Google account&apos;s money-manager folder.
           </Text>
         </Row>
       ) : null}
@@ -448,7 +681,7 @@ function BackupRow({
       onPress={onPress}
       disabled={busy}
       accessibilityRole="button"
-      accessibilityLabel={`Restore ${title}`}
+      accessibilityLabel={`Restore ${title}${latest ? ', most recent backup' : ''}`}
       style={({ pressed }) => ({
         backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
         opacity: busy ? 0.6 : 1,
@@ -584,36 +817,3 @@ function DriveMark({ size = 20 }: { size?: number }) {
   );
 }
 
-/**
- * A filename stamp as a real ISO instant, for sorting against Drive's dates.
- *
- * The stamp is UTC (see `snapshotFilename`) but carries no `Z`, so comparing it
- * as text against Drive's `modifiedTime` would order the two sources by
- * different clocks — which in a merged list means the newest copy is not
- * reliably on top.
- */
-function stampToIso(stamp: string): string {
-  return stamp.replace(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})$/,
-    '$1-$2-$3T$4:$5:$6Z',
-  );
-}
-
-/** Turn a filename stamp ("2026-08-04T12-00-00") into something readable. */
-function readableStamp(stamp: string): string {
-  // The stamp is UTC (see `snapshotFilename`), so the Z must go back on before
-  // parsing or the time shifts by the whole timezone offset.
-  const iso = stamp.replace(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})$/,
-    '$1-$2-$3T$4:$5:$6Z',
-  );
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return stamp;
-
-  return date.toLocaleString(undefined, {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}

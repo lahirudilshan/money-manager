@@ -3,9 +3,9 @@ import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, ScreenHeader, Section, Surface, Text } from '~/shared/components/ui';
+import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, Section, Surface, Text } from '~/shared/components/ui';
 import { MINI_APPS, parseEnabled } from '~/shared/lib/miniApps';
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { syncCategoryReminders, unavailableReason } from '~/shared/lib/notifications';
@@ -384,18 +384,42 @@ export default function SettingsScreen() {
   }
 
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      {/*
+        Fixed header — stays pinned while the settings scroll beneath it.
+
+        Matches the plan tab, which pins its own header the same way: a hairline
+        under a canvas-coloured bar, so content passing behind it has a defined
+        edge rather than fading into the same colour.
+      */}
+      <View
+        style={{
+          paddingTop: insets.top + space.sm,
+          paddingBottom: space.sm,
+          paddingHorizontal: space.lg,
+          backgroundColor: colors.canvas,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomColor: colors.hairline,
+        }}
+      >
+        <Row justify="space-between" align="center">
+          <View style={{ gap: 1 }}>
+            <Label>This device</Label>
+            <Text variant="title">Settings</Text>
+          </View>
+        </Row>
+      </View>
+
       <ScrollView
         style={{ flex: 1, backgroundColor: colors.canvas }}
         contentContainerStyle={{
-          paddingTop: insets.top + space.md,
+          paddingTop: space.md,
           paddingBottom: tabClearance,
           paddingHorizontal: space.lg,
           gap: space.lg,
         }}
         showsVerticalScrollIndicator={false}
       >
-        <ScreenHeader eyebrow="This device" title="Settings" />
 
         {/* Your money — what the app manages. */}
         <Section title="YOUR MONEY">
@@ -1009,7 +1033,7 @@ export default function SettingsScreen() {
       </BottomSheet>
 
       {/* Clear-all confirmation. */}
-    </>
+    </View>
   );
 }
 

@@ -143,6 +143,17 @@ type SheetProps = {
   visible: boolean;
   onClose: () => void;
   title?: string;
+  /**
+   * Let the title wrap instead of truncating it to one line.
+   *
+   * Off by default: a sheet title is normally two or three words, and letting
+   * every header grow would push the body down for no gain. Turned on where the
+   * title carries something the user needs to read IN FULL and did not choose
+   * the length of — a backup's heading is their own name plus the moment it was
+   * taken, and truncating that hides the half that identifies which copy they
+   * are about to restore from.
+   */
+  wrapTitle?: boolean;
   /** Small uppercase context line above the title (e.g. a parent category). */
   eyebrow?: string;
   /**
@@ -195,6 +206,7 @@ function SheetChrome({
   onClose,
   onBack,
   title,
+  wrapTitle,
   eyebrow,
   icon,
   iconColor,
@@ -316,7 +328,9 @@ function SheetChrome({
                   {eyebrow.toUpperCase()}
                 </Text>
               ) : null}
-              <Text variant="heading" numberOfLines={1}>
+              {/* Two lines when wrapping, so a long name is readable without
+                  the header growing without bound. */}
+              <Text variant="heading" numberOfLines={wrapTitle ? 2 : 1}>
                 {title}
               </Text>
             </View>

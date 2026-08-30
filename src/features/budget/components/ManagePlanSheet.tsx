@@ -625,7 +625,7 @@ function useLineEditor({
   const category = state.categories.find((c) => c.id === categoryId);
 
   // The same fields the plan list's "new bill in" sheet uses, so a bill created
-  // here can be yearly, unplanned, or carry a saving plan — none of which the
+  // here can be yearly, ongoing, or carry a saving plan — none of which the
   // earlier name-and-amount form could express.
   const draft = useBillDraft({
     existing,

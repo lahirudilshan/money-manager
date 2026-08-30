@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountRequest,
+  parseAccountEmail,
   backupsToPrune,
   BACKUP_FOLDER_NAME,
   createFolderRequest,
@@ -188,5 +190,31 @@ describe('formatSize', () => {
   it('says nothing when the size is missing or nonsense', () => {
     expect(formatSize(undefined)).toBe('');
     expect(formatSize('not a number')).toBe('');
+  });
+});
+
+describe('accountRequest / parseAccountEmail', () => {
+  it('asks Drive who the token belongs to, within the existing scope', () => {
+    // Drive's own `about` endpoint — no `userinfo.email` scope needed, so
+    // naming the account costs the user no extra permission.
+    const request = accountRequest('tok');
+    expect(request.url).toContain('/drive/v3/about');
+    expect(request.url).toContain('user');
+    expect(request.method).toBe('GET');
+  });
+
+  it('reads the email out of the response', () => {
+    expect(parseAccountEmail({ user: { emailAddress: 'a@b.com' } })).toBe('a@b.com');
+  });
+
+  it('returns null rather than throwing on anything unexpected', () => {
+    // A missing label is cosmetic; a screen that cannot render because an
+    // optional string did not arrive would be far worse.
+    expect(parseAccountEmail(null)).toBeNull();
+    expect(parseAccountEmail({})).toBeNull();
+    expect(parseAccountEmail({ user: null })).toBeNull();
+    expect(parseAccountEmail({ user: {} })).toBeNull();
+    expect(parseAccountEmail({ user: { emailAddress: '' } })).toBeNull();
+    expect(parseAccountEmail('nope')).toBeNull();
   });
 });

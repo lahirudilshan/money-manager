@@ -344,3 +344,79 @@ export function shadeHex(hex: string, amount: number): string {
 export function washFor(color: string, mode: ThemeMode): string {
   return shadeHex(color, mode === 'dark' ? -0.72 : 0.86);
 }
+
+/**
+ * A brand hue nudged until it is legible as TEXT on the given background.
+ *
+ * A bank's colour is chosen to work as a large field behind white type on a
+ * card face. That is a different job from being read as a 12pt figure on the
+ * app's own surface, and several of the catalog's hues fail it outright — BOC's
+ * yellow manages about 1.6:1 against white, a smudge rather than a number.
+ *
+ * Rather than hand-maintaining a second "ink" colour per bank — a value nobody
+ * would remember to update when a brand colour changed — the hue is walked
+ * toward black (on a light ground) or toward white (on a dark one) in small
+ * steps until it clears WCAG AA for body text, then left alone. A colour that
+ * already passes is returned untouched, so most banks keep their exact brand
+ * colour.
+ *
+ * Mirrors the logic `BankLogo` applies to monograms; kept here because the
+ * loan card needs the same treatment for text and neither should own it.
+ */
+export function readableOn(hex: string, background: string, minimum = 4.5): string {
+  const parse = (value: string): number[] | null => {
+    const normalized = value.replace('#', '');
+    if (normalized.length !== 6) return null;
+    const channels = [0, 2, 4].map((offset) =>
+      Number.parseInt(normalized.slice(offset, offset + 2), 16),
+    );
+    return channels.some(Number.isNaN) ? null : channels;
+  };
+
+  const luminance = (rgb: number[]) => {
+    const linear = rgb
+      .map((channel) => channel / 255)
+      .map((channel) =>
+        channel <= 0.03928 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4),
+      );
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  };
+
+  const foreground = parse(hex);
+  const ground = parse(background);
+  // An unparseable colour is returned as-is: refusing to render is worse than
+  // rendering something the caller already chose.
+  if (!foreground || !ground) return hex;
+
+  const groundLuminance = luminance(ground);
+  const contrast = (rgb: number[]) => {
+    const value = luminance(rgb);
+    const [lighter, darker] =
+      value > groundLuminance ? [value, groundLuminance] : [groundLuminance, value];
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+
+  if (contrast(foreground) >= minimum) return hex;
+
+  /*
+   * Which WAY to walk depends on the background, not on the hue.
+   *
+   * On a light ground the colour must get darker; on a dark ground — the app's
+   * dark mode — darkening it further would make it vanish completely, which is
+   * the bug a white-only version of this has.
+   */
+  const towardBlack = groundLuminance > 0.5;
+  let current = foreground;
+
+  // 24 steps of 8% reaches either extreme, so every hue terminates.
+  for (let step = 0; step < 24; step += 1) {
+    current = current.map((channel) =>
+      towardBlack
+        ? Math.round(channel * 0.92)
+        : Math.round(channel + (255 - channel) * 0.08),
+    );
+    if (contrast(current) >= minimum) break;
+  }
+
+  return `#${current.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}

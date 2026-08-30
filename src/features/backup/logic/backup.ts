@@ -75,6 +75,14 @@ export const SNAPSHOT_TABLES = [
   'subcategories',
   // Reference subcategories.
   'transactions',
+  /*
+   * AFTER `transactions`, which is a real dependency and not just tidiness: a
+   * split row's `transaction_id` is a foreign key, so restoring the parts
+   * before their parent payment fails the constraint and the allocation is
+   * lost — leaving a restored 5,000 shop counted entirely against whichever
+   * single line the transaction itself names.
+   */
+  'transaction_splits',
   'subcategory_states',
   'category_states',
   'fundings',
@@ -147,6 +155,17 @@ export type RestoreScope = 'setup' | 'everything';
  */
 export const HISTORY_TABLES: readonly SnapshotTable[] = [
   'transactions',
+  /*
+   * With `transactions`, necessarily.
+   *
+   * A split is part of a payment, so it is history by the same test as its
+   * parent — but it is listed here for a harder reason than symmetry: a
+   * structure-only restore SKIPS `transactions`, and writing the parts without
+   * them would violate the `transaction_id` foreign key. Every split row would
+   * be orphaned or rejected, on a path the user chose precisely to avoid
+   * carrying old money into a fresh board.
+   */
+  'transaction_splits',
   'subcategory_states',
   'category_states',
   'fundings',
@@ -288,6 +307,29 @@ export function buildSnapshot(
 }
 
 /**
+ * Bring a stored value written by an OLDER app onto its current spelling.
+ *
+ * The `unplanned` cadence was renamed to `ongoing`, and a backup holds raw
+ * table rows — so every snapshot taken before the rename still carries the old
+ * word. Restoring one verbatim would put a value into the frequency column that
+ * no longer means anything to the code reading it: the line would stop being
+ * recognised as ongoing, and would render as a dated bill it never was.
+ *
+ * Lives here, with the format, rather than beside the INSERT that uses it:
+ * reading an old file is a property of the FORMAT, and keeping it pure is what
+ * lets it be tested without a database.
+ *
+ * Deliberately keyed on table AND column. `frequency` is a common enough column
+ * name that a blanket value rewrite would eventually corrupt an unrelated one.
+ */
+export function migrateValue(table: string, column: string, value: unknown): unknown {
+  if (table === 'subcategories' && column === 'frequency' && value === 'unplanned') {
+    return 'ongoing';
+  }
+  return value;
+}
+
+/**
  * Check a snapshot before restoring from it.
  *
  * Runs BEFORE the live board is touched, because restore is destructive: it
@@ -403,6 +445,74 @@ export function parseSnapshot(contents: string): Snapshot | null {
 export function snapshotFilename(now = new Date()): string {
   const stamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return `money-manager-${stamp}.json`;
+}
+
+/**
+ * A filename stamp as a real ISO instant, for arithmetic rather than display.
+ *
+ * The stamp is UTC — `snapshotFilename` builds it from `toISOString()` — but
+ * carries no `Z`, so comparing it as text against Drive's `modifiedTime` would
+ * order the two sources by different clocks. In a merged list that means the
+ * newest copy is not reliably on top. Returns the input untouched when it is
+ * already an ISO string, so Drive rows pass straight through.
+ */
+export function stampToIso(stamp: string): string {
+  return stamp.replace(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})$/, '$1-$2-$3T$4:$5:$6Z');
+}
+
+/**
+ * The exact moment, for anyone who wants certainty rather than a rough age.
+ *
+ * This is what tells two backups sharing a NAME apart. A label is free text and
+ * the same one gets reused — "before reset" on two different days is ordinary —
+ * so once the name takes a row's title, the wall-clock moment is the only thing
+ * left that distinguishes them. A relative age does not: two backups an hour
+ * apart are both "3 hours ago".
+ */
+export function absoluteTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+
+  return date.toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Turn a filename stamp ("2026-08-04T12-00-00") into something readable.
+ *
+ * The stamp is UTC, so the `Z` has to go back on before parsing. Without it
+ * `new Date` reads the string as LOCAL time, and every backup in the list showed
+ * a time off by the whole timezone offset: a backup taken at 17:30 in Colombo
+ * listed as 12:00, five and a half hours before it happened. The half-hour
+ * offset is what makes this unmistakable rather than merely suspicious.
+ */
+export function readableStamp(stamp: string): string {
+  const date = new Date(stampToIso(stamp));
+  return Number.isNaN(date.getTime()) ? stamp : absoluteTime(date.toISOString());
+}
+
+/**
+ * How a backup is named in a list: the user's own name, then when it was taken.
+ *
+ * A label is free text, and nothing stops the same one being used twice —
+ * "before reset" on two different days is the ordinary case, not a corner one.
+ * A title that is only the label is therefore not unique, and two such rows are
+ * indistinguishable on the one screen where picking the wrong copy overwrites a
+ * board. Appending the moment makes every title unique by construction, which
+ * is better than rejecting a duplicate name or silently renaming it: the user
+ * gets to reuse the name that means something to them, and the list still tells
+ * the copies apart.
+ *
+ * An unnamed backup is just the timestamp, exactly as it always was.
+ */
+export function titleFor(label: string | undefined, stamp: string): string {
+  const name = label?.trim();
+  const when = readableStamp(stamp);
+  return name ? `${name} · ${when}` : when;
 }
 
 /** Whether a filename is one of ours, for filtering the Drive folder listing. */

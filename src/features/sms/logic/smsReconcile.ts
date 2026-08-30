@@ -240,7 +240,13 @@ export interface BoardSlice {
     loanId: string | null;
   }[];
   categories: readonly { id: string; name: string; cardId: string | null }[];
-  cards: readonly { id: string; name: string; last4: string | null; bankName: string | null }[];
+  cards: readonly {
+    id: string;
+    /** The user's own name for the account, when they gave one. */
+    nickname: string | null;
+    last4: string | null;
+    bankName: string | null;
+  }[];
 }
 
 /** The card an SMS's account digits point at, if any card matches its last-4. */
@@ -271,12 +277,22 @@ export function accountLabelFor(account: string, cards: BoardSlice['cards']): st
   const card = cardForAccount(account, cards);
   if (!card) return account ? `••${account}` : '';
 
-  const bank =
-    card.bankName && !card.name.toLowerCase().startsWith(card.bankName.toLowerCase())
-      ? card.bankName
-      : '';
+  /*
+   * Bank, then the user's own name, then the digits — each part included only
+   * when it says something the previous one did not.
+   *
+   * The de-duplication used to compare the bank against a separate `name`
+   * column, which no longer exists: an account now carries the bank and the
+   * user's nickname, and those are different things by construction, so the
+   * only guard still needed is against a nickname that simply repeats the bank
+   * ("HNB" nicknamed "HNB"), which would otherwise read "HNB HNB ••4150".
+   */
+  const nickname = card.nickname?.trim() ?? '';
+  const bank = card.bankName ?? '';
+  const distinct =
+    nickname && nickname.toLowerCase() !== bank.toLowerCase() ? nickname : '';
 
-  return [bank, card.name, card.last4 ? `••${card.last4}` : ''].filter(Boolean).join(' ');
+  return [bank, distinct, card.last4 ? `••${card.last4}` : ''].filter(Boolean).join(' ');
 }
 
 /**
@@ -730,9 +746,32 @@ export function reconcileSms(
    */
   const vetoed = keywordHint === 'bank_charge' && parsed.kind !== 'bank_charge';
 
+  /*
+   * The KIND outranks a learned hint, for bank charges specifically.
+   *
+   * `learned.hint` sat at the top of this cascade with no veto, so a merchant
+   * once confirmed under the wrong reading kept that reading forever: confirm
+   * "CEFTS Transfer Charges" as a Transfer once — which was easy to do while
+   * the parser was still misreading it — and the rule then overrode the fixed
+   * parser on every later message from the same merchant. The fee kept
+   * arriving as a transfer, and re-parsing `raw` could not help, because the
+   * learned hint was consulted first.
+   *
+   * The veto is the narrow one already applied to `keywordHint` just above,
+   * now applied wherever the hint comes from: when `classifyKind` has SEEN the
+   * amount and ruled the message a fee, nothing keyword-derived or remembered
+   * outranks it. A learned hint still wins for every other category — this
+   * does not weaken the rule system, it stops one stale answer outliving the
+   * bug that produced it.
+   */
+  const learnedHint = learned.hint ?? learnedPayee?.hint ?? null;
+  const learnedHintStale =
+    learnedHint !== null &&
+    learnedHint !== 'bank_charge' &&
+    parsed.kind === 'bank_charge';
+
   const scoringHint =
-    learned.hint ??
-    learnedPayee?.hint ??
+    (learnedHintStale ? null : learnedHint) ??
     (parsed.kind === 'bank_charge'
       ? 'bank_charge'
       : ((vetoed ? null : keywordHint) ?? hintFromGuesses(guesses)));
@@ -760,13 +799,38 @@ export function reconcileSms(
    */
   const hint = scoringHint ?? weakHintFromGuesses(guesses);
 
-  // A learned rule pointing at a line that still exists and is the right type
-  // wins outright — the user already told us this merchant maps here.
-  const learnedTarget =
+  /*
+   * A learned rule pointing at a line that still exists and is the right type
+   * wins outright — the user already told us this merchant maps here.
+   *
+   * With ONE exception, the same one that vetoes a stale learned hint above: a
+   * message the parser has ruled a fee goes to the charges line regardless of
+   * what this merchant was once filed under. Vetoing the hint alone was not
+   * enough — the card then read "Bank charge" while the rule still pointed the
+   * money at "Transfers to family", which is a worse state than either error on
+   * its own: the label and the destination disagreed.
+   *
+   * `isBankChargeLine` is the same test `scoreSubcategory` uses to pick the
+   * charges line, so a learned rule that ALREADY points there is honoured
+   * rather than discarded and re-derived.
+   */
+  const learnedTargetLine =
     learned.subcategoryId &&
     board.subcategories.find((sub) => sub.id === learned.subcategoryId && sub.type === wantType)
-      ? learned.subcategoryId
-      : null;
+      ? board.subcategories.find((sub) => sub.id === learned.subcategoryId)
+      : undefined;
+
+  const learnedTargetStale =
+    learnedTargetLine !== undefined &&
+    parsed.kind === 'bank_charge' &&
+    !isBankChargeLine(
+      `${learnedTargetLine.name} ${
+        board.categories.find((c) => c.id === learnedTargetLine.categoryId)?.name ?? ''
+      }`,
+    );
+
+  const learnedTarget =
+    learnedTargetLine && !learnedTargetStale ? learnedTargetLine.id : null;
 
   /*
    * A payee-account rule resolves the same way, and to the same standard: the

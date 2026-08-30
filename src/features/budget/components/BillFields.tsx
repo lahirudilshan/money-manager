@@ -26,7 +26,7 @@ import { Label, Row, Text } from '~/shared/components/ui';
  * that collects for it are all part of the record. Two screens create or edit
  * bills (the plan list's "new bill in" sheet and the grid picker's manage
  * sheet), and when each owned its own form the second one quietly offered a
- * subset, so a bill added there could never be yearly or unplanned.
+ * subset, so a bill added there could never be yearly or ongoing.
  *
  * The draft state lives in `useBillDraft` so a caller can seed it, read
  * `canSave`, and hand the result to `addSubcategory`/`updateSubcategory`
@@ -157,7 +157,7 @@ export function BillFields({
   const { colors, space } = useTheme();
   const state = useAppStore();
 
-  const unplanned = draft.frequency === 'unplanned';
+  const ongoing = draft.frequency === 'ongoing';
   const planPatch = draft.frequency === 'yearly' ? toSavingPlanPatch(draft.plan) : null;
   // Shown in the hint when nothing overrides the category's account.
   const effectiveCardId = resolveCardId(draft.cardId, category?.cardId);
@@ -195,7 +195,7 @@ export function BillFields({
           // "Plan amount" — what this bill is expected to cost, as opposed to
           // the actual logged against it each month. Matches the onboarding
           // plan step, which sets the same field.
-          label={unplanned ? 'Monthly budget' : 'Plan amount'}
+          label={ongoing ? 'Monthly budget' : 'Plan amount'}
           value={draft.amount}
           onChangeText={draft.setAmount}
           currency={state.currency}
@@ -240,11 +240,11 @@ export function BillFields({
         label="How is it paid?"
         value={draft.frequency}
         onChange={draft.setFrequency}
-        includeUnplanned
+        includeOngoing
       />
 
-      {/* Payment day — not applicable to unplanned bills. */}
-      {!unplanned ? <DayPicker value={draft.dueDay} onChange={draft.setDueDay} /> : null}
+      {/* Payment day — not applicable to ongoing bills. */}
+      {!ongoing ? <DayPicker value={draft.dueDay} onChange={draft.setDueDay} /> : null}
 
       {/* Saving plan — yearly bills only: a big amount due later, collected
           monthly. */}

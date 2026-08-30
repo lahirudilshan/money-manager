@@ -40,22 +40,37 @@ const WEEKS = [
 export function DueDateCalendar({
   dueDate,
   label = 'When it is due',
-  /** Colour for the due-day marker — usually the category's own. */
-  tint,
-  /** Overdue days render in the danger colour, upcoming in the tint. */
-  overdue = false,
+  /**
+   * Tap handler for a day. Omit it and the grid stays read-only.
+   *
+   * Optional rather than required because this calendar is also used purely to
+   * REPORT a date, and a grid whose cells depress but change nothing is worse
+   * than one that plainly does not invite the touch.
+   */
+  onDayPress,
 }: {
   dueDate: Date;
   label?: string;
-  tint?: string;
-  overdue?: boolean;
+  onDayPress?: (day: number) => void;
 }) {
   const { colors, radius, space, mode } = useTheme();
-  const accent = overdue ? colors.danger : (tint ?? colors.accent);
+  /*
+   * The due day is always BLUE, whatever its state.
+   *
+   * It previously took the category's own colour, and amber once the bill was
+   * overdue — so the one cell the grid exists to point at changed hue depending
+   * on the line you opened it from. Fixing it to the app's accent makes "this
+   * is the day" mean one thing everywhere, and leaves the yellow today-wash as
+   * the only other mark, which the two can no longer be confused for.
+   *
+   * Overdue is still communicated — the header's relative date and the board
+   * row both say so — it simply is not said by recolouring the calendar.
+   */
+  const accent = colors.accent;
 
-  // Same yellow wash DayPicker uses to mark today — against filled cells a ring
-  // would be lost, and the two grids must read identically.
-  const todayTint = mode === 'dark' ? 'rgba(224,168,80,0.28)' : 'rgba(245,200,66,0.35)';
+  // A light yellow wash marks today, so it reads as a gentle "you are here"
+  // beside the blue due-day cell rather than competing with it.
+  const todayTint = mode === 'dark' ? 'rgba(224,168,80,0.22)' : 'rgba(250,214,110,0.38)';
   const todayInk = mode === 'dark' ? '#E7C06A' : '#8A6D0F';
 
   const now = new Date();
@@ -77,9 +92,9 @@ export function DueDateCalendar({
         </Row>
       </Row>
 
-      {/* Panel and cells are the "new bill in" sheet's DayPicker, minus the
-          interaction: same radius, same 6px gutters, same filled cells on the
-          sunken ground, same yellow today-wash. */}
+      {/* Panel and cells match the "new bill in" sheet's DayPicker: same
+          radius, same 6px gutters, same filled cells on the sunken ground,
+          same yellow today-wash. */}
       <View
         style={{
           backgroundColor: colors.surface,
@@ -105,6 +120,12 @@ export function DueDateCalendar({
                     day={day}
                     selected={isDue}
                     tint={accent}
+                    onPress={onDayPress ? () => onDayPress(day) : undefined}
+                    accessibilityLabel={
+                      onDayPress
+                        ? `Day ${day}${isDue ? ', currently due' : ''}${isToday ? ', today' : ''}`
+                        : undefined
+                    }
                     restBackground={isToday ? todayTint : colors.surfaceSunken}
                     restColor={isToday ? todayInk : clamps ? colors.inkMuted : colors.inkSecondary}
                   />
@@ -120,6 +141,22 @@ export function DueDateCalendar({
           </View>
         ))}
       </View>
+
+      {/* Says the grid is editable. A calendar reporting a date and a calendar
+          setting one look identical at rest, so without this the tap is a
+          gesture nobody discovers. */}
+      {onDayPress ? (
+        <Text variant="caption" tone="muted">
+          Tap a day to move this bill.
+          {/*
+            The 29th–31st do not exist every month. `dueDateFor` clamps them to
+            the month's last day, so on a short month the cell that lights up is
+            not the cell that was tapped — said here rather than left to look
+            like the tap failed.
+          */}
+          {dueDay > 28 ? ' On shorter months it falls on the last day.' : ''}
+        </Text>
+      ) : null}
     </View>
   );
 }

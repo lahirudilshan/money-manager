@@ -120,12 +120,11 @@ export { expoDb, DATABASE_NAME };
  * files: for a local-only app this removes a codegen step while staying
  * explicit. `user_version` gates destructive upgrades.
  */
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const DDL = [
   `CREATE TABLE IF NOT EXISTS cards (
     id TEXT PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'bank',
     bank_id TEXT,
     bank_name TEXT,
@@ -221,7 +220,7 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
-  // Individual entries under an `unplanned` subcategory — see schema.ts.
+  // Individual entries under an `ongoing` subcategory — see schema.ts.
   `CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY NOT NULL,
     subcategory_id TEXT NOT NULL REFERENCES subcategories(id) ON DELETE CASCADE,
@@ -234,6 +233,21 @@ const DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
+  // The parts of a split payment — see `transactionSplits` in schema.ts. A
+  // transaction with no rows here is unsplit, which is every row that predates
+  // the table, so nothing needs backfilling.
+  `CREATE TABLE IF NOT EXISTS transaction_splits (
+    id TEXT PRIMARY KEY NOT NULL,
+    transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    subcategory_id TEXT NOT NULL REFERENCES subcategories(id) ON DELETE CASCADE,
+    amount_minor INTEGER NOT NULL,
+    note TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS transaction_splits_txn_idx ON transaction_splits(transaction_id)`,
+  `CREATE INDEX IF NOT EXISTS transaction_splits_sub_idx ON transaction_splits(subcategory_id)`,
   `CREATE TABLE IF NOT EXISTS category_states (
     id TEXT PRIMARY KEY NOT NULL,
     category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
@@ -1074,6 +1088,252 @@ function ensureCurrentColors(): void {
 }
 
 /**
+ * Retire icons a catalog category has since moved off.
+ *
+ * The catalog is a TEMPLATE: `categories.icon` is copied into the row when the
+ * category is created and never looked at again, so changing the catalog fixes
+ * new boards and leaves every existing one on the old mark. The Debt category
+ * carried `card-outline` — which is also its own Credit card line's icon, so
+ * the group read as a second credit card — and no amount of catalog editing
+ * moved a board that already existed.
+ *
+ * Only rewrites a row still holding the exact icon that was replaced, so a user
+ * who deliberately picked something else keeps it, and the pass is a no-op on
+ * every launch after the first.
+ */
+const RETIRED_CATEGORY_ICONS: { name: string; from: string; to: string }[] = [
+  // Debt has worn three marks: `card-outline` (its own Credit card line's),
+  // then `trending-down-outline`, now the banknote. Both earlier ones are
+  // retired so a board lands on the current mark whichever it started from.
+  // "Loans & credit" was the category's former name; match it too.
+  { name: 'Debt', from: 'card-outline', to: 'cash-outline' },
+  { name: 'Debt', from: 'trending-down-outline', to: 'cash-outline' },
+  { name: 'Loans & credit', from: 'card-outline', to: 'cash-outline' },
+  { name: 'Loans & credit', from: 'trending-down-outline', to: 'cash-outline' },
+];
+
+function ensureCurrentCategoryIcons(): void {
+  const hasCategories = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='categories'`,
+  );
+  if (!hasCategories) return;
+
+  for (const { name, from, to } of RETIRED_CATEGORY_ICONS) {
+    expoDb.execSync(
+      `UPDATE categories SET icon = '${to}' WHERE name = '${name.replace(/'/g, "''")}' AND icon = '${from}';`,
+    );
+  }
+
+  /*
+   * Loan LINES had the same problem, and worse: every one was created with the
+   * category's own mark, so a lease, a mortgage and a personal loan were three
+   * identical rows. Move them onto their kind's icon.
+   *
+   * Guarded on the retired icons only, so a line the user has since given its
+   * own icon is left alone.
+   */
+  const hasLoans = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='loans'`,
+  );
+  if (!hasLoans) return;
+
+  for (const [kind, icon] of Object.entries(schema.LOAN_LINE_ICON)) {
+    expoDb.runSync(
+      `UPDATE subcategories SET icon = ?, updated_at = unixepoch() * 1000
+       WHERE icon IN ('trending-down-outline', 'card-outline', 'cash-outline')
+         AND loan_id IN (SELECT id FROM loans WHERE kind = ?)`,
+      [icon, kind],
+    );
+  }
+}
+
+/**
+ * Move lines onto the cadence their catalog entry now declares.
+ *
+ * The catalog is a TEMPLATE: `subcategories.frequency` is copied in when the
+ * line is created and never re-read, so reclassifying "Medicine" as ongoing
+ * fixed new boards and left every existing one paying it like a dated bill.
+ * The board then keeps a SINGLE actual for a line that really takes several
+ * charges a month, so the second pharmacy visit overwrites the first.
+ *
+ * Matched by NAME, since a line does not record which catalog entry it came
+ * from, and guarded on the frequency the catalog USED to declare — so a line
+ * already moved to yearly or one-time is left alone.
+ *
+ * It does NOT spare rows the user has edited. A narrower guard was considered
+ * and rejected: `updated_at` moves when a line is renamed or re-priced, which
+ * says nothing about its cadence, so it would have skipped most of a real
+ * board and left the fix half-applied. The cost is that someone who set one of
+ * these to Monthly deliberately is reverted once — recoverable with one tap on
+ * the picker, where a half-migrated board is confusing indefinitely.
+ *
+ * Idempotent: after the first pass no row matches `from` any more.
+ */
+const RECLASSIFIED_LINES: { name: string; from: string; to: string }[] = [
+  // Every line moved to "Ongoing" after boards already existed.
+  'Medicine',
+  'Groceries (home food)',
+  'Eating out & delivery',
+  'Fuel',
+  'Pet care',
+  'Mobile / phone bill',
+  'Internet / broadband',
+  'Parking & tolls',
+  'Bus / train / taxi',
+  'Cash / pocket money',
+  'Household items',
+  'Clothing',
+  'Personal care',
+  'Doctor / channelling',
+  'Repairs & maintenance',
+  'Travel & trips',
+  'Service & repairs',
+  'Entertainment',
+  'Gifts',
+  'Donations / dana',
+  'Hobbies',
+  'Weddings & events',
+  "Children's extras",
+  'Gas',
+  'Domestic help',
+  'Garbage / municipal',
+  'Gym / fitness',
+  'Childcare',
+].map((name) => ({ name, from: 'monthly', to: 'ongoing' }));
+
+/**
+ * Rename the stored `unplanned` cadence to `ongoing`.
+ *
+ * The value was only ever shown to the user as "Ongoing"; the column kept the
+ * older word, so the code read `unplanned` while every screen said something
+ * else. This closes that gap so there is one word for one concept.
+ *
+ * Runs BEFORE `ensureCurrentFrequencies`, which is a real dependency rather
+ * than a preference: that pass now writes `ongoing`, and its guard matches on
+ * the CURRENT value. Were this to run after, a row it had just written would
+ * already be correct while every untouched legacy row stayed on the old word.
+ *
+ * A plain UPDATE, with no per-row guard: the two values mean the same thing, so
+ * there is no user intent to preserve and nothing to lose by rewriting all of
+ * them. Idempotent — after the first pass no row matches `unplanned` any more.
+ */
+function ensureOngoingFrequency(): void {
+  const hasSubcategories = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='subcategories'`,
+  );
+  if (!hasSubcategories) return;
+
+  expoDb.runSync(
+    `UPDATE subcategories
+        SET frequency = 'ongoing', updated_at = unixepoch() * 1000
+      WHERE frequency = 'unplanned'`,
+  );
+}
+
+function ensureCurrentFrequencies(): void {
+  const hasSubcategories = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='subcategories'`,
+  );
+  if (!hasSubcategories) return;
+
+  for (const { name, from, to } of RECLASSIFIED_LINES) {
+    expoDb.runSync(
+      `UPDATE subcategories
+          SET frequency = ?, updated_at = unixepoch() * 1000
+        WHERE name = ? AND frequency = ?`,
+      [to, name, from],
+    );
+  }
+}
+
+/**
+ * Move an ONGOING line's month-level slips onto entries.
+ *
+ * A receipt used to attach to a subcategory's MONTH
+ * (`subcategory_states.image_uri`) whatever kind of line it was. On an ongoing
+ * line that is the wrong place: it accumulates several charges a month, so one
+ * shared photo cannot say which payment it belongs to. Those now attach to the
+ * entry, beside the amount they are evidence for.
+ *
+ * DATED bills are deliberately excluded. They have one payment and no entry
+ * list, so the month IS the right home for their slip — it sits with the actual
+ * and the note, which live on the same row. Carrying those onto entries would
+ * hide them behind a list the screen no longer shows.
+ *
+ * Rather than strand an ongoing line's photos, each is turned into an entry on
+ * that line. The amount comes from the month's recorded actual, or the line's
+ * planned figure when none was typed — the photo IS the record of a payment, so
+ * a zero-amount entry would be a worse lie than an approximate one.
+ *
+ * Idempotent: a state row is cleared as it is carried, so a second launch finds
+ * nothing to move. Skips any month that already has entries, where the user has
+ * been logging payments properly and the month-level photo is the stray.
+ */
+function carryStateSlipsToEntries(): void {
+  for (const table of ['subcategory_states', 'transactions', 'subcategories']) {
+    const exists = expoDb.getFirstSync(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`,
+    );
+    if (!exists) return;
+  }
+
+  const orphans = expoDb.getAllSync(
+    `SELECT s.id, s.subcategory_id, s.period, s.actual_minor, s.note, s.image_uri,
+            sub.name AS line_name, sub.planned_minor
+       FROM subcategory_states s
+       JOIN subcategories sub ON sub.id = s.subcategory_id
+      WHERE s.image_uri IS NOT NULL
+        AND sub.frequency = 'ongoing'
+        AND NOT EXISTS (
+          SELECT 1 FROM transactions t
+           WHERE t.subcategory_id = s.subcategory_id AND t.period = s.period
+        )`,
+  ) as {
+    id: string;
+    subcategory_id: string;
+    period: string;
+    actual_minor: number | null;
+    note: string | null;
+    image_uri: string;
+    line_name: string;
+    planned_minor: number;
+  }[];
+
+  if (orphans.length === 0) return;
+
+  expoDb.execSync('BEGIN IMMEDIATE;');
+  try {
+    for (const row of orphans) {
+      // The 1st of the recorded month: the exact day was never captured, and
+      // any date inside the period files the entry in the right month.
+      const date = new Date(`${row.period}-01T00:00:00Z`).getTime();
+      expoDb.runSync(
+        `INSERT INTO transactions
+           (id, subcategory_id, period, name, amount_minor, date, note, image_uri, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch() * 1000, unixepoch() * 1000)`,
+        [
+          migrationId('txn'),
+          row.subcategory_id,
+          row.period,
+          row.line_name,
+          row.actual_minor ?? row.planned_minor,
+          date,
+          row.note,
+          row.image_uri,
+        ],
+      );
+      // Cleared so this never runs twice over the same photo. The file itself
+      // is untouched — the new entry now points at it.
+      expoDb.runSync(`UPDATE subcategory_states SET image_uri = NULL WHERE id = ?`, [row.id]);
+    }
+    expoDb.execSync('COMMIT;');
+  } catch (error) {
+    expoDb.execSync('ROLLBACK;');
+    throw error;
+  }
+}
+
+/**
  * Repair a `subcategories.category_id` foreign key left pointing at a table
  * that no longer exists.
  *
@@ -1177,7 +1437,7 @@ function consolidateDebtCategories(): void {
 
       expoDb.runSync(
         `INSERT INTO categories (id, name, card_id, color, icon, due_day, sort_order, created_at, updated_at)
-         VALUES (?, 'Debt', ?, '#B7791F', 'trending-down-outline', ?, 0, unixepoch() * 1000, unixepoch() * 1000)`,
+         VALUES (?, 'Debt', ?, '#B7791F', 'cash-outline', ?, 0, unixepoch() * 1000, unixepoch() * 1000)`,
         [DEBT_CATEGORY_ID, donor?.card_id ?? null, donor?.due_day ?? 1],
       );
     }
@@ -1214,6 +1474,68 @@ function consolidateDebtCategories(): void {
 }
 
 let initialised = false;
+
+/**
+ * Fold the retired `cards.name` into `nickname`, then drop the column.
+ *
+ * An account used to carry two user-typed strings — a "full name" and a "short
+ * name" (`nickname`) — for one question, and every list then had to rank them
+ * against each other to decide on a headline. The form now asks once.
+ *
+ * The old `name` is not discarded on the way past. Where the user had typed a
+ * real label there and left the nickname empty, that string IS their name for
+ * the account, and dropping the column would silently rename it to its bank.
+ * So it is copied across first — but only when it says something the bank does
+ * not already say, since `name` was auto-filled with the bank's short name for
+ * every account added from the picker, and promoting "HNB" to a nickname would
+ * make `accountLabel` render "HNB" over "HNB" forever.
+ *
+ * Shape-driven, like the passes around it: gated on the column actually being
+ * present rather than on `user_version`, so a device that reached v10 with an
+ * older table (an interrupted upgrade) is still repaired on the next launch.
+ */
+function migrateCardNameToNickname(): void {
+  const hasCards = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='cards'`,
+  );
+  if (!hasCards) return;
+
+  const columns = expoDb.getAllSync(`PRAGMA table_info(cards)`) as { name: string }[];
+  if (!columns.some((c) => c.name === 'name')) return;
+
+  /*
+   * Carry the old name over only where it adds something.
+   *
+   * `nickname IS NULL OR nickname = ''` — never overwrite a nickname the user
+   * actually typed; that one is newer and more deliberate.
+   *
+   * The bank comparison is case-insensitive and covers both `bank_name` ("Hatton
+   * National Bank") and whatever the name column holds, because the old form
+   * defaulted `name` to the catalog's SHORT name while storing the long one in
+   * `bank_name` — so an exact match against `bank_name` alone would let every
+   * "HNB" through.
+   */
+  expoDb.execSync(`
+    UPDATE cards
+       SET nickname = name
+     WHERE (nickname IS NULL OR TRIM(nickname) = '')
+       AND name IS NOT NULL
+       AND TRIM(name) <> ''
+       AND LOWER(TRIM(name)) <> LOWER(TRIM(COALESCE(bank_name, '')))
+  `);
+
+  /*
+   * DROP COLUMN needs SQLite 3.35+ (iOS 15 / Android 12 ship it). Older
+   * runtimes throw, and a card table that keeps a stray column is harmless —
+   * the schema no longer selects it and the data has already been carried
+   * across — so the failure is swallowed rather than blocking every launch.
+   */
+  try {
+    expoDb.execSync(`ALTER TABLE cards DROP COLUMN name`);
+  } catch {
+    // Left in place; nothing reads it.
+  }
+}
 
 /** Create the schema if needed. Safe to call repeatedly; runs once per launch. */
 export function initialiseDatabase(): void {
@@ -1257,10 +1579,32 @@ export function initialiseDatabase(): void {
 
   // Unconditional and idempotent — see ensureAdditiveColumns' doc comment.
   ensureAdditiveColumns();
+  /*
+   * AFTER `ensureAdditiveColumns`, which is a real dependency: a device
+   * upgrading from before the nickname column existed gets it added there, and
+   * this pass writes into it. Run first, the carry-over would target a column
+   * that is not there yet and the old names would be dropped unread.
+   */
+  migrateCardNameToNickname();
   // Must run after columns are added (the rebuild copies whatever columns the
   // device actually has) and before anything writes `category_id`.
   repairSubcategoryForeignKey();
   ensureCurrentColors();
+  ensureCurrentCategoryIcons();
+  // Before `ensureCurrentFrequencies` — see that function's doc comment.
+  ensureOngoingFrequency();
+  ensureCurrentFrequencies();
+  /*
+   * AFTER `ensureCurrentFrequencies`, which is a real dependency and not just
+   * ordering: this pass only carries slips for lines that are ONGOING, so a
+   * line reclassified above must already have been reclassified for its photo
+   * to move in the same launch. Run the other way round, the slip would be
+   * skipped and then stranded on a line that no longer shows month-level ones.
+   *
+   * Also after the DDL-adjacent passes above: it INSERTs, so every table it
+   * names must already exist and carry its current columns.
+   */
+  carryStateSlipsToEntries();
 
   for (const statement of DDL) {
     expoDb.execSync(statement);
@@ -1289,6 +1633,19 @@ export function initialiseDatabase(): void {
    * rely on for upgraded devices.
    */
   ensureAdditiveColumns();
+
+  /*
+   * AGAIN after the DDL, for the same reason the additive pass runs twice.
+   *
+   * On an UPGRADE the earlier call did the work and this is a no-op — the
+   * column is already gone, and the pass returns at its `PRAGMA table_info`
+   * check. On a FRESH install the earlier call found no `cards` table at all
+   * (the DDL had not run), so it did nothing; the DDL then created the table
+   * from its own column list, which no longer has `name`, so there is again
+   * nothing to do. Running it on both sides costs one PRAGMA and removes the
+   * need to reason about which path a given device took.
+   */
+  migrateCardNameToNickname();
 
   // Runs after the DDL so the tables it touches are guaranteed to exist. Like
   // the helpers above it is idempotent and shape-driven, so a loan category

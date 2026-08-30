@@ -49,9 +49,21 @@ export const CATEGORY_ICONS: {
   { icon: 'flame-outline', label: 'Fuel', keywords: ['fuel', 'petrol', 'diesel', 'gasoline', 'ioc', 'ceypetco', 'filling'] },
   { icon: 'bus-outline', label: 'Transport', keywords: ['bus', 'train', 'commute', 'travel pass', 'pickme', 'uber', 'taxi', 'tuk', 'three wheel', 'fare'] },
   {
+    /*
+     * A CARD keeps the card icon, and sits above the general debt entry so it
+     * wins the match — "Credit card" contains "credit", and without this it
+     * would fall through to the debt mark below.
+     */
     icon: 'card-outline',
-    label: 'Loans',
-    keywords: ['loan', 'debt', 'lease', 'leasing', 'installment', 'instalment', 'credit', 'emi', 'repayment', 'finance', 'hire purchase'],
+    label: 'Credit card',
+    keywords: ['credit card', 'card', 'visa', 'mastercard', 'amex'],
+  },
+  {
+    // Debt in general, matching the Debt category in the catalog. A card is one
+    // PRODUCT among several here; these keywords cover leases, EMIs and pawning.
+    icon: 'cash-outline',
+    label: 'Debt',
+    keywords: ['loan', 'debt', 'lease', 'leasing', 'installment', 'instalment', 'credit', 'emi', 'repayment', 'finance', 'hire purchase', 'pawning'],
   },
   {
     icon: 'medkit-outline',

@@ -36,11 +36,7 @@ export function BankCardTile({
 }) {
   const { radius, shadow, space } = useTheme();
 
-  const brand = useBrand({
-    bankId: card.bankId,
-    bankName: card.bankName,
-    name: card.name,
-  });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName });
   const pad = compact ? space.md : space.lg;
   const ink = brand.onColor;
   const muted = ink === '#FFFFFF' ? 'rgba(255,255,255,0.78)' : 'rgba(16,24,40,0.66)';
@@ -90,9 +86,17 @@ export function BankCardTile({
               •••• {card.last4}
             </Text>
           ) : null}
-          <Text variant={compact ? 'bodyStrong' : 'heading'} color={ink} numberOfLines={1}>
-            {card.name}
-          </Text>
+          {/*
+            The card face already says the bank on the line above, so this is
+            the user's own name for the account — the one thing that tells two
+            accounts at the same bank apart. Omitted rather than repeated when
+            they never gave one.
+          */}
+          {card.nickname?.trim() ? (
+            <Text variant={compact ? 'bodyStrong' : 'heading'} color={ink} numberOfLines={1}>
+              {card.nickname.trim()}
+            </Text>
+          ) : null}
         </View>
       </LinearGradient>
     </View>

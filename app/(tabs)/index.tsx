@@ -600,7 +600,6 @@ export default function DashboardScreen() {
               const brand = resolveBrand({
                 bankId: account.card.bankId,
                 bankName: account.card.bankName,
-                name: account.card.name,
               });
               const done = account.toTransferMinor === 0;
               const label = accountLabel(account.card);

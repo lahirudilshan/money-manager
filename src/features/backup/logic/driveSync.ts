@@ -45,6 +45,9 @@ export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 /** The folder backups live in, created on first upload. */
 export const BACKUP_FOLDER_NAME = 'money-manager';
 
+/** Drive's "about this account" endpoint — see `accountRequest`. */
+const DRIVE_ABOUT = 'https://www.googleapis.com/drive/v3/about';
+
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
@@ -58,6 +61,19 @@ export interface DriveFile {
   modifiedTime: string;
   /** Bytes, as a string in the API. Parsed for display only. */
   size?: string;
+  /**
+   * The user's own name for this backup, carried in Drive's `description`.
+   *
+   * A local backup keeps its label INSIDE the snapshot, which the restore list
+   * reads at list time. That is not available here: Drive will not tell us what
+   * is in a file without downloading it, so a labelled backup uploaded to Drive
+   * came back as a bare timestamp — the label the user typed specifically to
+   * tell two restore points apart survived on the phone and vanished off it.
+   *
+   * `description` is metadata, so it arrives with the listing at no extra cost,
+   * and it is also what Drive's own web UI shows beside the file.
+   */
+  description?: string;
 }
 
 /** An HTTP request for the caller to execute. Keeps this module transport-free. */
@@ -116,10 +132,35 @@ export function parseFolderId(payload: unknown): string | null {
  * still listed. `trashed=false` matters: a deleted backup lingers for 30 days
  * and would otherwise appear as restorable when it is on its way out.
  */
+/**
+ * Ask Drive who the token belongs to.
+ *
+ * Inside the existing `drive.file` scope — Drive's own `about` endpoint returns
+ * the account's email without the `userinfo.email` scope, so showing which
+ * account is connected costs the user no extra permission. Asking for one just
+ * to render a label would be a poor trade.
+ */
+export function accountRequest(token: string): DriveRequest {
+  return {
+    url: `${DRIVE_ABOUT}?fields=user(emailAddress,displayName)`,
+    method: 'GET',
+    headers: auth(token),
+  };
+}
+
+/** The signed-in account's email, or null when the payload lacks one. */
+export function parseAccountEmail(payload: unknown): string | null {
+  if (payload === null || typeof payload !== 'object') return null;
+  const user = (payload as { user?: unknown }).user;
+  if (user === null || typeof user !== 'object') return null;
+  const email = (user as { emailAddress?: unknown }).emailAddress;
+  return typeof email === 'string' && email.length > 0 ? email : null;
+}
+
 export function listBackupsRequest(token: string, folderId: string): DriveRequest {
   const params = new URLSearchParams({
     q: `'${folderId}' in parents and trashed=false`,
-    fields: 'files(id,name,modifiedTime,size)',
+    fields: 'files(id,name,modifiedTime,size,description)',
     orderBy: 'modifiedTime desc',
     pageSize: '50',
   });
@@ -141,10 +182,19 @@ export function uploadBackupRequest(
   filename: string,
   contents: string,
   folderId: string,
+  /** The user's own name for this backup, stored as Drive's `description`. */
+  label?: string,
 ): DriveRequest {
   const boundary = 'money-manager-backup-boundary';
 
-  const metadata = JSON.stringify({ name: filename, parents: [folderId] });
+  // `description` is omitted entirely when there is no label, rather than sent
+  // as an empty string — an empty description is a value Drive stores and
+  // shows, and "" is not what the user meant by not typing one.
+  const metadata = JSON.stringify({
+    name: filename,
+    parents: [folderId],
+    ...(label ? { description: label } : {}),
+  });
 
   const body = [
     `--${boundary}`,

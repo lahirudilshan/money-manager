@@ -5,10 +5,10 @@ import { Alert, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { BankCardTile } from '~/features/accounts/components/BankCardTile';
 import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { Field } from '~/shared/components/forms';
-import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Surface, Text } from '~/shared/components/ui';
+import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Segmented, Surface, Text } from '~/shared/components/ui';
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { formatMoney, parseAmount, toMajor } from '~/shared/lib/money';
-import { accountLabel, BANKS } from '~/shared/data/banks';
+import { accountLabel, accountName, BANKS } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import type { Card } from '../../src/db/schema';
@@ -171,7 +171,7 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
   const { colors, space } = useTheme();
   const { card } = view;
 
-  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName });
   const hasGoal = typeof card.targetMinor === 'number' && card.targetMinor > 0;
   // Clamped at both ends: a balance can now go negative (spending can exceed
   // what was funded in), and a negative percentage would render a bar with a
@@ -260,7 +260,7 @@ function DetailModal({
   const { colors, space } = useTheme();
   const state = useAppStore();
   const [revealed, setRevealed] = useState(false);
-  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName });
 
   /**
    * The categories drawing on this account, each with what it costs a month.
@@ -285,17 +285,21 @@ function DetailModal({
   );
 
   function confirmDelete() {
-    Alert.alert(`Delete ${card.name}?`, 'Categories pointing at it will need a new account.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          state.deleteCard(card.id);
-          onClose();
+    Alert.alert(
+      `Delete ${accountName(card)}?`,
+      'Categories pointing at it will need a new account.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            state.deleteCard(card.id);
+            onClose();
+          },
         },
-      },
-    ]);
+      ],
+    );
   }
 
   return (
@@ -452,8 +456,16 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
 
   const [isCard, setIsCard] = useState(existing?.isCard ?? false);
   const [bankId, setBankId] = useState<string | null>(existing?.bankId ?? null);
-  const [name, setName] = useState(existing?.name ?? '');
-  /** The user's own label for this account, shown ahead of the bank in lists. */
+  /**
+   * The ONE name the user gives an account.
+   *
+   * This form used to ask twice — a "Full name" and a "Short name" — for what
+   * is a single question, and every list then had to rank the two against each
+   * other to pick a headline. The bank already supplies the account's formal
+   * identity, so all that is left to ask is what the USER calls it, and that is
+   * this. Optional: with one account per bank the bank name is already
+   * unambiguous, which is when a nickname is pure friction.
+   */
   const [nickname, setNickname] = useState(existing?.nickname ?? '');
   /*
    * Derived only — there is no field for it any more.
@@ -477,11 +489,26 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   // ever set it, so every account opened at zero.
 
   const brand = bankId ? BANKS.find((b) => b.id === bankId) : undefined;
-  const canSave = Boolean(name.trim() || brand);
+  /*
+   * How many OTHER accounts this bank already has — the edited one excluded, or
+   * every edit of a lone HNB account would claim it has a duplicate.
+   *
+   * A second account at one bank is exactly when a nickname stops being
+   * optional, so the hint under the field changes to say so.
+   */
+  const sameBankCount = brand
+    ? state.cards.filter((c) => c.bankId === brand.id && c.id !== editId).length
+    : 0;
+  /*
+   * A BANK is what makes the entry identifiable; the nickname only refines it.
+   *
+   * This used to also accept a typed name with no bank, which produced entries
+   * with no brand, no logo and no way to match an incoming SMS to them.
+   */
+  const canSave = Boolean(brand);
 
   function handleSave() {
-    const trimmed = name.trim() || brand?.shortName || '';
-    if (!trimmed) return;
+    if (!brand) return;
     // Last-4 is what matches an incoming SMS to this entry, so it is preserved
     // rather than re-derived from whichever number field the current type shows:
     // switching Account <-> Card clears the other type's number, which would
@@ -494,7 +521,6 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
       null;
 
     const patch = {
-      name: trimmed,
       // 'kind' (bank/wallet/savings/goal) was removed from the UI — every entry
       // added here is a plain bank account or card. Existing rows keep their kind.
       kind: existing?.kind ?? 'bank',
@@ -596,30 +622,24 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
           {/* Step 2: bank — one row that opens the list as its own step. */}
           <BankField selectedId={bankId} onPress={() => setPickingBank(true)} />
 
-          {/* The full name — what this account is, written out. */}
-          <Field
-            label="Full name"
-            value={name}
-            onChangeText={setName}
-            placeholder={isCard ? 'e.g. HNB Visa Platinum' : 'e.g. Salary account'}
-          />
-
           {/*
-            The short name, which is what tight rows actually show.
+            ONE name field, not two.
 
-            Labelled "Short name" rather than "Nickname" because that is the job
-            it does: the dashboard and the accounts list have room for a word,
-            not a sentence, and this is the word. Optional — a full name that is
-            already short needs no second version of itself.
+            The bank above already says what this account formally is, so the
+            only thing left to ask is what the user calls it — and asking that
+            once, in the words they would actually use, is what tells three
+            accounts at the same bank apart.
           */}
           <Field
-            label="Short name (optional)"
+            label="Nickname (optional)"
             value={nickname}
             onChangeText={setNickname}
-            placeholder={isCard ? 'e.g. Visa' : 'e.g. Salary, Joint, Rent'}
+            placeholder={isCard ? 'e.g. Visa, Everyday card' : 'e.g. Salary, Joint, Rent'}
           />
           <Text variant="caption" tone="muted" style={{ marginTop: -space.xs }}>
-            Used in lists where there is only room for a word.
+            {sameBankCount > 0
+              ? `You already have ${sameBankCount} ${brand?.shortName ?? 'other'} account${sameBankCount === 1 ? '' : 's'} — a nickname keeps them apart.`
+              : `Your own name for it. Leave it empty and it shows as ${brand?.shortName ?? 'the bank'}.`}
           </Text>
 
           {/* Step 4: the identifying details for each type. */}
@@ -668,75 +688,6 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
  * A two-option segmented control (Account / Card). Bigger tap targets and a
  * clearer selected state than a pill row, since this is the first choice made.
  */
-function Segmented({
-  options,
-  selectedKey,
-  onSelect,
-}: {
-  options: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap }[];
-  selectedKey: string;
-  onSelect: (key: string) => void;
-}) {
-  const { colors, radius, space } = useTheme();
-  return (
-    <View
-      style={{
-        flexDirection: 'row',
-        backgroundColor: colors.surfaceSunken,
-        borderRadius: radius.md,
-        padding: 4,
-        gap: 4,
-      }}
-    >
-      {options.map((option) => {
-        const selected = selectedKey === option.key;
-        return (
-          <Pressable
-            key={option.key}
-            onPress={() => onSelect(option.key)}
-            accessibilityRole="button"
-            accessibilityState={{ selected }}
-            accessibilityLabel={option.label}
-            style={{
-              flex: 1,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              paddingVertical: 11,
-              borderRadius: radius.sm,
-              backgroundColor: selected ? colors.surface : 'transparent',
-              ...(selected
-                ? {
-                    borderWidth: 1,
-                    borderColor: colors.hairline,
-                    shadowColor: '#000',
-                    shadowOpacity: 0.06,
-                    shadowRadius: 4,
-                    shadowOffset: { width: 0, height: 1 },
-                  }
-                : {}),
-            }}
-          >
-            <Ionicons
-              name={option.icon}
-              size={17}
-              color={selected ? colors.accent : colors.inkSecondary}
-            />
-            <Text
-              variant="small"
-              color={selected ? colors.ink : colors.inkSecondary}
-              style={{ fontWeight: selected ? '800' : '600' }}
-            >
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 /**
  * The bank, as one row on the form — logo, name, and a chevron into the list.
  *

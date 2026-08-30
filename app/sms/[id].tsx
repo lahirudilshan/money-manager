@@ -5,6 +5,13 @@ import { Pressable, View } from 'react-native';
 import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
 import { ManagePlanSheet } from '~/features/budget/components/ManagePlanSheet';
 import { HousePicker } from '~/features/budget/components/HousePicker';
+import { SplitEditor } from '~/features/budget/components/SplitEditor';
+import {
+  emptyPart,
+  validateSplit,
+  withAmount,
+  type SplitPart,
+} from '~/features/budget/logic/splits';
 import { AmountField, Field } from '~/shared/components/forms';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useModalClose } from '~/shared/hooks/useModalClose';
@@ -102,6 +109,24 @@ export default function SmsDraftModal() {
   }, [destinations, state.categories]);
 
   const [subcategoryId, setSubcategoryId] = useState(draft?.subcategoryId ?? '');
+  /**
+   * SPLIT MODE — one payment, several budget lines.
+   *
+   * Off by default and opened by an explicit control, because the vast majority
+   * of messages are exactly what they look like: one payment, one line.
+   * Presenting a split editor to everyone would tax the common case to serve
+   * the uncommon one.
+   *
+   * When it opens, the parts are SEEDED from what the app already believes —
+   * the detected line holding the full amount, plus one empty row. So the user
+   * starts from "all 5,000 is groceries" (which is the state they are
+   * correcting) and only has to type the part that is different, rather than
+   * rebuilding an allocation the app already got mostly right.
+   */
+  const [splitting, setSplitting] = useState(false);
+  const [splitParts, setSplitParts] = useState<SplitPart[]>([]);
+  /** Which part's line picker is open, by part key. Null when none is. */
+  const [pickingPartKey, setPickingPartKey] = useState<string | null>(null);
 
   /*
    * Pre-filled with the SMS amount, already display-formatted.
@@ -191,7 +216,21 @@ export default function SmsDraftModal() {
    * a new figure is the moment feedback becomes useful.
    */
   const amountError = amountText === initialAmountText ? null : validateAmount(amountText);
-  const canLog = subcategoryId !== '' && amountMinor > 0 && !amountError;
+  /**
+   * Whether the parts currently add up. Drives both the Save button and the
+   * editor's own running remainder — one source, so the button can never
+   * disagree with the figure the user is reading.
+   */
+  const splitValidation = validateSplit(splitParts, amountMinor);
+
+  /*
+   * With a split open, the SPLIT is the destination — the single `subcategoryId`
+   * no longer decides anything, and its parts must add up exactly before this
+   * can be written. Without one, the original rule stands.
+   */
+  const canLog = splitting
+    ? amountMinor > 0 && !amountError && splitValidation.valid
+    : subcategoryId !== '' && amountMinor > 0 && !amountError;
 
   // Shared with the draft card, so a matched account is named identically on the
   // row the user tapped and the screen it opened.
@@ -239,8 +278,37 @@ export default function SmsDraftModal() {
       subcategoryId,
       amountMinor,
       houseId: houseScoped ? effectiveHouseId : null,
+      // Only when the split is complete — a half-filled editor logs as an
+      // ordinary single-line entry rather than silently dropping the parts.
+      ...(splitting && splitValidation.valid
+        ? {
+            splits: splitParts.map((part) => ({
+              subcategoryId: part.subcategoryId!,
+              amountMinor: part.amountMinor!,
+              note: part.note ?? null,
+            })),
+          }
+        : null),
     });
     closeModal();
+  };
+
+  /**
+   * Open the split editor, seeded from the detection.
+   *
+   * The first part is the line the app already chose, carrying the WHOLE
+   * amount, and the second is empty. That is the shape of the correction the
+   * user came to make — "most of this was groceries, but 2,000 was pet food" —
+   * so they type one figure and tap "Use remainder" rather than re-entering an
+   * allocation the app had almost right.
+   */
+  const startSplit = () => {
+    const primary = subcategoryId || suggested?.id || null;
+    setSplitParts([
+      { key: 'part-primary', subcategoryId: primary, ...withAmount(amountMinor) },
+      { ...emptyPart(), key: 'part-second' },
+    ]);
+    setSplitting(true);
   };
 
   /** "Yes, that's right" — accept the suggestion and let the store learn it. */
@@ -488,6 +556,91 @@ export default function SmsDraftModal() {
         ) : null}
 
         {/*
+          SPLIT THIS PAYMENT.
+
+          Offered as a quiet secondary action under the detection, not as a mode
+          the user has to choose up front: nearly every message really is one
+          payment for one thing, and the split only becomes relevant once the
+          user reads the detection and thinks "yes, but part of that was
+          something else".
+        */}
+        {!splitting ? (
+          <Pressable
+            onPress={startSplit}
+            accessibilityRole="button"
+            accessibilityLabel="Was this payment for more than one category? Split it."
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.sm,
+              paddingVertical: 12,
+              paddingHorizontal: space.md,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderStyle: 'dashed',
+              borderColor: colors.hairlineStrong,
+              backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+            })}
+          >
+            <Ionicons name="help-circle-outline" size={17} color={colors.accent} />
+            <View style={{ flex: 1 }}>
+              {/*
+                Phrased as the QUESTION the user is answering, not as the
+                feature's name.
+
+                "Split across lines" is the app's word for the mechanism, and it
+                asks the user to already know that the mechanism exists and that
+                they need it. The question describes their receipt instead —
+                which they are holding — and the answer is a plain yes or no.
+              */}
+              <Text variant="small" style={{ fontWeight: '600' }}>
+                Was this for more than one category?
+              </Text>
+              <Text variant="caption" tone="muted">
+                e.g. groceries and pet food in one shop
+              </Text>
+            </View>
+            <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+              Yes, split it
+            </Text>
+          </Pressable>
+        ) : (
+          <View style={{ gap: space.sm }}>
+            <Row justify="space-between">
+              <Label>WHAT WAS THIS FOR?</Label>
+              <Pressable
+                onPress={() => setSplitting(false)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel the split and log this as one entry"
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+              >
+                <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                  It was just one
+                </Text>
+              </Pressable>
+            </Row>
+
+            <SplitEditor
+              totalMinor={amountMinor}
+              parts={splitParts}
+              onChange={setSplitParts}
+              currency={state.currency}
+              destinations={destinations.map((destination) => ({
+                id: destination.id,
+                name: destination.name,
+                categoryName: categoryNameOf(state, destination.id),
+                categoryColor:
+                  gridCategories.find((c) => c.id === destination.categoryId)?.color ??
+                  colors.accent,
+                icon: destination.icon,
+              }))}
+              onPickLine={setPickingPartKey}
+            />
+          </View>
+        )}
+
+        {/*
           What other users settled on for this merchant, when the crowd offers
           more than the one answer already shown above. Placed between the
           detected card and the full picker because that is the order of effort:
@@ -604,6 +757,39 @@ export default function SmsDraftModal() {
         />
 
       <ManagePlanSheet visible={manageOpen} onClose={() => setManageOpen(false)} />
+
+      {/*
+        Choosing the line for ONE part of a split.
+
+        The same category grid the whole screen uses, in its own sheet — so a
+        part is picked exactly the way an unsplit message's line is picked, and
+        the two cannot end up feeling like different controls. Keyed by part so
+        the selection lands on the row that opened it.
+      */}
+      <BottomSheet
+        visible={pickingPartKey !== null}
+        onClose={() => setPickingPartKey(null)}
+        title="Which line?"
+        icon="git-branch-outline"
+        iconColor={colors.accent}
+        scroll
+      >
+        <CategoryGridPicker
+          categories={gridCategories}
+          destinations={destinations}
+          selectedId={
+            splitParts.find((part) => part.key === pickingPartKey)?.subcategoryId ?? null
+          }
+          onSelect={(destinationId) => {
+            setSplitParts((current) =>
+              current.map((part) =>
+                part.key === pickingPartKey ? { ...part, subcategoryId: destinationId } : part,
+              ),
+            );
+            setPickingPartKey(null);
+          }}
+        />
+      </BottomSheet>
     </BottomSheet>
   );
 }

@@ -17,7 +17,7 @@ import {
 import { BottomSheet, Divider, FOOTER_CLEARANCE, GradientButton, Label, PinnedFooter, Row, StepHeader, Surface, Text } from '~/shared/components/ui';
 import { isHouseCatalogId, isHouseScopedCatalogId } from '~/features/budget/logic/houses';
 import { convertToLocalMinor, formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
-import { resolveBrand } from '~/shared/data/banks';
+import { accountLabel, accountName, resolveBrand } from '~/shared/data/banks';
 import {
   CATALOG_SUBCATEGORY_BY_ID,
   CATEGORY_CATALOG,
@@ -78,7 +78,7 @@ export default function OnboardingPlanScreen() {
    * it. So this drives a gentle count in the footer rather than a locked button.
    */
   const unsetCount = lines.filter(
-    (line) => line.plannedMinor <= 0 && line.frequency !== 'unplanned',
+    (line) => line.plannedMinor <= 0 && line.frequency !== 'ongoing',
   ).length;
   /*
    * An account IS required on a line you fund.
@@ -97,7 +97,7 @@ export default function OnboardingPlanScreen() {
    * such entry into that one account's transfer total.
    */
   const unfundedCount = lines.filter(
-    (line) => !line.cardId && line.frequency !== 'unplanned',
+    (line) => !line.cardId && line.frequency !== 'ongoing',
   ).length;
   const canBuild = lines.length > 0 && unfundedCount === 0;
 
@@ -164,10 +164,10 @@ export default function OnboardingPlanScreen() {
         icon: entry.subcategory.icon,
         type: entry.subcategory.type ?? 'expense',
         // No budget: fees are whatever they turn out to be, which is what
-        // `unplanned` means — the line sums its actuals.
+        // `ongoing` means — the line sums its actuals.
         plannedMinor: 0,
         dueDay: entry.subcategory.dueDay ?? 1,
-        frequency: entry.subcategory.frequency ?? 'unplanned',
+        frequency: entry.subcategory.frequency ?? 'ongoing',
         /*
          * NO account, deliberately.
          *
@@ -464,7 +464,7 @@ function PlanRow({
         </Text>
         <Text variant="caption" tone="muted" numberOfLines={1}>
           Day {line.dueDay}
-          {card ? ` · ${card.name}` : ''}
+          {card ? ` · ${accountName(card)}` : ''}
           {line.frequency !== 'monthly' ? ` · ${line.frequency.replace('_', '-')}` : ''}
         </Text>
       </View>
@@ -582,7 +582,7 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                       than one payment.
                     */}
                     <Label>
-                      {line.frequency === 'unplanned' ? 'MONTHLY BUDGET' : 'PLAN AMOUNT'}
+                      {line.frequency === 'ongoing' ? 'MONTHLY BUDGET' : 'PLAN AMOUNT'}
                     </Label>
                   </View>
                   {/*
@@ -680,8 +680,8 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
               </View>
 
               {/*
-                `includeUnplanned` — an ongoing spending budget is a cadence a
-                plan needs from the start.
+                `includeOngoing` — an ongoing line is a cadence a plan needs
+                from the start.
 
                 Groceries, fuel and cash are not one payment on a day; they are a
                 monthly budget that many entries draw against. Leaving that
@@ -692,7 +692,7 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
               <FrequencyPicker
                 label="Frequency"
                 value={line.frequency}
-                includeUnplanned
+                includeOngoing
                 onChange={(frequency) =>
                   draft.updateLine(line.id, {
                     frequency: frequency as DraftLine['frequency'],
@@ -732,7 +732,7 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
               ) : null}
 
               {/* An ongoing budget has no single day it falls due. */}
-              {line.frequency === 'unplanned' ? null : (
+              {line.frequency === 'ongoing' ? null : (
                 <DayPicker
                   value={line.dueDay}
                   onChange={(dueDay) => draft.updateLine(line.id, { dueDay })}
@@ -752,21 +752,21 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                   <Label>
                     {line.type === 'income'
                       ? 'PAID IN TO'
-                      : line.frequency === 'unplanned'
+                      : line.frequency === 'ongoing'
                         ? 'USUALLY PAID FROM'
                         : 'PAID FROM'}
                   </Label>
-                  {!line.cardId && line.frequency !== 'unplanned' ? (
+                  {!line.cardId && line.frequency !== 'ongoing' ? (
                     <Text variant="caption" color={colors.danger} style={{ fontWeight: '700' }}>
                       Required
                     </Text>
-                  ) : line.frequency === 'unplanned' ? (
+                  ) : line.frequency === 'ongoing' ? (
                     <Text variant="caption" tone="muted">
                       Optional
                     </Text>
                   ) : null}
                 </Row>
-                {line.frequency === 'unplanned' ? (
+                {line.frequency === 'ongoing' ? (
                   <Text variant="caption" tone="muted">
                     Each entry records its own account, so this can be left
                     unset — useful for bank fees, which any of your accounts can
@@ -778,7 +778,6 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                       const brand = resolveBrand({
                         bankId: card.bankId,
                         bankName: card.bankName,
-                        name: card.name,
                       });
                       const selected = line.cardId === card.id;
                       return (
@@ -812,11 +811,11 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                           <BankLogo brand={brand} size={40} />
                           <View style={{ flex: 1 }}>
                             <Text variant="bodyStrong" numberOfLines={1}>
-                              {card.name}
+                              {accountLabel(card).primary}
                             </Text>
-                            {card.bankName ? (
+                            {accountLabel(card).secondary ? (
                               <Text variant="caption" tone="muted" numberOfLines={1}>
-                                {card.bankName}
+                                {accountLabel(card).secondary}
                               </Text>
                             ) : null}
                           </View>

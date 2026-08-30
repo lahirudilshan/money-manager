@@ -20,16 +20,19 @@ import {
   buildTokenRefresh,
   isTokenValid,
   parseAuthRedirect,
+  isRefreshTokenDead,
   parseTokenResponse,
   redirectUriFor,
   type TokenSet,
 } from '~/features/backup/logic/googleAuth';
 import {
+  accountRequest,
   createFolderRequest,
   findFolderRequest,
   deleteBackupRequest,
   downloadBackupRequest,
   listBackupsRequest,
+  parseAccountEmail,
   parseFileList,
   parseFolderId,
   uploadBackupRequest,
@@ -308,8 +311,22 @@ async function accessToken(): Promise<string | null> {
       body: request.body,
     });
 
-    const tokens = parseTokenResponse(await response.json());
-    if (!tokens) return null;
+    const payload = await response.json();
+    const tokens = parseTokenResponse(payload);
+    if (!tokens) {
+      /*
+       * A REVOKED or expired refresh token is permanent — no retry recovers
+       * it. Forget the connection so the screen drops to "Not connected" and
+       * offers a sign-in, instead of showing "Connected" beside an upload that
+       * fails every time with no way to act on the message.
+       *
+       * Only on `invalid_grant`/`invalid_client`. A network drop or a Google
+       * 500 must NOT sign the user out — they will work again on their own,
+       * and clearing the token would turn a blip into a re-authentication.
+       */
+      if (isRefreshTokenDead(payload)) await signOut();
+      return null;
+    }
 
     // A refresh response carries no new refresh token; keep the stored one.
     cachedToken = { ...tokens, refreshToken: tokens.refreshToken ?? refreshToken };
@@ -367,28 +384,107 @@ export interface UploadResult {
  * shows it to the user — and "backup failed" with no reason is exactly the kind
  * of thing that makes someone stop trusting a backup.
  */
-export async function uploadBackup(filename: string, contents: string): Promise<UploadResult> {
+export async function uploadBackup(
+  filename: string,
+  contents: string,
+  /**
+   * The user's own name for this backup, stored as the Drive file's
+   * description so the restore list can show it without downloading the file.
+   */
+  label?: string,
+): Promise<UploadResult> {
   const token = await accessToken();
   if (!token) return { ok: false, error: 'Sign in to Google again to back up.' };
 
   const folder = await folderId(token);
   if (!folder) return { ok: false, error: 'Could not open the money-manager folder in Drive.' };
 
-  const result = await send(uploadBackupRequest(token, filename, contents, folder));
+  const result = await send(uploadBackupRequest(token, filename, contents, folder, label));
   if (!result) return { ok: false, error: 'The upload did not complete. Check your connection.' };
 
   return { ok: true, uploadedAt: new Date().toISOString() };
 }
 
-/** The backups currently in Drive, newest first. Empty on any failure. */
-export async function listDriveBackups(): Promise<DriveFile[]> {
+/**
+ * The connected account's email, for the UI to name it.
+ *
+ * Cached in the secure store beside the refresh token so the label survives a
+ * restart without a network round-trip — and is cleared by `signOut`, which
+ * already deletes that key, so it can never outlive the connection it
+ * describes.
+ *
+ * Returns null rather than throwing on any failure: a missing label is a
+ * cosmetic loss, and a screen that cannot render because an optional string
+ * did not arrive would be a far worse one.
+ */
+export async function connectedAccount(): Promise<string | null> {
+  const store = loadSecureStore();
+  if (!store) return null;
+
+  try {
+    const cached = await store.getItemAsync(ACCOUNT_LABEL_KEY);
+    if (cached) return cached;
+
+    const token = await accessToken();
+    if (!token) return null;
+
+    const email = parseAccountEmail(await send(accountRequest(token)));
+    if (email) await store.setItemAsync(ACCOUNT_LABEL_KEY, email);
+    return email;
+  } catch {
+    return null;
+  }
+}
+
+/** What a listing produced — see `listDriveBackupsResult`. */
+export interface ListResult {
+  ok: boolean;
+  files: DriveFile[];
+  /** Why the listing failed, for the UI to show. */
+  error?: string;
+  /** True when the account is no longer connected and must sign in again. */
+  signedOut?: boolean;
+}
+
+/**
+ * The backups currently in Drive, newest first, WITH why an empty list is
+ * empty.
+ *
+ * The distinction is the whole point. An empty array alone cannot say whether
+ * the account genuinely has no backups or whether we simply could not look —
+ * and those need opposite responses from the user. Reporting "no backups yet"
+ * beside a connected account that holds nine days of them is how someone
+ * concludes their data is gone.
+ */
+export async function listDriveBackupsResult(): Promise<ListResult> {
   const token = await accessToken();
-  if (!token) return [];
+  // `accessToken` clears the stored credentials when the refresh token is
+  // dead, so a null here after a connected session means exactly that.
+  if (!token) {
+    return {
+      ok: false,
+      files: [],
+      signedOut: true,
+      error: 'Sign in to Google again to see your Drive backups.',
+    };
+  }
 
   const folder = await folderId(token);
-  if (!folder) return [];
+  if (!folder) {
+    return { ok: false, files: [], error: 'Could not open the money-manager folder in Drive.' };
+  }
 
-  return parseFileList(await send(listBackupsRequest(token, folder)));
+  const payload = await send(listBackupsRequest(token, folder));
+  if (!payload) {
+    return { ok: false, files: [], error: 'Could not reach Drive. Check your connection.' };
+  }
+
+  return { ok: true, files: parseFileList(payload) };
+}
+
+/** The backups currently in Drive, newest first. Empty on any failure. */
+export async function listDriveBackups(): Promise<DriveFile[]> {
+  return (await listDriveBackupsResult()).files;
 }
 
 /** What a download produced: the file's raw text, or why it failed. */

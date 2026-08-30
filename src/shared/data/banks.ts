@@ -275,54 +275,62 @@ export function resolveBrand(input: {
 /**
  * How an account reads everywhere in the app.
  *
- * The headline is always what the USER would call this account, in descending
- * order of how much it tells them apart:
+ * An account has exactly two pieces of identity: the BANK it is at, and the
+ * user's own name for it. There used to be a third — a free-text `name`
+ * alongside the nickname — and the ranking here had to guess which of the two
+ * the user meant as the headline, using string length as a proxy. Asking once
+ * removed the guess:
  *
- *   1. the **nickname**, when set. Someone holding three HNB accounts cannot
- *      tell them apart from "HNB ••4150" three times, and the whole point of
- *      naming one "Salary" is to see that word first.
- *   2. the account's own **name**, when it is shorter than the bank's official
- *      one. Typing "BOC" for "Bank of Ceylon" is the user abbreviating on
- *      purpose, and showing the long form back at them ignores that — it also
- *      crowds out the figure beside it in a list row.
- *   3. the **bank** name, for an account the user never named distinctly.
+ *   - a nickname is set → it leads, with the bank beneath it. That is the whole
+ *     reason to type one, and it is what tells three HNB accounts apart.
+ *   - no nickname → the bank leads. For someone with one account per bank this
+ *     is already unambiguous, which is why the nickname stays optional.
  *
- * Falls back gracefully — a hand-typed account with no bank at all shows its
- * name as the primary and nothing secondary.
+ * Falls back to the neutral brand's name rather than an empty string, so a row
+ * always renders something rather than collapsing.
  */
 export function accountLabel(card: {
   bankId?: string | null;
   bankName?: string | null;
   nickname?: string | null;
-  name: string;
 }): { primary: string; secondary: string | null } {
-  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = resolveBrand({ bankId: card.bankId, bankName: card.bankName });
   const bank = card.bankName ?? (brand.id !== 'other' ? brand.name : null);
 
-  // The user's own name for it leads when set — that is what it is for.
   const nickname = card.nickname?.trim();
-  if (nickname) {
-    return { primary: nickname, secondary: bank ?? (card.name !== nickname ? card.name : null) };
-  }
+  if (nickname) return { primary: nickname, secondary: bank };
 
-  const name = card.name?.trim();
+  return { primary: bank ?? brand.name, secondary: null };
+}
 
-  if (bank) {
-    /*
-     * A shorter self-chosen name beats the bank's official one.
-     *
-     * "BOC" against "Bank of Ceylon" is the user's own abbreviation, and it is
-     * the string they recognise at a glance. Compared by length rather than by
-     * a hard-coded abbreviation table, since that generalises to any bank and
-     * any shorthand the user invents.
-     */
-    if (name && name !== bank && name.length < bank.length) {
-      return { primary: name, secondary: bank };
-    }
+/**
+ * The single string to use where only one will fit — a list row, an alert
+ * title, a chart label.
+ *
+ * `accountLabel().primary` with the bank appended when it is doing the
+ * distinguishing work, which is the shape almost every caller of the old
+ * `card.name` actually wanted.
+ */
+export function accountName(card: {
+  bankId?: string | null;
+  bankName?: string | null;
+  nickname?: string | null;
+}): string {
+  return accountLabel(card).primary;
+}
 
-    const secondary = name && name !== bank ? name : null;
-    return { primary: bank, secondary };
-  }
-
-  return { primary: name || card.name, secondary: null };
+/**
+ * The SHORT form — the bank's short name, or the nickname when one is set.
+ *
+ * For places with room for a word and not a phrase: the comma-separated bank
+ * list on a category card, a loan row, a tile caption.
+ */
+export function accountShortName(card: {
+  bankId?: string | null;
+  bankName?: string | null;
+  nickname?: string | null;
+}): string {
+  const nickname = card.nickname?.trim();
+  if (nickname) return nickname;
+  return resolveBrand({ bankId: card.bankId, bankName: card.bankName }).shortName;
 }

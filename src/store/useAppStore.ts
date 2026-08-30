@@ -28,6 +28,7 @@ import {
   type Ratios,
   type SubcategoryStatus,
 } from '~/features/budget/logic/planning';
+import { resolveBrand } from '~/shared/data/banks';
 import { suggestCategoryIcon } from '~/shared/data/categoryIcons';
 import { groupColors } from '~/shared/theme';
 import {
@@ -101,7 +102,8 @@ import {
   notifyDraftsImported,
 } from '~/shared/lib/notifications';
 import {
-  isUnplanned,
+  isOngoing,
+  LOAN_LINE_ICON,
   supportsSavingPlan,
   type NewVehicle,
   type Vehicle,
@@ -155,7 +157,7 @@ export interface AppState {
   /** Per-category bulk-transfer status for the current period. */
   categoryStates: Map<string, CategoryState>;
   fundingTotals: Map<string, Minor>;
-  /** SUM of child transactions per unplanned subcategory, for the period. */
+  /** SUM of child transactions per ongoing subcategory, for the period. */
   transactionTotals: Map<string, Minor>;
   incomes: Income[];
   loans: Loan[];
@@ -311,8 +313,24 @@ export interface AppState {
   unfundCategory: (categoryId: string) => void;
 
   reorderCategories: (orderedIds: string[]) => void;
+  /**
+   * Reorder the bills inside ONE category.
+   *
+   * Scoped to a single category on purpose — `sortOrder` on a subcategory is
+   * only ever compared against its siblings, so the ids passed must all share a
+   * parent.
+   */
+  reorderSubcategories: (categoryId: string, orderedIds: string[]) => void;
 
-  addCategory: (input: Omit<NewCategory, 'id' | 'color'>) => Category;
+  /**
+   * `color` is OPTIONAL, not omitted.
+   *
+   * The user now picks one in the category form (see `categoryColors.ts`), and
+   * that choice must survive; the rotating palette below remains for the
+   * callers that create a category without a user in the loop — the SMS
+   * auto-file path and the learned-category path.
+   */
+  addCategory: (input: Omit<NewCategory, 'id' | 'color'> & { color?: string }) => Category;
   updateCategory: (id: string, patch: Partial<NewCategory>) => void;
   /**
    * Delete a category and its lines. Refuses — reporting why — when it holds a
@@ -346,7 +364,7 @@ export interface AppState {
   /** Move a subcategory under a different parent category. */
   changeSubcategoryParent: (id: string, newCategoryId: string) => void;
 
-  /** Add an entry to an unplanned subcategory. Period is derived from `date`. */
+  /** Add an entry to an ongoing subcategory. Period is derived from `date`. */
   addTransaction: (input: {
     subcategoryId: string;
     name: string;
@@ -434,6 +452,18 @@ export interface AppState {
       note?: string | null;
       /** Which property this payment was for — see core/houses.ts. */
       houseId?: string | null;
+      /**
+       * SPLIT this payment across several budget lines.
+       *
+       * One 5,000 shop is one debit and one SMS, but often not one budget line
+       * — 3,000 groceries and 2,000 pet food. When supplied, the parts must sum
+       * to the payment (`validateSplit` enforces it at the UI boundary) and the
+       * money is recorded as ONE transaction whose allocation lives in
+       * `transaction_splits`, so the app still agrees with the bank statement.
+       *
+       * Absent for the ordinary case, which is unchanged.
+       */
+      splits?: readonly { subcategoryId: string; amountMinor: Minor; note?: string | null }[];
     },
   ) => void;
   /** Discard a queued draft without logging it. */
@@ -1061,7 +1091,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     /*
      * Planned amount stays 0: the user has not planned this line, and seeding it
      * from a single SMS would invent a budget from one observation. The amount
-     * lands as the logged actual, so the line shows as unplanned spending —
+     * lands as the logged actual, so the line shows as ongoing spending —
      * the honest reading of "this happened and you had not budgeted for it".
      */
     const created = get().addSubcategory({
@@ -1255,10 +1285,32 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     get().refreshBoard();
   },
 
+  reorderSubcategories(categoryId, orderedIds) {
+    /*
+     * The passed ids are filtered against the category's ACTUAL children rather
+     * than trusted.
+     *
+     * The list screen holds a filtered view (a search, or "unpaid only"), so a
+     * drag there produces an order covering only the visible rows. Writing that
+     * straight through would renumber three of a category's eight bills to
+     * 0,1,2 and collide them with the five it never saw. Reconciling here keeps
+     * the hidden lines in their existing relative order behind the ones the
+     * user actually arranged.
+     */
+    const siblings = get().subcategories.filter((sub) => sub.categoryId === categoryId);
+    const moved = orderedIds.filter((id) => siblings.some((sub) => sub.id === id));
+    const untouched = siblings.filter((sub) => !moved.includes(sub.id)).map((sub) => sub.id);
+
+    subcategoryRepo.reorder([...moved, ...untouched]);
+    get().refreshBoard();
+  },
+
   addCategory(input) {
     const created = categoryRepo.create({
       ...input,
-      color: nextColor(get().categories.length),
+      // An explicit choice wins; the rotation is the fallback for the paths
+      // that create a category with no user present to pick one.
+      color: input.color ?? nextColor(get().categories.length),
       /*
        * Default to the END of the board, not the top.
        *
@@ -1339,12 +1391,93 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   updateSubcategory(id, patch) {
     // Saving plans belong only to yearly lines (product rule). If this edit
     // moves the line off yearly, wipe the plan fields so no stale sinking-fund
-    // data lingers on a monthly/one-time/unplanned line.
-    const nextFrequency = patch.frequency ?? get().subcategories.find((s) => s.id === id)?.frequency;
+    // data lingers on a monthly/one-time/ongoing line.
+    const current = get().subcategories.find((s) => s.id === id);
+    const nextFrequency = patch.frequency ?? current?.frequency;
     const clearPlan =
       nextFrequency !== undefined && !supportsSavingPlan(nextFrequency)
         ? { planTargetMinor: null, planDueDate: null, planStartDate: null }
         : {};
+
+    /*
+     * Switching an ONGOING line to a dated bill collapses its entries into one.
+     *
+     * An ongoing line accumulates many charges; a dated bill holds exactly one. Left
+     * alone, a "Groceries" line with five entries became a bill claiming those
+     * five sum to a single payment — and, since any entry settles a bill, one
+     * that silently marked itself paid.
+     *
+     * The entries are merged rather than dropped: the money was really spent,
+     * and deleting a month of records because a picker changed would be the
+     * worst possible reading of the gesture. The survivor keeps the total and
+     * says where it came from.
+     */
+    const becomingPlanned =
+      patch.frequency !== undefined &&
+      !isOngoing(patch.frequency) &&
+      current != null &&
+      isOngoing(current.frequency);
+
+    if (becomingPlanned) {
+      const period = get().period;
+      const entries = transactionRepo.bySubcategoryPeriod(id, period);
+      if (entries.length > 0) {
+        /*
+         * Sum the entries into the month's typed actual, then drop them.
+         *
+         * A dated bill shows one amount field and no entry list, so entries
+         * left in place would still count toward the total (see `billActual`)
+         * while being invisible and uneditable on the screen. Their sum is
+         * carried into the field that IS shown, with what they were kept as a
+         * note so the detail is not simply lost.
+         */
+        const total = entries.reduce((sum, entry) => sum + entry.amountMinor, 0);
+        const detail = entries
+          .map((entry) => `${entry.name}: ${entry.amountMinor / 100}`)
+          .join(', ');
+        for (const entry of entries) transactionRepo.remove(entry.id);
+        stateRepo.logTransaction(id, period, {
+          status: 'paid',
+          actualMinor: total,
+          note:
+            entries.length > 1
+              ? `Combined from ${entries.length} entries — ${detail}`
+              : (entries[0].note ?? null),
+        });
+      }
+    }
+
+    /*
+     * Switching a BILL to an ongoing line carries its actual across as an entry.
+     *
+     * A paid bill often has no transaction at all — the paid toggle and a
+     * confirmed SMS both write a per-month state row instead. An ongoing line reads
+     * only its entries, so without this the line would flip to "nothing spent"
+     * and lose a payment the user had already recorded.
+     */
+    const becomingBudget =
+      patch.frequency !== undefined &&
+      isOngoing(patch.frequency) &&
+      current != null &&
+      !isOngoing(current.frequency);
+
+    if (becomingBudget) {
+      const period = get().period;
+      const actual = get().states.get(id)?.actualMinor ?? null;
+      const alreadyLogged = transactionRepo.bySubcategoryPeriod(id, period).length > 0;
+      if (actual != null && actual > 0 && !alreadyLogged) {
+        transactionRepo.create({
+          subcategoryId: id,
+          period,
+          name: current!.name,
+          amountMinor: actual,
+          date: new Date(),
+          note: 'Carried over when this line became ongoing',
+          houseId: null,
+        });
+      }
+    }
+
     subcategoryRepo.update(id, { ...patch, ...clearPlan });
     get().refreshBoard();
   },
@@ -1362,9 +1495,30 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   },
 
   addTransaction(input) {
+    const period = periodKey(input.date);
+
+    /*
+     * A DATED line holds ONE entry a month — it is a single bill paid once
+     * (rent, the electricity bill, a subscription), so a second entry for the
+     * same month is a correction of the first, not another payment.
+     *
+     * Replacing rather than refusing is deliberate: the second entry usually
+     * arrives from Smart Detect confirming the very payment the user had
+     * already typed in, and rejecting it would leave the accurate bank figure
+     * on the floor while keeping the hand-typed guess.
+     *
+     * An ongoing line accumulates instead, which is the whole point of it.
+     */
+    const line = get().subcategories.find((s) => s.id === input.subcategoryId);
+    if (line && !isOngoing(line.frequency)) {
+      for (const existing of transactionRepo.bySubcategoryPeriod(input.subcategoryId, period)) {
+        transactionRepo.remove(existing.id);
+      }
+    }
+
     transactionRepo.create({
       subcategoryId: input.subcategoryId,
-      period: periodKey(input.date),
+      period,
       name: input.name,
       amountMinor: input.amountMinor,
       date: input.date,
@@ -1434,13 +1588,20 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       interestMethod: loan.interestMethod,
     });
 
+    /*
+     * Icons match the catalog's Debt category (see categoryCatalog.ts): a
+     * banknote for the group, and the loan's own kind for each line. They are
+     * repeated rather than read from the catalog because this row is created by
+     * a migration path too — see `consolidateDebtCategories` in db/client.ts,
+     * which must agree with this.
+     */
     const debtCategory =
       get().categories.find((category) => category.id === DEBT_CATEGORY_ID) ??
       categoryRepo.create({
         id: DEBT_CATEGORY_ID,
         name: 'Debt',
         color: '#B7791F',
-        icon: 'trending-down-outline',
+        icon: 'cash-outline',
         dueDay: 1,
       });
 
@@ -1449,7 +1610,16 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       categoryId: debtCategory.id,
       plannedMinor: installmentMinor,
       frequency: 'monthly',
-      icon: 'trending-down-outline',
+      // Per KIND, so a lease and a mortgage are told apart at a glance rather
+      // than every debt line wearing the same mark as its parent.
+      icon: LOAN_LINE_ICON[loan.kind] ?? 'cash-outline',
+      /*
+       * The LENDER'S colour, so the line on the board and the card on the Loans
+       * tab are recognisably the same debt. Three loans under one Debt category
+       * otherwise render as three identical amber rows, and the user has to
+       * read each name to tell which bank they are looking at.
+       */
+      color: loan.bankId ? resolveBrand({ bankId: loan.bankId }).color : debtCategory.color,
       loanId: loan.id,
     });
 
@@ -1481,6 +1651,10 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       subcategoryRepo.update(sub.id, {
         name: updated.name,
         plannedMinor: installmentMinor,
+        // Moving the loan to a different lender re-colours its line too, or the
+        // board would keep showing the old bank's hue.
+        ...(updated.bankId ? { color: resolveBrand({ bankId: updated.bankId }).color } : null),
+        icon: LOAN_LINE_ICON[updated.kind] ?? 'cash-outline',
       });
     }
 

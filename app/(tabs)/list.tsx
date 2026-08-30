@@ -12,9 +12,9 @@ import {
   UIManager,
   View,
 } from 'react-native';
+import { Pressable as GHPressable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AccountField } from '~/features/accounts/components/AccountPicker';
-import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { BillFields, useBillDraft } from '~/features/budget/components/BillFields';
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { BottomSheet, Divider, Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
@@ -32,7 +32,7 @@ import {
   type BoardTotals,
   type PlanHealth,
 } from '~/features/budget/logic/planning';
-import { resolveBrand } from '~/shared/data/banks';
+import { DragReorderList } from '~/shared/components/DragReorderList';
 import {
   selectBoardTotals,
   selectCategoryViews,
@@ -41,7 +41,7 @@ import {
   useAppStore,
   type CategoryView,
 } from '../../src/store/useAppStore';
-import { HEALTH_VISUALS, statusStyle, washFor } from '~/shared/theme';
+import { HEALTH_VISUALS, shadeHex, statusStyle, washFor } from '~/shared/theme';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -64,9 +64,12 @@ const animate = () =>
  *
  * Each card carries the category's identity, its bulk-transfer state (one tap
  * to mark the salary money moved to its account), a paid-progress bar, and —
- * when expanded — its bills as a checklist with a big tap target per line and
- * an "Add bill" action. Reading the plan and working through it happen on the
- * same screen; the detail pages are only for settings and per-bill edits.
+ * when expanded — its bills and an "Add bill" action.
+ *
+ * The bills READ here and are acted on one level down: a row opens its detail
+ * page, where a dated bill is settled and an ongoing line's entries are logged. The
+ * row used to carry a tap-to-pay checkbox; paying is now a deliberate act
+ * rather than a stray tap on a screen whose every other gesture navigates.
  */
 export default function ListScreen() {
   const { colors, space } = useTheme();
@@ -102,6 +105,20 @@ export default function ListScreen() {
   const [search, setSearch] = useState('');
   const [addingToCategoryId, setAddingToCategoryId] = useState<string | null>(null);
   const [showingPlanDetail, setShowingPlanDetail] = useState(false);
+  /**
+   * True for the duration of a card drag.
+   *
+   * While it is set, EVERY card renders collapsed regardless of the user's own
+   * choices — an expanded category is several hundred points tall, so dragging
+   * one meant scrolling blind past a wall of bills with no sense of where the
+   * card would land. Collapsed, the whole board is short uniform rows and the
+   * destination is visible.
+   *
+   * The user's own `collapsed` set is untouched, so releasing restores exactly
+   * what they had open. Kept separate from that set rather than folded into it
+   * for precisely that reason.
+   */
+  const [dragging, setDragging] = useState(false);
 
   const addingToCategory = views.find((v) => v.category.id === addingToCategoryId)?.category;
   const allCollapsed = views.length > 0 && collapsed.size === views.length;
@@ -148,6 +165,17 @@ export default function ListScreen() {
       })
       .filter((view) => view.subcategories.length > 0);
   }, [views, filter, query]);
+
+  /**
+   * Whether the list on screen is the WHOLE board, in its real order.
+   *
+   * Only then can a drag be trusted: with a filter or a search active the
+   * visible rows are a subset, and an order derived from them would be written
+   * over lines the user never saw. The store also reconciles hidden siblings
+   * defensively (see `reorderSubcategories`), but not offering the gesture at
+   * all is the clearer contract.
+   */
+  const reorderLocked = filter !== 'all' || query.length > 0;
 
   const paidPct =
     totals.plannedMinor > 0 ? Math.round((totals.paidMinor / totals.plannedMinor) * 100) : 0;
@@ -338,19 +366,67 @@ export default function ListScreen() {
           onAction={views.length === 0 ? () => router.push('/category/new') : undefined}
         />
       ) : (
-        <View style={{ gap: space.md }}>
-          {filtered.map((view) => (
+        /*
+         * Hold a card to drag it into a new position.
+         *
+         * Reordering is DISABLED while a filter or a search is narrowing the
+         * list: what is on screen is then a subset, and an arrangement made
+         * against it would be written as though it were the whole board — the
+         * user would drag two visible cards and silently renumber the eight
+         * they cannot see. `reorderCategories` persists the order, so the
+         * arrangement survives the month change and the next launch.
+         */
+        <DragReorderList
+          /*
+           * Animate the collapse, so the board folding down at the start of a
+           * drag reads as one motion rather than a jump cut.
+           *
+           * `animate()` is the same 160ms configureNext the manual collapse
+           * toggle uses, so a card closing because a drag began and a card
+           * closing because it was tapped look identical.
+           */
+          onDragActiveChange={(active) => {
+            animate();
+            setDragging(active);
+          }}
+          /*
+           * `id` is lifted from the nested category so the list has the stable
+           * key it sorts by — a `CategoryView` is a composite with no id of its
+           * own, and keying on the array index would reshuffle every row's
+           * identity on the very reorder being performed.
+           */
+          items={filtered.map((view) => ({ ...view, id: view.category.id }))}
+          enabled={!reorderLocked}
+          estimatedHeight={220}
+          gap={space.md}
+          onReorder={(orderedIds) => state.reorderCategories(orderedIds)}
+          renderItem={(view, _index, isDraggedCard) => (
             <CategoryCard
-              key={view.category.id}
               view={view}
-              collapsed={collapsed.has(view.category.id)}
+              dragging={isDraggedCard}
+              reorderLocked={reorderLocked}
+              /*
+               * `dragging` is the LIST's state — true while ANY card is being
+               * dragged — not this row's flag.
+               *
+               * This read `dragging`, the third `renderItem` argument, which is
+               * true only for the card under the finger. So the one card being
+               * dragged collapsed and every other card stayed expanded: the
+               * exact opposite of the intent, and the reason the board still
+               * scrolled past walls of bills mid-drag. The row flag is now
+               * named `isDraggedCard` so the two cannot be confused again.
+               */
+              collapsed={dragging || collapsed.has(view.category.id)}
               onToggleCollapsed={() => toggle(view.category.id)}
               onOpenSettings={() => router.push(`/category/${view.category.id}`)}
               onOpenBill={(id) => router.push(`/subcategory/${id}`)}
               onAddBill={() => setAddingToCategoryId(view.category.id)}
+              onReorderBills={(orderedIds) =>
+                state.reorderSubcategories(view.category.id, orderedIds)
+              }
             />
-          ))}
-        </View>
+          )}
+        />
       )}
 
         <AddSubcategorySheet
@@ -1021,26 +1097,35 @@ function ProgressBar({ pct, color, height = 8 }: { pct: number; color: string; h
 function CategoryCard({
   view,
   collapsed,
+  dragging = false,
+  reorderLocked = false,
   onToggleCollapsed,
   onOpenSettings,
   onOpenBill,
   onAddBill,
+  onReorderBills,
 }: {
   view: CategoryView;
   collapsed: boolean;
+  /** True while this card is the one being dragged, so it can lift. */
+  dragging?: boolean;
+  /** True when a filter/search means the visible order is not the real one. */
+  reorderLocked?: boolean;
   onToggleCollapsed: () => void;
   onOpenSettings: () => void;
   onOpenBill: (subcategoryId: string) => void;
   onAddBill: () => void;
+  onReorderBills: (orderedIds: string[]) => void;
 }) {
-  const { colors, radius, space, mode } = useTheme();
+  const { colors, radius, shadow, space, mode } = useTheme();
   const state = useAppStore();
-  const { category, card, summary, subcategories } = view;
+  const { category, summary, subcategories } = view;
 
   const paidPct =
     summary.subcategoryCount > 0
       ? Math.round((summary.counts.paid / summary.subcategoryCount) * 100)
       : 0;
+
 
   // A faint wash of the category colour ties the card to its identity without
   // shouting; the header icon carries the full-strength colour.
@@ -1053,9 +1138,29 @@ function CategoryCard({
     <Surface
       padded={false}
       style={{
+        /*
+         * ALWAYS clipped.
+         *
+         * This briefly switched to `visible` while dragging, on the theory that
+         * hidden would clip the lifted card's shadow. It does not — the shadow
+         * is drawn outside the view's bounds and `overflow` governs its
+         * CHILDREN — and dropping it let the header's tinted background and the
+         * bill rows square off the rounded corners, so the card visibly changed
+         * shape the moment it was picked up.
+         *
+         * The lift is carried by the shadow and the border below, which need no
+         * help from overflow.
+         */
         overflow: 'hidden',
         borderWidth: 1.5,
-        borderColor: collapsed ? colors.hairlineStrong : `${category.color}55`,
+        // The dragged card borrows the category's full-strength colour, so the
+        // row under the finger is unmistakable even mid-flight.
+        borderColor: dragging
+          ? category.color
+          : collapsed
+            ? colors.hairlineStrong
+            : `${category.color}55`,
+        ...(dragging ? shadow.lifted : null),
       }}
     >
       {/* Header. */}
@@ -1074,7 +1179,17 @@ function CategoryCard({
             <Ionicons name={category.icon as never} size={22} color="#FFFFFF" />
           </View>
 
-          <Pressable
+          {/*
+            Gesture-handler's Pressable, NOT React Native's.
+
+            RN's uses the legacy JS responder system, which claims a touch
+            outright — once it has one, the drag gesture wrapping this card
+            never sees the movement, so a long press landed anywhere on the
+            header simply did nothing. Gesture-handler's version negotiates with
+            the pan instead: a tap still toggles, and a hold-then-move becomes a
+            drag. Same everywhere a touch target sits inside a draggable row.
+          */}
+          <GHPressable
             onPress={onToggleCollapsed}
             accessibilityRole="button"
             accessibilityState={{ expanded: !collapsed }}
@@ -1085,13 +1200,12 @@ function CategoryCard({
             </Text>
             <Text variant="caption" tone="muted" numberOfLines={1}>
               {summary.counts.paid}/{summary.subcategoryCount} paid
-              {card ? ` · ${card.name}` : ''}
             </Text>
-          </Pressable>
+          </GHPressable>
 
           <View style={{ alignItems: 'flex-end', gap: 2 }}>
             <Text variant="figureLarge">{formatMoney(summary.totalMinor, { compact: true })}</Text>
-            <Pressable
+            <GHPressable
               onPress={onToggleCollapsed}
               hitSlop={8}
               accessibilityRole="button"
@@ -1102,7 +1216,7 @@ function CategoryCard({
                 size={18}
                 color={colors.inkMuted}
               />
-            </Pressable>
+            </GHPressable>
           </View>
         </Row>
 
@@ -1112,13 +1226,32 @@ function CategoryCard({
       {/* Bills. */}
       {!collapsed ? (
         <View>
-          {subcategories.map((line, index) => {
+          {/*
+            Hold a bill to drag it within its category.
+
+            Bills reorder only among their SIBLINGS — `sortOrder` on a
+            subcategory is compared against the other lines in its category and
+            nowhere else — so each card owns its own list rather than the board
+            running one big one across category boundaries.
+
+            `gap={0}` because these rows are separated by dividers rather than
+            by space, and a gap would break the continuous card face; the
+            divider moves into each row (below the first) so it travels with
+            the row it belongs to instead of being keyed to a fixed position.
+          */}
+          <DragReorderList
+            items={subcategories}
+            enabled={!reorderLocked}
+            gap={0}
+            estimatedHeight={64}
+            onReorder={onReorderBills}
+            renderItem={(line, index, draggingLine) => {
             const raw = view.rawSubcategories.find((s) => s.id === line.id);
             const paid = line.status === 'paid';
             // A spending budget is never "paid" as a whole — its spend is a
             // running total of entries — so it gets an indicator rather than a
             // tap-to-pay checkbox, and reads differently in several places below.
-            const unplanned = raw?.frequency === 'unplanned';
+            const ongoing = raw?.frequency === 'ongoing';
             /*
              * The headline figure. For a bill that is actual-or-planned; for a
              * spending budget it is what has actually been SPENT, with the
@@ -1129,156 +1262,257 @@ function CategoryCard({
              * the right answer for totals and the wrong one for this row — here
              * the question is "how much have I spent", not "how much is planned".
              */
-            const amount = unplanned ? (line.actualMinor ?? 0) : effectiveAmount(line);
+            const amount = ongoing ? (line.actualMinor ?? 0) : effectiveAmount(line);
             // Show planned vs. actual side by side when a real amount was logged
             // that differs from the plan, so the row tells you at a glance whether
             // it came in over/under. `amount` (actual-or-planned) stays the figure.
             const hasActual = line.actualMinor != null && line.actualMinor !== line.plannedMinor;
+            // An ongoing line past its monthly amount — the one state worth
+            // flagging here, since everything under it is going to plan.
+            const overspent =
+              ongoing && line.plannedMinor > 0 && (line.actualMinor ?? 0) > line.plannedMinor;
+            /*
+             * The category colour, pushed away from the wash behind it so an
+             * outline drawn in it actually separates. Darker in light mode,
+             * lighter in dark mode — in both, further from the background.
+             */
+            const markColor = shadeHex(category.color, mode === 'dark' ? 0.25 : -0.28);
 
             return (
-              <View key={line.id}>
-                {index === 0 ? null : <Divider style={{ marginLeft: space.lg }} />}
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  {unplanned ? (
-                    // Non-interactive marker: this line tracks many entries.
+              /*
+               * No `key` — `DragReorderList` keys the wrapper it renders this
+               * into, and a second key here would be inert.
+               *
+               * A dragged row takes the card's surface colour and a full-width
+               * divider-free edge, so it visibly detaches from the rows it is
+               * moving between.
+               */
+              <View
+                style={
+                  draggingLine
+                    ? { backgroundColor: colors.surfaceRaised, borderRadius: radius.md }
+                    : undefined
+                }
+              >
+                {index === 0 || draggingLine ? null : (
+                  <Divider style={{ marginLeft: space.lg }} />
+                )}
+                {/*
+                 * The whole row opens the line's detail page — where a planned
+                 * bill is settled and an ongoing line's entries are logged. Nothing
+                 * here mutates state: this row carried a tap-to-pay checkbox
+                 * and it was removed, because a control that changes data on a
+                 * single tap sat awkwardly beside a row whose only other
+                 * gesture navigates.
+                 */}
+                {/* Gesture-handler's, so the bill drag is not swallowed —
+                    see the card header above. */}
+                <GHPressable
+                  onPress={() => onOpenBill(line.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${line.name}, ${formatMoney(amount)}, ${
+                    ongoing ? 'ongoing' : paid ? 'paid' : 'not paid'
+                  }. Open detail.`}
+                  style={({ pressed }) => ({
+                    flex: 1,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingLeft: space.lg,
+                    paddingRight: space.lg,
+                    paddingVertical: space.md,
+                    gap: space.sm,
+                    // A paid bill sits on a very light ground of its own
+                    // category colour, so a worked-through card reads as done
+                    // from across the room while the row still belongs to its
+                    // group. Kept faint (~5% alpha) so a run of paid rows stays
+                    // calm next to the red an overrun ongoing line needs to own.
+                    backgroundColor: pressed
+                      ? colors.surfaceSunken
+                      : paid && !ongoing
+                        ? `${category.color}0D`
+                        : 'transparent',
+                  })}
+                >
+                  {/*
+                   * One marker carrying both facts about the line.
+                   *
+                   * Both kinds are rounded squares; the CURVE separates them:
+                   *   softly rounded  a dated bill — one payment, one date.
+                   *   barely rounded  an ongoing line — a squarer, more
+                   *                   container-like shape for the one that fills up.
+                   *
+                   * A status badge at the top-right marks the bill paid or
+                   * pending, and a paid bill also outlines in its category
+                   * colour. Ongoing lines get neither: they accumulate rather
+                   * than settle, so paid/pending is not a state they can be in.
+                   */}
+                  <View style={{ width: 34, height: 34 }}>
                     <View
                       style={{
-                        paddingLeft: space.lg,
-                        paddingRight: space.sm,
-                        paddingVertical: space.md,
+                        width: 34,
+                        height: 34,
+                        borderRadius: ongoing ? 8 : 12,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: washFor(category.color, mode),
+                        /*
+                         * Outlined once paid, in a DARKENED version of the
+                         * line's own category colour — so a settled row still
+                         * belongs to its group rather than joining a sea of
+                         * identical green. Red overrides for an overrun budget,
+                         * the one state worth interrupting a scan for (the two
+                         * cannot actually overlap: only bills are paid, only
+                         * ongoing lines overrun).
+                         *
+                         * Darkened rather than the raw colour because the fill
+                         * behind it is a wash of that same hue — at full
+                         * strength the outline would barely separate from it.
+                         */
+                        borderWidth: overspent || (paid && !ongoing) ? 1 : 0,
+                        borderColor: overspent
+                          ? colors.danger
+                          : markColor,
                       }}
-                      accessible
-                      accessibilityLabel={`${line.name}, unplanned`}
                     >
-                      <View
-                        style={{
-                          width: 26,
-                          height: 26,
-                          borderRadius: 13,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          backgroundColor: colors.accentSoft,
-                        }}
-                      >
-                        <Ionicons name="list" size={15} color={colors.accent} />
-                      </View>
+                      <Ionicons
+                        name={(raw?.icon ?? 'pricetag-outline') as never}
+                        size={17}
+                        color={overspent ? colors.danger : category.color}
+                      />
                     </View>
-                  ) : (
-                    /* Big checkbox tap target: pay / unpay. */
-                    <Pressable
-                      onPress={() => state.cycleStatus(line.id)}
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: paid }}
-                      accessibilityLabel={`${line.name}, ${paid ? 'paid' : 'not paid'}`}
-                      hitSlop={6}
-                      style={({ pressed }) => ({
-                        paddingLeft: space.lg,
-                        paddingRight: space.sm,
-                        paddingVertical: space.md,
-                        opacity: pressed ? 0.6 : 1,
-                      })}
-                    >
-                      <View
-                        style={{
-                          width: 26,
-                          height: 26,
-                          borderRadius: 13,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          backgroundColor: paid ? colors.completed : 'transparent',
-                          borderWidth: paid ? 0 : 2,
-                          borderColor: colors.hairlineStrong,
-                        }}
-                      >
-                        {paid ? <Ionicons name="checkmark" size={16} color="#FFFFFF" /> : null}
-                      </View>
-                    </Pressable>
-                  )}
 
-                  {/* Row body: open the bill's detail. */}
-                  <Pressable
-                    onPress={() => onOpenBill(line.id)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${line.name}, ${formatMoney(amount)}. Open detail.`}
-                    style={({ pressed }) => ({
-                      flex: 1,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      paddingRight: space.lg,
-                      paddingVertical: space.md,
-                      gap: space.sm,
-                      backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-                    })}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        variant="body"
-                        numberOfLines={1}
-                        // Unplanned lines are never "settled", so they keep full
-                        // ink and no strike-through even when their sum > 0.
-                        tone={paid && !unplanned ? 'muted' : 'ink'}
-                        style={paid && !unplanned ? { textDecorationLine: 'line-through' } : undefined}
+                    {/*
+                     * Status badge, top-right, overhanging the corner and
+                     * ringed in the surface colour so it reads as sitting ON
+                     * the icon rather than crowding it.
+                     *
+                     * Both states are shown, not just paid: a badge that only
+                     * appears when settled makes "not paid" an ABSENCE, and an
+                     * absence is indistinguishable from a line that has no
+                     * status at all. Two badges of the same size and place mean
+                     * the eye reads one position down the card and always finds
+                     * an answer there.
+                     *
+                     * Ongoing lines get neither — they accumulate rather than
+                     * settle, so paid/pending is not a state they can be in.
+                     */}
+                    {!ongoing ? (
+                      <View
+                        style={{
+                          position: 'absolute',
+                          right: -5,
+                          top: -5,
+                          width: 16,
+                          height: 16,
+                          borderRadius: 8,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          // Pending is grey, not amber: "not yet paid" on the
+                          // 1st of the month is the ordinary state of nearly
+                          // every bill, and a warning colour on all of them
+                          // made a normal card look like a list of problems.
+                          // Same darkened category colour as the border, so
+                          // the badge and the outline read as one mark rather
+                          // than two unrelated ones.
+                          backgroundColor: paid
+                            ? markColor
+                            : colors.inkMuted,
+                          borderWidth: 2,
+                          // The row's paid tint is only ~5% alpha over this
+                          // same surface, so one ring colour reads correctly on
+                          // both grounds without a blend helper.
+                          borderColor: colors.surface,
+                        }}
                       >
-                        {line.name}
-                      </Text>
-                      <Text variant="caption" tone="muted">
-                        {unplanned
-                          ? /* A spending budget's subtitle carries its progress:
-                               the figure on the right is what has been spent, so
-                               without the budget beside it there is nothing to
-                               judge that number against. */
-                            line.plannedMinor > 0
-                            ? `${formatMoney(line.actualMinor ?? 0, { compact: true })} of ${formatMoney(line.plannedMinor, { compact: true })} spent`
-                            : 'Spending budget · tap to see entries'
-                          : `${
-                              isFlexibleDueDay(raw?.dueDay ?? category.dueDay)
-                                ? 'Flexible'
-                                : `Day ${raw?.dueDay ?? category.dueDay}`
-                            }${
-                              raw?.frequency && raw.frequency !== 'monthly'
-                                ? ` · ${raw.frequency.replace('_', '-')}`
-                                : ''
-                            }`}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text
-                        variant="figure"
-                        // When a real amount was logged, colour it by over/under
-                        // the plan; otherwise dim it only once the bill is paid.
-                        color={
-                          // A budget overrun is the one thing worth flagging on
-                          // a spending line — everything below its cap is fine.
-                          unplanned
-                            ? line.plannedMinor > 0 && (line.actualMinor ?? 0) > line.plannedMinor
+                        <Ionicons
+                          // Three dots read as "still to come" without implying
+                          // anything is wrong — the same idiom as a pending
+                          // message. The tick stays for settled.
+                          name={paid ? 'checkmark' : 'ellipsis-horizontal'}
+                          size={9}
+                          color="#FFFFFF"
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      variant="body"
+                      numberOfLines={1}
+                      /*
+                       * Full ink whether paid or not. The marker's fill already
+                       * carries that state, and dimming the name as well pulled
+                       * the opposite way — a solid icon beside faded words. A
+                       * paid bill is not less important to read.
+                       */
+                      tone="ink"
+                    >
+                      {line.name}
+                    </Text>
+                    <Text variant="caption" tone="muted">
+                      {ongoing
+                        ? /* An ongoing line's subtitle carries its progress:
+                             the figure on the right is what has been spent, so
+                             without the budget beside it there is nothing to
+                             judge that number against. */
+                          line.plannedMinor > 0
+                          ? `${formatMoney(line.actualMinor ?? 0, { compact: true })} of ${formatMoney(line.plannedMinor, { compact: true })} spent`
+                          : 'Ongoing · no monthly amount set'
+                        : /* The due-day stays visible even once paid — "was it
+                             the 1st or the 5th" is still worth answering, and
+                             the tick on the marker already says it is paid. */
+                          `${
+                            isFlexibleDueDay(raw?.dueDay ?? category.dueDay)
+                              ? 'Flexible'
+                              : `Day ${raw?.dueDay ?? category.dueDay}`
+                          }${
+                            raw?.frequency && raw.frequency !== 'monthly'
+                              ? ` · ${raw.frequency.replace('_', '-')}`
+                              : ''
+                          }`}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text
+                      variant="figure"
+                      // When a real amount was logged, colour it by over/under
+                      // the plan; otherwise dim it only once the bill is paid.
+                      color={
+                        // An overrun is the one thing worth flagging on an
+                        // ongoing line — everything below its amount is fine.
+                        ongoing
+                          ? line.plannedMinor > 0 && (line.actualMinor ?? 0) > line.plannedMinor
+                            ? colors.danger
+                            : undefined
+                          : hasActual
+                            ? line.actualMinor! > line.plannedMinor
                               ? colors.danger
-                              : undefined
-                            : hasActual
-                              ? line.actualMinor! > line.plannedMinor
-                                ? colors.danger
-                                : colors.completed
-                              : undefined
-                        }
-                        tone={paid && !unplanned && !hasActual ? 'muted' : 'ink'}
+                              : colors.completed
+                            : undefined
+                      }
+                      // Full ink, for the same reason as the name above: the
+                      // marker carries paid state, so the figure need not.
+                      tone="ink"
+                    >
+                      {formatMoney(amount, { compact: true })}
+                    </Text>
+                    {hasActual && !ongoing ? (
+                      <Text
+                        variant="caption"
+                        tone="muted"
+                        style={{ textDecorationLine: 'line-through' }}
                       >
-                        {formatMoney(amount, { compact: true })}
+                        {formatMoney(line.plannedMinor, { compact: true })}
                       </Text>
-                      {hasActual && !unplanned ? (
-                        <Text
-                          variant="caption"
-                          tone="muted"
-                          style={{ textDecorationLine: 'line-through' }}
-                        >
-                          {formatMoney(line.plannedMinor, { compact: true })}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
-                  </Pressable>
-                </View>
+                    ) : null}
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
+                </GHPressable>
               </View>
             );
-          })}
+            }}
+          />
 
           {subcategories.length > 0 ? <Divider style={{ marginLeft: space.lg }} /> : null}
 
@@ -1327,7 +1561,11 @@ function CategoryCard({
                 borderColor: colors.hairline,
               })}
             >
-              <Ionicons name="create-outline" size={18} color={colors.inkSecondary} />
+              {/* A plain pen, not a pencil-in-a-box: `create-outline` draws a
+                  square that echoed this button's own rounded rect, so the
+                  glyph fought its container. Matches the Loans tab's edit
+                  action, which made the same switch for the same reason. */}
+              <Ionicons name="pencil-outline" size={18} color={colors.inkSecondary} />
             </Pressable>
           </Row>
         </View>

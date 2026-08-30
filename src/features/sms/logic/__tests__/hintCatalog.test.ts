@@ -31,7 +31,7 @@ describe('proposalForHint', () => {
 
   it('proposes the onboarding line a user would recognise', () => {
     expect(proposalForHint('loan')?.subcategory.name).toBe('Personal loan');
-    expect(proposalForHint('loan')?.category.name).toBe('Loans & credit');
+    expect(proposalForHint('loan')?.category.name).toBe('Debt');
     expect(proposalForHint('electricity')?.subcategory.name).toBe('Electricity (CEB / LECO)');
     expect(proposalForHint('groceries')?.category.name).toBe('Living');
   });
@@ -108,6 +108,25 @@ describe('findGroupForProposal', () => {
     const proposal = proposalForHint('loan')!;
     const groups: ExistingGroup[] = [{ id: 'g2', name: 'loans & credit' }];
     expect(findGroupForProposal(proposal, groups)?.id).toBe('g2');
+  });
+
+  it('still matches a group named under a FORMER catalog name', () => {
+    /*
+     * "Loans & credit" was renamed to "Debt". Boards built before that keep a
+     * group under the old name, and matching by name alone would orphan them —
+     * every loan SMS would offer to create a second group beside the one the
+     * user already has.
+     */
+    const proposal = proposalForHint('loan')!;
+    expect(proposal.category.name).toBe('Debt');
+    const groups: ExistingGroup[] = [{ id: 'old', name: 'Loans & credit' }];
+    expect(findGroupForProposal(proposal, groups)?.id).toBe('old');
+  });
+
+  it('matches a group under the current name', () => {
+    const proposal = proposalForHint('loan')!;
+    const groups: ExistingGroup[] = [{ id: 'now', name: 'Debt' }];
+    expect(findGroupForProposal(proposal, groups)?.id).toBe('now');
   });
 
   it('returns null when no group matches, so the caller creates one', () => {

@@ -9,8 +9,8 @@ import {
 
 const board: BoardSlice = {
   cards: [
-    { id: 'card-hnb', name: 'HNB', last4: '1234', bankName: 'HNB' },
-    { id: 'card-boc', name: 'BOC', last4: '8765', bankName: 'BOC' },
+    { id: 'card-hnb', nickname: null, last4: '1234', bankName: 'HNB' },
+    { id: 'card-boc', nickname: null, last4: '8765', bankName: 'BOC' },
   ],
   categories: [
     { id: 'cat-utils', name: 'Utilities', cardId: 'card-hnb' },
@@ -184,23 +184,24 @@ describe('accountLabelFor', () => {
   // `extractAccount` reduces the message's masked fragment to its trailing
   // digits, so these are the shapes the label actually receives.
   it('names a matched account with its digits', () => {
-    // The fixture card is named "HNB" with bankName "HNB", so the bank must not
-    // be prefixed twice.
+    // The fixture card has no nickname, so the bank and the digits are all
+    // there is to say.
     expect(accountLabelFor('1234', board.cards)).toBe('HNB ••1234');
   });
 
-  it('prefixes the bank when the name does not already start with it', () => {
-    const cards = [{ id: 'c', name: 'Salary', last4: '4150', bankName: 'HNB' }];
+  it("includes the user's nickname between the bank and the digits", () => {
+    const cards = [{ id: 'c', nickname: 'Salary', last4: '4150', bankName: 'HNB' }];
     expect(accountLabelFor('4150', cards)).toBe('HNB Salary ••4150');
   });
 
-  it('does not duplicate the bank regardless of case', () => {
-    const cards = [{ id: 'c', name: 'hnb current', last4: '4150', bankName: 'HNB' }];
-    expect(accountLabelFor('4150', cards)).toBe('hnb current ••4150');
+  // A nickname that merely repeats the bank would read "HNB HNB ••4150".
+  it('does not repeat the bank when the nickname echoes it, regardless of case', () => {
+    const cards = [{ id: 'c', nickname: 'hnb', last4: '4150', bankName: 'HNB' }];
+    expect(accountLabelFor('4150', cards)).toBe('HNB ••4150');
   });
 
   it('omits the bank when none is recorded', () => {
-    const cards = [{ id: 'c', name: 'Wallet', last4: '4150', bankName: null }];
+    const cards = [{ id: 'c', nickname: 'Wallet', last4: '4150', bankName: null }];
     expect(accountLabelFor('4150', cards)).toBe('Wallet ••4150');
   });
 

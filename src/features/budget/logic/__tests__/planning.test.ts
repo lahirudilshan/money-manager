@@ -26,6 +26,8 @@ import {
   urgencyFor,
   type CategoryStatus,
   type PlannedCategory,
+  billActual,
+  billStatus,
 } from '../planning';
 import { toMinor } from '~/shared/lib/money';
 
@@ -501,7 +503,7 @@ describe('summariseCategory with income lines', () => {
  * were genuinely affordable.
  */
 describe('monthlyAmount', () => {
-  const line = (amount: number, frequency?: 'monthly' | 'one_time' | 'yearly' | 'unplanned') => ({
+  const line = (amount: number, frequency?: 'monthly' | 'one_time' | 'yearly' | 'ongoing') => ({
     id: 'x',
     name: 'x',
     plannedMinor: toMinor(amount),
@@ -521,8 +523,8 @@ describe('monthlyAmount', () => {
     expect(monthlyAmount(line(9_000, 'one_time'))).toBe(toMinor(9_000));
   });
 
-  it('leaves unplanned spend at face value — it is real money already spent', () => {
-    expect(monthlyAmount(line(4_500, 'unplanned'))).toBe(toMinor(4_500));
+  it('leaves ongoing spend at face value — it is real money already spent', () => {
+    expect(monthlyAmount(line(4_500, 'ongoing'))).toBe(toMinor(4_500));
   });
 
   it('treats an unspecified frequency as monthly, preserving old behaviour', () => {
@@ -818,7 +820,7 @@ describe('summariseBoard category count', () => {
   });
 });
 
-describe('spending budgets (unplanned lines)', () => {
+describe('spending budgets (ongoing lines)', () => {
   const budget = (plannedMinor: number, spentMinor: number | null): PlannedCategory => ({
     id: 'groceries',
     name: 'Groceries',
@@ -826,7 +828,7 @@ describe('spending budgets (unplanned lines)', () => {
     actualMinor: spentMinor,
     status: (spentMinor ?? 0) > 0 ? 'paid' : 'pending',
     type: 'expense',
-    frequency: 'unplanned',
+    frequency: 'ongoing',
   });
 
   it('plans the full budget when only part of it has been spent', () => {
@@ -873,5 +875,63 @@ describe('spending budgets (unplanned lines)', () => {
   it('includes a budget in the category total', () => {
     const summary = summariseCategory([budget(2_000_000, 840_000)], 0, '2026-07');
     expect(summary.totalMinor).toBe(2_000_000);
+  });
+});
+
+describe('billActual — a planned bill and its one entry', () => {
+  it('uses the entry when one was logged', () => {
+    // The entry is the real movement, with its own date and note.
+    expect(billActual(35_000_00, null)).toBe(35_000_00);
+  });
+
+  it('falls back to a typed actual when nothing was logged', () => {
+    // The quick path for "it just came in higher" has to keep working.
+    expect(billActual(undefined, 36_000_00)).toBe(36_000_00);
+    expect(billActual(0, 36_000_00)).toBe(36_000_00);
+  });
+
+  it('lets the entry win over a stale typed actual', () => {
+    /*
+     * Both can exist on a row that predates entries. The logged movement is
+     * the truth — reporting a figure the line's own payment contradicts is the
+     * one outcome worth ruling out.
+     */
+    expect(billActual(35_000_00, 12_000_00)).toBe(35_000_00);
+  });
+
+  it('reports null when the bill has neither', () => {
+    // Null, not 0: "nothing recorded" must stay distinct from "cost nothing",
+    // since the board falls back to the PLANNED amount for the former.
+    expect(billActual(undefined, null)).toBeNull();
+    expect(billActual(0, undefined)).toBeNull();
+  });
+});
+
+describe('billStatus — money moving settles a planned bill', () => {
+  it('marks a bill paid once an entry exists', () => {
+    /*
+     * Logging the payment — by hand or by accepting a Smart Detect draft —
+     * already says the money moved. Asking for a tick as well asks the same
+     * question twice.
+     */
+    expect(billStatus('pending', 35_000_00)).toBe('paid');
+    expect(billStatus(undefined, 35_000_00)).toBe('paid');
+  });
+
+  it('leaves a bill pending when no money has been logged', () => {
+    expect(billStatus('pending', undefined)).toBe('pending');
+    expect(billStatus(undefined, 0)).toBe('pending');
+  });
+
+  it('keeps a manually ticked bill paid with no entry', () => {
+    // "I paid it, I am not itemising it" stays the fastest path.
+    expect(billStatus('paid', undefined)).toBe('paid');
+    expect(billStatus('paid', 0)).toBe('paid');
+  });
+
+  it('un-settles when the entry is removed', () => {
+    // Deleting a mis-entered payment must put the bill back on the to-pay list,
+    // otherwise a typo leaves it permanently settled.
+    expect(billStatus('pending', 0)).toBe('pending');
   });
 });

@@ -51,7 +51,7 @@ export interface PlannedCategory {
    * months it is actually saved for, rather than counted at full value every
    * month. Absent means monthly, the historic default.
    */
-  frequency?: 'monthly' | 'one_time' | 'yearly' | 'unplanned';
+  frequency?: 'monthly' | 'one_time' | 'yearly' | 'ongoing';
   /**
    * "YYYY-MM" a one-time cost belongs to. A one-off is real spending in its own
    * month and nothing at all in any other, so it needs an anchor; without one
@@ -66,7 +66,7 @@ export interface PlannedCategory {
  *
  * Only one-time costs are month-specific: they belong to the month they were
  * incurred and must not reappear in later ones. Everything else recurs (or, for
- * unplanned lines, is already scoped to the period by its transactions).
+ * ongoing lines, is already scoped to the period by its transactions).
  */
 export function appliesToPeriod(category: PlannedCategory, period: string): boolean {
   if (category.frequency !== 'one_time') return true;
@@ -79,7 +79,7 @@ export function appliesToPeriod(category: PlannedCategory, period: string): bool
 /**
  * Amount that actually counts for a category — actual if set, else planned.
  *
- * A spending budget ("unplanned") is the exception, and it must be, because for
+ * A spending budget ("ongoing") is the exception, and it must be, because for
  * that kind of line `actualMinor` is a *running* total rather than a settled
  * figure. Taking the actual outright would shrink the month's plan every time
  * the user looked: a Rs 20,000 grocery budget with Rs 8,400 spent so far would
@@ -91,7 +91,7 @@ export function appliesToPeriod(category: PlannedCategory, period: string): bool
  * spent is never hidden, and money still to be spent is still planned for.
  */
 export function effectiveAmount(category: PlannedCategory): Minor {
-  if (category.frequency === 'unplanned') {
+  if (category.frequency === 'ongoing') {
     return Math.max(category.plannedMinor, category.actualMinor ?? 0);
   }
   return category.actualMinor ?? category.plannedMinor;
@@ -106,7 +106,7 @@ export function effectiveAmount(category: PlannedCategory): Minor {
  * the plan roughly elevenfold for that line and made PLANNED exceed income on
  * boards that were actually affordable.
  *
- * Everything else already recurs monthly (or, for one-time and unplanned lines,
+ * Everything else already recurs monthly (or, for one-time and ongoing lines,
  * is a real cost in the month it appears) and is taken at face value.
  *
  * A saving plan is the exception among yearly lines: its `plannedMinor` is
@@ -588,4 +588,47 @@ export function daysUntil(dueDate: Date, today: Date): number {
   const startOfDay = (date: Date) =>
     new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   return Math.round((startOfDay(dueDate) - startOfDay(today)) / 86_400_000);
+}
+
+/**
+ * The actual for a DATED bill.
+ *
+ * A dated line is paid once a month — rent, the electricity bill, a
+ * subscription — so what it cost is a single typed figure, and that is the
+ * whole rule. Entries belong to ONGOING lines, whose spend is the sum of them.
+ *
+ * The entry total is still accepted and still wins, for one narrow case: a line
+ * switched from ongoing to dated has its entries summed into the typed actual
+ * (see `updateSubcategory`), and this covers the moment before that write
+ * lands, plus any row left behind by an older build.
+ */
+export function billActual(
+  entryTotalMinor: Minor | undefined,
+  typedActualMinor: Minor | null | undefined,
+): Minor | null {
+  const entry = entryTotalMinor ?? 0;
+  if (entry > 0) return entry;
+  return typedActualMinor ?? null;
+}
+
+/**
+ * Whether a dated bill counts as settled.
+ *
+ * Money having moved IS the bill being paid: if an entry was logged — by hand
+ * or by accepting a Smart Detect draft — the user has already told us the
+ * payment happened, and then asking them to tick a box as well is asking the
+ * same question twice. So an entry settles the line.
+ *
+ * The stored flag still wins when it says paid, so ticking a bill off without
+ * logging money (the common "I paid it, I am not itemising it" case) keeps
+ * working, and an entry that was a mistake can be removed to un-settle it.
+ *
+ * Ongoing lines never reach here: they accumulate rather than settle.
+ */
+export function billStatus(
+  storedStatus: SubcategoryStatus | undefined,
+  entryTotalMinor: Minor | undefined,
+): SubcategoryStatus {
+  if (storedStatus === 'paid') return 'paid';
+  return (entryTotalMinor ?? 0) > 0 ? 'paid' : 'pending';
 }

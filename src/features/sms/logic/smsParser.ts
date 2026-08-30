@@ -291,6 +291,24 @@ const BANK_CHARGE_PATTERNS: RegExp[] = [
   /\bstamp\s+duty\b/i,
   /\bcommission\b/i,
   /\bas\s+(?:[A-Za-z]+\s+)*(?:charges|fees)\b/i,
+  /*
+   * The NETWORK's own name followed by fee wording.
+   *
+   * The rules above want either a known fee noun in front ("transfer charges")
+   * or the word "as". Sri Lankan banks send neither in several of their fee
+   * alerts: "debited LKR 25.00 CEFTS fee", "LKR25.00 debited. CEFTS Charge.",
+   * "Rs 25.00 debited being CEFTS charges". Each fell through to the transfer
+   * rule below — which claimed them, because "CEFTS" is transfer vocabulary —
+   * and a 25-rupee fee arrived on the board as a transfer to categorise.
+   *
+   * Named networks only (CEFTS, SLIPS, LankaPay, CTB), never a bare "charge",
+   * so this cannot widen into ordinary spend that happens to mention a fee.
+   */
+  /\b(?:cefts|slips|lankapay|ctb)\b[^.]{0,20}?\b(?:charge|charges|fee|fees)\b/i,
+  /**
+   * ...and the same pair in the other order: "Charges for CEFTS", "Fee - SLIPS".
+   */
+  /\b(?:charge|charges|fee|fees)\b[^.]{0,20}?\b(?:cefts|slips|lankapay|ctb)\b/i,
 ];
 
 /**

@@ -162,7 +162,7 @@ describe('houses as a catalog category', () => {
     }
   });
 
-  it('ships every house line as unplanned', () => {
+  it('ships every house line as ongoing', () => {
     /*
      * A house's cost is the SUM of its bills, not one figure paid monthly. A
      * `monthly` line would hold a single "actual" per month, so the second bill
@@ -171,7 +171,7 @@ describe('houses as a catalog category', () => {
     const houses = CATEGORY_CATALOG.find((category) => category.id === 'houses');
     expect(houses).toBeDefined();
     for (const line of houses!.subcategories) {
-      expect(line.frequency).toBe('unplanned');
+      expect(line.frequency).toBe('ongoing');
     }
   });
 

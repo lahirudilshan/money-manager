@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   ALL_PARTS,
   DEFAULT_BACKUP_PARTS,
+  absoluteTime,
   buildSnapshot,
   describeParts,
+  migrateValue,
+  readableStamp,
+  stampToIso,
+  titleFor,
   partsOf,
   SETUP_PARTS,
   tablesForParts,
@@ -55,6 +60,24 @@ describe('buildSnapshot', () => {
      * threw away every message still awaiting review.
      */
     expect(SNAPSHOT_TABLES).toContain('sms_inbox');
+  });
+
+  /*
+   * A split's `transaction_id` is a foreign key, so its parts must never be
+   * restored without — or before — the payment they belong to.
+   */
+  it('carries transaction_splits, ordered after transactions', () => {
+    expect(SNAPSHOT_TABLES).toContain('transaction_splits');
+    expect(SNAPSHOT_TABLES.indexOf('transaction_splits')).toBeGreaterThan(
+      SNAPSHOT_TABLES.indexOf('transactions'),
+    );
+  });
+
+  it('treats transaction_splits as history, like the payments they divide', () => {
+    // A setup-only restore skips `transactions`; writing the parts anyway
+    // would orphan every one of them.
+    expect(tablesForScope('setup')).not.toContain('transaction_splits');
+    expect(tablesForScope('everything')).toContain('transaction_splits');
     expect(DEFAULT_BACKUP_PARTS).not.toContain('sms');
     // Still offered — the user ticks it deliberately.
     expect(ALL_PARTS).toContain('sms');
@@ -466,5 +489,147 @@ describe('the Smart Detect queue as a backup part', () => {
   it('does not drag sms_inbox in when unticked', () => {
     // `core` is required and folds in regardless; the queue must not.
     expect(tablesForParts(DEFAULT_BACKUP_PARTS)).not.toContain('sms_inbox');
+  });
+});
+
+/*
+ * A backup written before the `unplanned` → `ongoing` rename still carries the
+ * old word, and restore inserts raw rows. Without this the line would come back
+ * with a cadence the app no longer recognises and render as a dated bill.
+ */
+describe('migrateValue — restoring a pre-rename backup', () => {
+  it('rewrites an unplanned frequency to ongoing', () => {
+    expect(migrateValue('subcategories', 'frequency', 'unplanned')).toBe('ongoing');
+  });
+
+  it('leaves an already-renamed row alone, so a second restore is a no-op', () => {
+    expect(migrateValue('subcategories', 'frequency', 'ongoing')).toBe('ongoing');
+  });
+
+  it('leaves the other cadences untouched', () => {
+    for (const value of ['monthly', 'one_time', 'yearly']) {
+      expect(migrateValue('subcategories', 'frequency', value)).toBe(value);
+    }
+  });
+
+  it('does not rewrite a line that merely happens to be NAMED unplanned', () => {
+    expect(migrateValue('subcategories', 'name', 'unplanned')).toBe('unplanned');
+  });
+
+  it('does not touch a frequency column on another table', () => {
+    expect(migrateValue('categories', 'frequency', 'unplanned')).toBe('unplanned');
+  });
+
+  it('passes through nulls and numbers unchanged', () => {
+    expect(migrateValue('subcategories', 'planned_minor', 5000)).toBe(5000);
+    expect(migrateValue('subcategories', 'due_day', null)).toBeNull();
+  });
+});
+
+/*
+ * These moved out of two screens that each had their own copy — and the copies
+ * had already drifted (one showed a Drive backup's name, the other showed a
+ * bare date). Pinned here so the shared version cannot regress.
+ */
+describe('backup timestamps', () => {
+  describe('stampToIso', () => {
+    it('puts the Z back on a filename stamp so it parses as UTC', () => {
+      expect(stampToIso('2026-08-04T12-00-00')).toBe('2026-08-04T12:00:00Z');
+    });
+
+    /*
+     * Drive rows carry a real ISO `modifiedTime` already. Passing one through
+     * unchanged is what lets both sources be sorted on one key.
+     */
+    it('leaves an ISO string untouched', () => {
+      expect(stampToIso('2026-08-04T12:00:00.000Z')).toBe('2026-08-04T12:00:00.000Z');
+    });
+
+    it('leaves anything unrecognisable alone rather than mangling it', () => {
+      expect(stampToIso('not-a-stamp')).toBe('not-a-stamp');
+    });
+  });
+
+  describe('absoluteTime', () => {
+    it('renders a real instant', () => {
+      expect(absoluteTime('2026-08-04T12:00:00Z')).not.toBe('');
+    });
+
+    /*
+     * Returns '' rather than "Invalid Date", because the caller joins this into
+     * a subtitle with ' · ' and filters falsy parts out.
+     */
+    it('returns an empty string for an unparseable input', () => {
+      expect(absoluteTime('not-a-date')).toBe('');
+    });
+  });
+
+  describe('readableStamp', () => {
+    /*
+     * The regression the comment describes: without the Z, `new Date` reads the
+     * stamp as LOCAL time and a backup taken at 17:30 in Colombo listed as
+     * 12:00. Comparing the two spellings of the same instant is what pins it —
+     * the assertion holds in any timezone the test runs in.
+     */
+    it('reads the stamp as UTC, not as local time', () => {
+      expect(readableStamp('2026-08-04T12-00-00')).toBe(absoluteTime('2026-08-04T12:00:00Z'));
+    });
+
+    it('falls back to the raw stamp when it cannot be parsed', () => {
+      expect(readableStamp('not-a-stamp')).toBe('not-a-stamp');
+    });
+
+    /*
+     * Two backups a minute apart must render differently — that is the whole
+     * point of showing the time beside a reused name.
+     */
+    it('distinguishes two backups taken a minute apart', () => {
+      expect(readableStamp('2026-08-04T12-00-00')).not.toBe(readableStamp('2026-08-04T12-01-00'));
+    });
+  });
+});
+
+/*
+ * The rule that makes a backup list usable: a name the user chose, then the
+ * moment it was taken, so reusing a name stays harmless.
+ */
+describe('titleFor', () => {
+  it('puts the name first, then when it was taken', () => {
+    const title = titleFor('before reset', '2026-08-04T12-00-00');
+    expect(title.startsWith('before reset · ')).toBe(true);
+  });
+
+  it('is just the timestamp when the backup was never named', () => {
+    expect(titleFor(undefined, '2026-08-04T12-00-00')).toBe(readableStamp('2026-08-04T12-00-00'));
+  });
+
+  /*
+   * The whole point. Two backups sharing a name must not share a title — this
+   * is what lets the app accept a duplicate name instead of rejecting it.
+   */
+  it('distinguishes two backups that share a name', () => {
+    expect(titleFor('before reset', '2026-08-04T12-00-00')).not.toBe(
+      titleFor('before reset', '2026-08-02T09-15-00'),
+    );
+  });
+
+  it('treats a blank or whitespace-only name as no name at all', () => {
+    const bare = readableStamp('2026-08-04T12-00-00');
+    expect(titleFor('', '2026-08-04T12-00-00')).toBe(bare);
+    expect(titleFor('   ', '2026-08-04T12-00-00')).toBe(bare);
+  });
+
+  it('trims a name rather than showing the user their stray spaces', () => {
+    expect(titleFor('  before reset  ', '2026-08-04T12-00-00')).toBe(
+      titleFor('before reset', '2026-08-04T12-00-00'),
+    );
+  });
+
+  /*
+   * A Drive row passes the stamp parsed out of the filename. If that ever fails
+   * to parse, the title must still carry the name rather than collapsing.
+   */
+  it('keeps the name even when the stamp is unparseable', () => {
+    expect(titleFor('before reset', 'not-a-stamp')).toBe('before reset · not-a-stamp');
   });
 });

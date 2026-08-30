@@ -20,6 +20,23 @@ describe('suggestCategoryIcon', () => {
     expect(suggestCategoryIcon('Kids school')).toBeTruthy();
   });
 
+  it('marks general debt with its own icon, not a card', () => {
+    /*
+     * A card is one PRODUCT among several kinds of debt — leases, EMIs,
+     * pawning — so it cannot stand for the group, and it already belongs to
+     * the Credit card line inside it.
+     */
+    expect(suggestCategoryIcon('Personal loan')).toBe('cash-outline');
+    expect(suggestCategoryIcon('EMI')).toBe('cash-outline');
+  });
+
+  it('still gives an actual card the card icon', () => {
+    // "Credit card" contains "credit", so the card entry has to win the match
+    // ahead of the general debt one.
+    expect(suggestCategoryIcon('Credit card')).toBe('card-outline');
+    expect(suggestCategoryIcon('Visa payment')).toBe('card-outline');
+  });
+
   it('matches on any word in a multi-word name', () => {
     expect(suggestCategoryIcon('Monthly groceries and market')).toBe('basket-outline');
     expect(suggestCategoryIcon('My mobile reload')).toBe('call-outline');

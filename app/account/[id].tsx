@@ -50,7 +50,7 @@ export default function AccountDetailScreen() {
 
   const { card } = view;
   const label = accountLabel(card);
-  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name });
+  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName });
   // Categories funded from this account, each with its bills and their
   // effective (actual-or-planned) amounts — so the detail shows *where the
   // money goes*, not just a list of names.
@@ -153,7 +153,19 @@ export default function AccountDetailScreen() {
       onClose={closeModal}
       title={label.primary}
       eyebrow={card.isCard ? 'Card' : 'Account'}
-      icon={card.isCard ? 'card-outline' : 'wallet-outline'}
+      /*
+        The BANK'S mark, not a wallet glyph.
+
+        This sheet is one specific account at one specific bank, and its header
+        showed the same outline icon every account gets, tinted with the brand
+        colour. Colour alone is a poor identifier here — half this catalog is a
+        near-identical navy — while the logo is what the user recognises the
+        account by everywhere else in the app, the Accounts list included.
+
+        `icon` takes a node for exactly this case, and doing so opts out of the
+        white tint the glyph path applies, which a multicolour logo needs.
+      */
+      icon={<BankLogo brand={brand} size={30} />}
       iconColor={brand.color}
       scroll
       footer={

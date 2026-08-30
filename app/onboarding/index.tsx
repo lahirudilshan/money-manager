@@ -80,7 +80,8 @@ export default function OnboardingBanksScreen() {
 
       if (isPicked && !card) {
         state.addCard({
-          name: brand.shortName,
+          // The bank alone identifies it; a nickname is asked for later, and
+          // only when the user actually holds two accounts at one bank.
           bankId: brand.id,
           bankName: brand.name,
           kind: brand.kind,

@@ -99,10 +99,24 @@ export function BankLogo({
   brand,
   size = 44,
   style,
+  onBrand = false,
 }: {
   brand: BankBrand;
   size?: number;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Set when the mark sits on the bank's OWN colour — a branded card face or
+   * gradient header rather than the app's neutral surface.
+   *
+   * The monogram's tile is normally `brand.color`, which is what makes a
+   * letterform recognisable as that bank. On a brand-coloured ground that same
+   * rule paints navy on navy and the mark disappears entirely. So on a branded
+   * face the monogram borrows the white chip a real logo already uses, which is
+   * the rule `BankSelectTile` follows for the same reason.
+   *
+   * A real logo needs no such switch: it is already on white.
+   */
+  onBrand?: boolean;
 }) {
   const { source, onError } = useBrandArtwork(brand);
 
@@ -153,7 +167,9 @@ export function BankLogo({
           width: size,
           height: size,
           borderRadius: size / 3.4,
-          backgroundColor: brand.color,
+          // White chip on a branded face, so the letters do not vanish into the
+          // colour behind them — see `onBrand`.
+          backgroundColor: onBrand ? '#FFFFFF' : brand.color,
           alignItems: 'center',
           justifyContent: 'center',
         },
@@ -162,7 +178,7 @@ export function BankLogo({
     >
       <Text
         variant="label"
-        color={brand.onColor}
+        color={onBrand ? brand.color : brand.onColor}
         style={{
           // Scales with the tile so 2- and 3-letter monograms both fit.
           fontSize: Math.max(10, size * (brand.monogram.length > 2 ? 0.26 : 0.32)),

@@ -2,9 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
-import { AccountField } from '~/features/accounts/components/AccountPicker';
-import { DayPicker } from '~/features/budget/components/DayPicker';
-import { IconPicker, NameWithIconField } from '~/shared/components/forms';
+import { ColorPicker, IconPicker, NameWithIconField } from '~/shared/components/forms';
+import { DEFAULT_CATEGORY_COLOR, suggestCategoryColor } from '~/shared/data/categoryColors';
 import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '~/shared/data/categoryIcons';
 import { BottomSheet, Button, GradientButton, Label, Row, Text } from '~/shared/components/ui';
 import { formatMoney } from '~/shared/lib/money';
@@ -36,8 +35,16 @@ export default function EditCategoryScreen() {
   );
   // Once the user picks an icon by hand, stop auto-suggesting over their choice.
   const [iconTouched, setIconTouched] = useState(false);
-  const [cardId, setCardId] = useState<string | null>(category?.cardId ?? null);
-  const [dueDay, setDueDay] = useState(category?.dueDay ?? 1);
+  const [color, setColor] = useState(category?.color ?? DEFAULT_CATEGORY_COLOR);
+  /*
+   * Starts TOUCHED on an existing category.
+   *
+   * Its colour is already a settled fact — whether it was chosen by hand or
+   * suggested when it was created — so renaming "Food" to "Food & drink" must
+   * not repaint the board underneath the user. Only a fresh category takes
+   * suggestions, which is what `new.tsx` does.
+   */
+  const [colorTouched, setColorTouched] = useState(true);
 
   function onNameChange(next: string) {
     setName(next);
@@ -45,13 +52,16 @@ export default function EditCategoryScreen() {
       const suggested = suggestCategoryIcon(next);
       if (suggested) setIcon(suggested);
     }
+    if (!colorTouched) {
+      const suggested = suggestCategoryColor(next);
+      if (suggested) setColor(suggested);
+    }
   }
 
   const isDirty =
     name.trim() !== (category?.name ?? '') ||
     icon !== (category?.icon ?? DEFAULT_CATEGORY_ICON) ||
-    cardId !== (category?.cardId ?? null) ||
-    dueDay !== (category?.dueDay ?? 1);
+    color !== (category?.color ?? DEFAULT_CATEGORY_COLOR);
 
   if (!category) {
     return (
@@ -65,12 +75,8 @@ export default function EditCategoryScreen() {
   function handleSave() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    state.updateCategory(category!.id, {
-      name: trimmed,
-      cardId,
-      icon,
-      dueDay: Math.min(31, Math.max(1, dueDay)),
-    });
+    // No account and no due day — both live on the bills. See `new.tsx`.
+    state.updateCategory(category!.id, { name: trimmed, icon, color });
     closeModal();
   }
 
@@ -81,7 +87,7 @@ export default function EditCategoryScreen() {
       onClose={closeModal}
       title="Edit category"
       icon={icon}
-      iconColor={category.color}
+      iconColor={color}
       scroll
       footer={
         <GradientButton
@@ -98,7 +104,7 @@ export default function EditCategoryScreen() {
             value={name}
             onChangeText={onNameChange}
             icon={icon}
-            iconColor={category.color}
+            iconColor={color}
             placeholder="Category name"
           />
 
@@ -109,19 +115,18 @@ export default function EditCategoryScreen() {
               setIcon(next);
               setIconTouched(true);
             }}
-            accent={category.color}
+            accent={color}
           />
 
-          {/* Shared account picker — identical to everywhere else. */}
-          <AccountField
-            label="Funded account"
-            cards={state.cards}
-            selectedId={cardId}
-            onSelect={setCardId}
-            allowNone
-          />
+          <ColorPicker value={color} onChange={(next) => { setColor(next); setColorTouched(true); }} />
 
-          <DayPicker value={dueDay} onChange={setDueDay} />
+          {/*
+            No account and no due day here.
+
+            Both are per-BILL facts. A category is the container, and every bill
+            inside it already names the account it is paid from and the day it
+            falls due — the list below is the route to them. See `new.tsx`.
+          */}
 
           {/* The bills in this category, each showing how often it recurs.
               Tapping one opens its editor, which is where frequency (monthly,

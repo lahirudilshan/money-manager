@@ -20,6 +20,8 @@ import {
   type Minor,
 } from '~/shared/lib/money';
 import {
+  billActual,
+  billStatus,
   calculateRatios,
   daysUntil,
   isFlexibleDueDay,
@@ -42,7 +44,7 @@ import {
   type SubcategoryStatus,
 } from '~/features/budget/logic/planning';
 import { stateRepo, transactionRepo } from '~/db/repositories';
-import { isUnplanned } from '~/db/schema';
+import { isOngoing } from '~/db/schema';
 import type { Subcategory, Transaction, Card, Category, Loan, SubcategoryState } from '~/db/schema';
 import type { CategoryFundingStatus } from '~/db/schema';
 import type { AppState } from '~/store/useAppStore';
@@ -51,6 +53,25 @@ import type { AppState } from '~/store/useAppStore';
 export interface CategoryView {
   category: Category;
   card: Card | undefined;
+  /**
+   * The accounts this category's bills are ACTUALLY paid from, de-duplicated
+   * and in board order.
+   *
+   * Derived, never stored. A category is a container: each bill inside it names
+   * its own account, and the category's own `cardId` was a fourth answer to a
+   * question its contents had already answered three times — a "Utilities"
+   * category set to HNB whose three bills all pay from BOC still read "HNB".
+   *
+   * So the category now reports what its bills say. Usually that is one
+   * account and reads exactly as before; when it is several, the card shows
+   * them all ("HNB · BOC"), which is the honest answer and is also the signal
+   * that a bill is pointed somewhere unexpected.
+   *
+   * A bill with no account of its own falls back to the category's `cardId`
+   * (see `resolveCardId`), so this is empty only when nothing anywhere names
+   * an account.
+   */
+  cards: Card[];
   subcategories: PlannedCategory[];
   rawSubcategories: Subcategory[];
   summary: CategorySummary;
@@ -69,7 +90,7 @@ function toPlanned(
   transactionTotal: Minor | undefined,
 ): PlannedCategory {
   /*
-   * A spending-budget line (stored as `unplanned`) has no per-period paid flag:
+   * A spending-budget line (stored as `ongoing`) has no per-period paid flag:
    * its effective value is the SUM of its child transactions, always reported as
    * "actual" so the board and its entry list can never disagree.
    *
@@ -83,7 +104,7 @@ function toPlanned(
    * It reads as paid whenever there is any spend, so it never sits in the
    * outstanding-bills list demanding to be ticked off.
    */
-  if (subcategory.frequency === 'unplanned') {
+  if (subcategory.frequency === 'ongoing') {
     const total = transactionTotal ?? 0;
     return {
       id: subcategory.id,
@@ -93,17 +114,25 @@ function toPlanned(
       status: total > 0 ? 'paid' : 'pending',
       type: subcategory.type,
       // Real money already spent this month — never spread across the year.
-      frequency: 'unplanned',
+      frequency: 'ongoing',
       period: periodKey(subcategory.createdAt),
     };
   }
 
+  /*
+   * A DATED bill: one payment a month, on a date, which can be ticked off and
+   * can fall overdue. That settle step is the whole reason the two kinds exist
+   * — an ongoing line above never settles, it just accumulates.
+   *
+   * Its single entry doubles as the settle signal: money having moved IS the
+   * bill being paid. See `billActual` / `billStatus` for both rules.
+   */
   return {
     id: subcategory.id,
     name: subcategory.name,
     plannedMinor: subcategory.plannedMinor,
-    actualMinor: state?.actualMinor ?? null,
-    status: (state?.status as SubcategoryStatus) ?? 'pending',
+    actualMinor: billActual(transactionTotal, state?.actualMinor),
+    status: billStatus(state?.status as SubcategoryStatus | undefined, transactionTotal),
     // Carried through so the summary can keep income out of planned spend.
     type: subcategory.type,
     /*
@@ -177,9 +206,30 @@ function buildCategoryViews(state: AppState): CategoryView[] {
     );
     const funded = state.fundingTotals.get(category.id) ?? 0;
 
+    /*
+     * Walked in SUBCATEGORY order, not `state.cards` order, so the account the
+     * first bill uses is the one that leads the list — that is the account the
+     * user thinks of as this category's, and re-sorting it behind another bank
+     * because of the accounts screen's ordering would be arbitrary.
+     */
+    const cardIds: string[] = [];
+    for (const sub of subs) {
+      const id = sub.cardId ?? category.cardId;
+      if (id && !cardIds.includes(id)) cardIds.push(id);
+    }
+    const cards = cardIds
+      .map((id) => state.cards.find((c) => c.id === id))
+      .filter((c): c is Card => c !== undefined);
+
     return {
       category,
+      /*
+       * Kept as the category's own default — it still seeds a new bill's
+       * account picker and is what `resolveCardId` falls back to. The UI leads
+       * with `cards` instead, which is what the bills actually say.
+       */
       card: state.cards.find((c) => c.id === category.cardId),
+      cards,
       subcategories: planned,
       rawSubcategories: subs,
       // Scoped to the viewed month so a one-time cost counts only in its own.
@@ -190,7 +240,7 @@ function buildCategoryViews(state: AppState): CategoryView[] {
   });
 }
 
-/** All transactions for an unplanned subcategory in the current period, newest
+/** All transactions for an ongoing subcategory in the current period, newest
  * first — drives the entry list on the subcategory and list screens. Reads the
  * DB directly (not the totals map) since the UI needs each row, not just a sum. */
 export function selectTransactions(state: AppState, subcategoryId: string): Transaction[] {
@@ -550,7 +600,7 @@ export function selectReminders(state: AppState, today = new Date()): ReminderVi
        * Its money is handled by the account transfer, and its spending shows on
        * the plan as a running total against the budget. Neither is a deadline.
        */
-      if (isUnplanned(sub.frequency)) continue;
+      if (isOngoing(sub.frequency)) continue;
 
       const status: SubcategoryStatus =
         (state.states.get(sub.id)?.status as SubcategoryStatus) ?? 'pending';

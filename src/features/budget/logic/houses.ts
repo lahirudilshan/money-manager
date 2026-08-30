@@ -32,6 +32,10 @@
  *     second property actually shows up on: money sent to support a parents'
  *     house, and rent received from a property let out.
  *
+ * Note these are BILL ids, never the `house-*` lines of the Houses category —
+ * those are the accumulators the tagged payments add up INTO, and scoping them
+ * too would give a payment two equally valid homes. See the test.
+ *
  * Groceries and fuel are excluded even though they are household spending: they
  * follow the PERSON, not the building, and tagging every supermarket run with a
  * house is exactly the busywork this feature must avoid.

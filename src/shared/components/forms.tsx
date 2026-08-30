@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { CATEGORY_COLORS } from '../data/categoryColors';
 import { ALL_ICONS, CATEGORY_ICONS } from '../data/categoryIcons';
 import {
   CATEGORY_DEFAULT_FREQUENCIES,
@@ -13,7 +14,7 @@ import {
 } from '~/db/schema';
 import { formatAmountInput } from '~/shared/lib/money';
 import { useTheme } from '../theme/ThemeProvider';
-import { BottomSheet, Label, Text } from './ui';
+import { BottomSheet, Label, Row, Text } from './ui';
 
 /** The single styled input used by every form. */
 export function Field({
@@ -27,6 +28,7 @@ export function Field({
   multiline,
   style,
   error,
+  editable = true,
 }: {
   label: string;
   value: string;
@@ -62,13 +64,26 @@ export function Field({
    * value is nagging rather than helping.
    */
   error?: string | null;
+  /**
+   * Set false for a value this screen SHOWS but does not own — a loan
+   * installment, derived from the loan's terms.
+   *
+   * Rendered as a visibly inert field (sunken ground, muted text) rather than
+   * simply ignoring taps: a field that looks editable and silently discards
+   * what you type reads as a bug, and the caller is expected to say alongside
+   * it where the value does come from.
+   */
+  editable?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
   const handleChange = money ? (next: string) => onChangeText(formatAmountInput(next)) : onChangeText;
 
   return (
     <View style={[{ gap: space.sm }, style]}>
-      <Label>{label}</Label>
+      {/* An empty label renders nothing — a blank `Label` still occupies a line
+          and the container's gap, leaving a stray space above the input for
+          the fields that sit inside a sentence and need no caption. */}
+      {label ? <Label>{label}</Label> : null}
       <TextInput
         value={value}
         onChangeText={handleChange}
@@ -77,9 +92,10 @@ export function Field({
         keyboardType={money ? 'decimal-pad' : keyboardType}
         autoFocus={autoFocus}
         multiline={multiline}
+        editable={editable}
         accessibilityLabel={label}
         style={{
-          backgroundColor: colors.surface,
+          backgroundColor: editable ? colors.surface : colors.surfaceSunken,
           borderRadius: radius.md,
           borderWidth: 1,
           // The border carries the error too, so the field itself is marked
@@ -92,7 +108,7 @@ export function Field({
           // Explicit zero so placeholder + typed text read as plain body text,
           // never picking up a wide tracking from a parent/label style.
           letterSpacing: 0,
-          color: colors.ink,
+          color: editable ? colors.ink : colors.inkSecondary,
           minHeight: multiline ? 88 : undefined,
           textAlignVertical: multiline ? 'top' : 'center',
         }}
@@ -281,8 +297,8 @@ export function PillSelect({
                 color={selected ? colors.inkInverse : colors.inkSecondary}
                 style={{ fontWeight: selected ? '700' : '500' }}
                 // One line only in row mode, shrinking to fit before it clips —
-                // "Spending budget" beside three shorter labels would otherwise
-                // either wrap the pill to two lines or push the row too wide.
+                // a long label beside shorter siblings would otherwise either
+                // wrap the pill to two lines or push the row too wide.
                 numberOfLines={singleRow ? 1 : undefined}
                 adjustsFontSizeToFit={singleRow || undefined}
                 minimumFontScale={singleRow ? 0.85 : undefined}
@@ -463,6 +479,97 @@ function IconTile({
  * form compact while still giving access to every icon. Used by create- and
  * edit-category so they always offer the same icons.
  */
+/**
+ * Pick a category colour from the curated set.
+ *
+ * A wrapping grid of swatches rather than a row with a "more" tile: there are
+ * only nineteen and they are the whole vocabulary, so hiding any of them behind
+ * a second tap would make the user hunt for a colour they can see is missing.
+ * Icons need the overflow because there are hundreds; colours do not.
+ *
+ * Selection is drawn as a RING around the swatch plus a tick inside it, not as
+ * a border colour change. Colour alone cannot signal selection in a control
+ * whose every option is a different colour — and the tick is what makes the
+ * state legible to someone who cannot separate two adjacent hues.
+ */
+export function ColorPicker({
+  label = 'Colour',
+  value,
+  onChange,
+  /**
+   * Set when the shown colour came from the name rather than from a tap, so
+   * the control can say so. Without it a swatch lights up on its own as the
+   * user types and reads as a bug rather than as help.
+   */
+  suggested = false,
+}: {
+  label?: string;
+  value: string;
+  onChange: (color: string) => void;
+  suggested?: boolean;
+}) {
+  const { colors, space } = useTheme();
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Row justify="space-between">
+        <Label>{label}</Label>
+        {suggested ? (
+          <Row gap={4}>
+            <Ionicons name="sparkles" size={11} color={colors.inkMuted} />
+            <Text variant="caption" tone="muted">
+              Suggested from the name
+            </Text>
+          </Row>
+        ) : null}
+      </Row>
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+        {CATEGORY_COLORS.map((colour) => {
+          const selected = colour.value.toUpperCase() === value.toUpperCase();
+          return (
+            <Pressable
+              key={colour.value}
+              onPress={() => onChange(colour.value)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={colour.label}
+              hitSlop={4}
+              style={({ pressed }) => ({
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colour.value,
+                opacity: pressed ? 0.7 : 1,
+                /*
+                 * The ring is drawn as a border in the CANVAS colour with an
+                 * outer shadow-free outline, so it reads as a gap between the
+                 * swatch and a thin accent ring regardless of which hue sits
+                 * underneath — a single contrasting border would disappear
+                 * against whichever swatch happened to match it.
+                 */
+                borderWidth: selected ? 3 : 0,
+                borderColor: colors.canvas,
+                ...(selected
+                  ? {
+                      outlineWidth: 2,
+                      outlineColor: colour.value,
+                      outlineStyle: 'solid',
+                    }
+                  : null),
+              })}
+            >
+              {selected ? <Ionicons name="checkmark" size={17} color="#FFFFFF" /> : null}
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export function IconPicker({
   label = 'Icon',
   value,
@@ -585,21 +692,21 @@ export function IconPicker({
  * The one frequency selector used everywhere a subcategory/bill cadence is
  * chosen. Draws its options and labels from the schema's canonical source
  * (FREQUENCY_LABEL / CATEGORY_DEFAULT_FREQUENCIES) so ordering and wording can
- * never drift between screens. `includeUnplanned` adds the unplanned option for
+ * never drift between screens. `includeOngoing` adds the ongoing option for
  * per-bill pickers; leave it off for a category's *default* cadence.
  */
 export function FrequencyPicker({
   label = 'Frequency',
   value,
   onChange,
-  includeUnplanned = false,
+  includeOngoing = false,
 }: {
   label?: string;
   value: SubcategoryFrequency;
   onChange: (value: SubcategoryFrequency) => void;
-  includeUnplanned?: boolean;
+  includeOngoing?: boolean;
 }) {
-  const options = (includeUnplanned ? SUBCATEGORY_FREQUENCIES : CATEGORY_DEFAULT_FREQUENCIES).map(
+  const options = (includeOngoing ? SUBCATEGORY_FREQUENCIES : CATEGORY_DEFAULT_FREQUENCIES).map(
     // Short labels: these sit four-across on one row, and the hint line below
     // carries the full meaning of whichever is selected. The full wording is
     // kept for screen readers, which have no such constraint.

@@ -12,6 +12,7 @@ import { expoDb } from '~/db/client';
 import {
   ALL_PARTS,
   buildSnapshot,
+  migrateValue,
   SNAPSHOT_TABLES,
   tablesForParts,
   tablesForScope,
@@ -203,7 +204,7 @@ export function restoreSnapshot(
         if (columns.length === 0) continue;
 
         const placeholders = columns.map(() => '?').join(', ');
-        const values = columns.map((column) => normalise(row[column]));
+        const values = columns.map((column) => normalise(migrateValue(table, column, row[column])));
 
         expoDb.runSync(
           `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`,

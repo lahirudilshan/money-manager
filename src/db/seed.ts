@@ -18,7 +18,9 @@ export function seedSampleTemplate(existingCardId?: string | null): void {
   const card =
     mainCard ??
     cardRepo.create({
-      name: 'Main Account',
+      // No bank — the seeded account is a placeholder the user replaces, and
+      // `accountLabel` falls back to the neutral brand's name for it.
+      nickname: 'Main Account',
       kind: 'bank',
       color: '#2A78D6',
       icon: 'wallet-outline',

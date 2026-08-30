@@ -18,11 +18,26 @@ export interface CatalogSubcategory {
   /** Default day of month; step 3 lets the user change it. */
   dueDay?: number;
   /**
-   * `unplanned` is allowed because a HOUSE's cost is not a single figure paid
-   * once a month — it is the sum of whatever its bills came to. See the
-   * `houses` category below and `subcategories.frequency` in db/schema.ts.
+   * How the line is PAID, which decides how the app treats it all month.
+   *
+   * The test is simply: can this line be charged more than once in a month?
+   *
+   *   `monthly`   ONE payment, on a date. Rent, the electricity bill, a loan
+   *               instalment, a subscription. It is ticked paid and it is done,
+   *               and its due-day is worth prompting about.
+   *   `ongoing` MANY charges that accumulate — shown as "Ongoing". Groceries,
+   *               fuel, mobile reloads, internet add-ons, parking, a doctor's
+   *               visit. There is an optional monthly amount, and entries are
+   *               logged against it.
+   *   `yearly`    once a year, budgeted monthly (insurance, licence).
+   *
+   * Getting this wrong is not cosmetic: a `monthly` line keeps a SINGLE actual
+   * per period, so the second charge of the month overwrites the first instead
+   * of adding to it, and the total silently under-reports. See
+   * `effectiveAmount` in budget/logic/planning.ts for how a budget's planned
+   * figure survives while its spend accumulates.
    */
-  frequency?: 'monthly' | 'one_time' | 'yearly' | 'unplanned';
+  frequency?: 'monthly' | 'one_time' | 'yearly' | 'ongoing';
   /** Preselected when its parent category is chosen — the common cases. */
   common?: boolean;
 }
@@ -61,11 +76,11 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
       { id: 'rent', name: 'Rent / mortgage', icon: 'home-outline', dueDay: 1, common: true },
       { id: 'electricity', name: 'Electricity (CEB / LECO)', icon: 'flash-outline', dueDay: 10, common: true },
       { id: 'water', name: 'Water', icon: 'water-outline', dueDay: 10, common: true },
-      { id: 'gas', name: 'Gas', icon: 'flame-outline', dueDay: 5 },
-      { id: 'internet', name: 'Internet / broadband', icon: 'wifi-outline', dueDay: 5, common: true },
-      { id: 'maintenance', name: 'Repairs & maintenance', icon: 'construct-outline' },
-      { id: 'domestic-help', name: 'Domestic help', icon: 'people-outline', dueDay: 1 },
-      { id: 'garbage', name: 'Garbage / municipal', icon: 'trash-outline' },
+      { id: 'gas', name: 'Gas', icon: 'flame-outline', dueDay: 5, frequency: 'ongoing' },
+      { id: 'internet', name: 'Internet / broadband', icon: 'wifi-outline', dueDay: 5, common: true, frequency: 'ongoing' },
+      { id: 'maintenance', name: 'Repairs & maintenance', icon: 'construct-outline', frequency: 'ongoing' },
+      { id: 'domestic-help', name: 'Domestic help', icon: 'people-outline', dueDay: 1, frequency: 'ongoing' },
+      { id: 'garbage', name: 'Garbage / municipal', icon: 'trash-outline', frequency: 'ongoing' },
     ],
   },
   /*
@@ -76,7 +91,7 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
    * what these lines carry is the per-property BUDGET ("Weligama costs me about
    * 10,000 a month"), against which the house-tagged payments accumulate.
    *
-   * `unplanned` on every line, because a house's cost is the sum of whatever
+   * `ongoing` on every line, because a house's cost is the sum of whatever
    * its bills came to — not a single figure paid once a month. See
    * `HOUSE_SCOPED_CATALOG_IDS` in core/houses.ts for which BILLS ask which
    * house they belong to; this category is where the answers add up.
@@ -88,10 +103,10 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     color: '#0F6FDE',
     blurb: 'Properties whose bills you pay',
     subcategories: [
-      { id: 'house-own', name: 'My home', icon: 'home-outline', frequency: 'unplanned', common: true },
-      { id: 'house-parents', name: "Primary parent's home", icon: 'home-outline', frequency: 'unplanned' },
-      { id: 'house-second', name: "Secondary parent's home", icon: 'home-outline', frequency: 'unplanned' },
-      { id: 'house-rented-out', name: 'Rented out', icon: 'key-outline', frequency: 'unplanned' },
+      { id: 'house-own', name: 'My home', icon: 'home-outline', frequency: 'ongoing', common: true },
+      { id: 'house-parents', name: "Primary parent's home", icon: 'home-outline', frequency: 'ongoing' },
+      { id: 'house-second', name: "Secondary parent's home", icon: 'home-outline', frequency: 'ongoing' },
+      { id: 'house-rented-out', name: 'Rented out', icon: 'key-outline', frequency: 'ongoing' },
     ],
   },
   {
@@ -116,14 +131,22 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
        * still eating out — it is restaurant food, not a grocery run. Without
        * the word, "Eating out" invites exactly that misfiling.
        */
-      { id: 'groceries', name: 'Groceries (home food)', icon: 'basket-outline', dueDay: 1, common: true },
+      {
+        id: 'groceries',
+        name: 'Groceries (home food)',
+        icon: 'basket-outline',
+        dueDay: 1,
+        frequency: 'ongoing',
+        common: true,
+      },
       {
         id: 'dining',
         name: 'Eating out & delivery',
         icon: 'restaurant-outline',
+        frequency: 'ongoing',
         common: true,
       },
-      { id: 'household', name: 'Household items', icon: 'cube-outline' },
+      { id: 'household', name: 'Household items', icon: 'cube-outline', frequency: 'ongoing' },
       /*
        * Cash taken out, as its own line.
        *
@@ -133,10 +156,20 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
        * real category people track — this is where a withdrawal belongs until
        * they say otherwise.
        */
-      { id: 'cash', name: 'Cash / pocket money', icon: 'cash-outline' },
-      { id: 'clothing', name: 'Clothing', icon: 'shirt-outline' },
-      { id: 'personal-care', name: 'Personal care', icon: 'cut-outline' },
-      { id: 'mobile', name: 'Mobile / phone bill', icon: 'phone-portrait-outline', dueDay: 5, common: true },
+      { id: 'cash', name: 'Cash / pocket money', icon: 'cash-outline', frequency: 'ongoing' },
+      { id: 'clothing', name: 'Clothing', icon: 'shirt-outline', frequency: 'ongoing' },
+      { id: 'personal-care', name: 'Personal care', icon: 'cut-outline', frequency: 'ongoing' },
+      /*
+       * Pets are a recurring household cost with no other home in this catalog.
+       * Food, vet visits and grooming were being filed under Groceries and
+       * Medicine respectively, which corrupts both: a vet bill is not the
+       * family's medicine spend, and pet food is not the week's shopping.
+       *
+       * One line rather than three, because the useful question is "what does
+       * the animal cost me" — splitting it produces lines too small to read.
+       */
+      { id: 'pet', name: 'Pet care', icon: 'paw-outline', frequency: 'ongoing' },
+      { id: 'mobile', name: 'Mobile / phone bill', icon: 'phone-portrait-outline', dueDay: 5, common: true, frequency: 'ongoing' },
     ],
   },
   {
@@ -146,26 +179,48 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     color: '#0FA8A0',
     blurb: 'Getting around',
     subcategories: [
-      { id: 'fuel', name: 'Fuel', icon: 'speedometer-outline', common: true },
-      { id: 'vehicle-service', name: 'Service & repairs', icon: 'build-outline' },
+      { id: 'fuel', name: 'Fuel', icon: 'speedometer-outline', frequency: 'ongoing', common: true },
+      { id: 'vehicle-service', name: 'Service & repairs', icon: 'build-outline', frequency: 'ongoing' },
       { id: 'vehicle-insurance', name: 'Vehicle insurance', icon: 'shield-outline', frequency: 'yearly' },
       { id: 'license', name: 'Revenue licence', icon: 'document-text-outline', frequency: 'yearly' },
-      { id: 'parking', name: 'Parking & tolls', icon: 'car-outline' },
-      { id: 'public-transport', name: 'Bus / train / taxi', icon: 'bus-outline' },
+      { id: 'parking', name: 'Parking & tolls', icon: 'car-outline', frequency: 'ongoing' },
+      { id: 'public-transport', name: 'Bus / train / taxi', icon: 'bus-outline', frequency: 'ongoing' },
     ],
   },
   {
     id: 'loans',
-    name: 'Loans & credit',
-    icon: 'card-outline',
+    name: 'Debt',
+    /*
+     * The banknote is the plainest mark for money owed. It previously sat on
+     * the Personal loan LINE inside this category — a parent must not wear one
+     * of its children's icons, so that line moved to `person-outline` (which
+     * also matches `LOAN_KIND_ICON` on the Loans tab).
+     *
+     * `card-outline` was the original and is worse still: a card is one PRODUCT
+     * among several here, and it belongs to the Credit card line below.
+     *
+     * The `id` stays `loans` deliberately: it is the join key for SMS routing
+     * and for restoring an existing backup, so renaming it would strand both.
+     */
+    icon: 'cash-outline',
     color: '#DC2626',
     blurb: 'Instalments and repayments',
     subcategories: [
-      { id: 'personal-loan', name: 'Personal loan', icon: 'cash-outline', dueDay: 5, common: true },
+      { id: 'personal-loan', name: 'Personal loan', icon: 'person-outline', dueDay: 5, common: true },
       { id: 'lease', name: 'Vehicle lease', icon: 'car-sport-outline', dueDay: 5 },
       { id: 'housing-loan', name: 'Housing loan', icon: 'home-outline', dueDay: 5 },
       { id: 'credit-card', name: 'Credit card payment', icon: 'card-outline', dueDay: 15, common: true },
       { id: 'pawning', name: 'Pawning', icon: 'diamond-outline' },
+      /*
+       * Phones, laptops and appliances bought on instalment.
+       *
+       * Distinct from `credit-card`, which is one revolving balance, and from
+       * the loans in step 5, which have a lender, rate and term. A device plan
+       * is a fixed number of payments toward a known total — which is exactly
+       * the sinking-fund shape (`planTargetMinor`), so the line can show
+       * progress to payoff rather than repeating forever.
+       */
+      { id: 'device-instalment', name: 'Device / appliance instalment', icon: 'phone-portrait-outline', dueDay: 5 },
     ],
   },
   {
@@ -177,7 +232,7 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     subcategories: [
       { id: 'school-fees', name: 'School fees', icon: 'school-outline', dueDay: 1 },
       { id: 'tuition', name: 'Tuition / classes', icon: 'book-outline', dueDay: 1 },
-      { id: 'childcare', name: 'Childcare', icon: 'happy-outline' },
+      { id: 'childcare', name: 'Childcare', icon: 'happy-outline', frequency: 'ongoing' },
       /*
        * "Support to parents" deliberately absent.
        *
@@ -188,7 +243,7 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
        * Having both meant the same money could be counted twice, on two lines
        * that never agreed.
        */
-      { id: 'kids-extras', name: "Children's extras", icon: 'balloon-outline' },
+      { id: 'kids-extras', name: "Children's extras", icon: 'balloon-outline', frequency: 'ongoing' },
     ],
   },
   {
@@ -199,9 +254,9 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     blurb: 'Medical and wellbeing',
     subcategories: [
       { id: 'health-insurance', name: 'Health insurance', icon: 'shield-checkmark-outline', dueDay: 1 },
-      { id: 'medicine', name: 'Medicine', icon: 'medkit-outline' },
-      { id: 'doctor', name: 'Doctor / channelling', icon: 'pulse-outline' },
-      { id: 'gym', name: 'Gym / fitness', icon: 'barbell-outline', dueDay: 1 },
+      { id: 'medicine', name: 'Medicine', icon: 'medkit-outline', frequency: 'ongoing' },
+      { id: 'doctor', name: 'Doctor / channelling', icon: 'pulse-outline', frequency: 'ongoing' },
+      { id: 'gym', name: 'Gym / fitness', icon: 'barbell-outline', dueDay: 1, frequency: 'ongoing' },
     ],
   },
   {
@@ -226,10 +281,10 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
    * The useful question is "what did my bank cost me this month", and that is a
    * single total.
    *
-   * `unplanned` because fees accumulate — several arrive in a month and a
+   * `ongoing` because fees accumulate — several arrive in a month and a
    * monthly line would hold only ONE actual, so the second charge would
    * overwrite the first instead of adding to it. Nobody budgets for them
-   * either, so the total reads honestly as unplanned spend.
+   * either, so the total reads honestly as ongoing spend.
    */
   {
     id: 'bank-fees',
@@ -242,7 +297,7 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
         id: 'bank-charges',
         name: 'Bank charges',
         icon: 'receipt-outline',
-        frequency: 'unplanned',
+        frequency: 'ongoing',
         common: true,
       },
     ],
@@ -255,6 +310,19 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     blurb: 'Money you set aside on purpose',
     subcategories: [
       { id: 'emergency', name: 'Emergency fund', icon: 'umbrella-outline', dueDay: 25, common: true },
+      /*
+       * The month's slack — distinct from the emergency fund above.
+       *
+       * An emergency fund is untouched savings for a real crisis; this is the
+       * amount set aside expecting it to be SPENT on the small surprises every
+       * month actually brings (a repair, a gift, a fare). Without it those land
+       * on whatever line is nearest and make it lie, or push the board negative
+       * and make an otherwise sound plan look broken.
+       *
+       * `ongoing` because it holds many small unrelated entries rather than
+       * one payment — the same reason bank charges are.
+       */
+      { id: 'buffer', name: 'Unexpected / buffer', icon: 'alert-circle-outline', frequency: 'ongoing', common: true },
       { id: 'fixed-deposit', name: 'Fixed deposit', icon: 'lock-closed-outline', dueDay: 25 },
       { id: 'investments', name: 'Investments', icon: 'trending-up-outline', dueDay: 25 },
       { id: 'vehicle-fund', name: 'Vehicle fund', icon: 'car-sport-outline' },
@@ -269,12 +337,12 @@ export const CATEGORY_CATALOG: CatalogCategory[] = [
     color: '#5B6472',
     blurb: 'The enjoyable extras',
     subcategories: [
-      { id: 'entertainment', name: 'Entertainment', icon: 'film-outline' },
-      { id: 'travel', name: 'Travel & trips', icon: 'airplane-outline' },
-      { id: 'gifts', name: 'Gifts', icon: 'gift-outline' },
-      { id: 'donations', name: 'Donations / dana', icon: 'heart-circle-outline' },
-      { id: 'hobbies', name: 'Hobbies', icon: 'color-palette-outline' },
-      { id: 'events', name: 'Weddings & events', icon: 'people-circle-outline' },
+      { id: 'entertainment', name: 'Entertainment', icon: 'film-outline', frequency: 'ongoing' },
+      { id: 'travel', name: 'Travel & trips', icon: 'airplane-outline', frequency: 'ongoing' },
+      { id: 'gifts', name: 'Gifts', icon: 'gift-outline', frequency: 'ongoing' },
+      { id: 'donations', name: 'Donations / dana', icon: 'heart-circle-outline', frequency: 'ongoing' },
+      { id: 'hobbies', name: 'Hobbies', icon: 'color-palette-outline', frequency: 'ongoing' },
+      { id: 'events', name: 'Weddings & events', icon: 'people-circle-outline', frequency: 'ongoing' },
     ],
   },
 ];

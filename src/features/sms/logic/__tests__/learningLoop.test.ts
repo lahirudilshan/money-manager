@@ -14,7 +14,7 @@ import { matchMerchant, planRuleUpsert, type MerchantRule } from '../merchantRul
  * individually.
  */
 const board: BoardSlice = {
-  cards: [{ id: 'card1', name: 'HNB', last4: '1234', bankName: 'HNB' }],
+  cards: [{ id: 'card1', nickname: null, last4: '1234', bankName: 'HNB' }],
   categories: [{ id: 'cat_food', name: 'Food', cardId: 'card1' }],
   subcategories: [
     {

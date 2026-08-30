@@ -6,6 +6,7 @@ import {
   buildTokenExchange,
   buildTokenRefresh,
   DRIVE_SCOPE,
+  isRefreshTokenDead,
   isTokenValid,
   parseAuthRedirect,
   parseTokenResponse,
@@ -94,7 +95,14 @@ describe('authorization URL', () => {
      * app — which reads as the integration being broken.
      */
     expect(params.get('access_type')).toBe('offline');
-    expect(params.get('prompt')).toBe('consent');
+    /*
+     * Both prompts, order-independent. `consent` is what makes Google return a
+     * refresh token; `select_account` is what makes the account chooser appear,
+     * without which "use a different account" silently reuses the current one.
+     */
+    const prompts = (params.get('prompt') ?? '').split(' ');
+    expect(prompts).toContain('consent');
+    expect(prompts).toContain('select_account');
   });
 
   it('carries the state, for verifying the redirect came from this flow', () => {
@@ -207,5 +215,32 @@ describe('base64UrlEncode', () => {
     const encoded = base64UrlEncode(new Uint8Array([251, 255, 190, 255]));
 
     expect(encoded).not.toMatch(/[+/=]/);
+  });
+});
+
+describe('isRefreshTokenDead', () => {
+  it('recognises a revoked or expired refresh token', () => {
+    // What Google answers once the grant is gone — revoked in account settings,
+    // expired through disuse, or invalidated by a password change.
+    expect(isRefreshTokenDead({ error: 'invalid_grant' })).toBe(true);
+    expect(isRefreshTokenDead({ error: 'invalid_client' })).toBe(true);
+  });
+
+  it('does NOT treat a transient failure as a dead token', () => {
+    /*
+     * The important half. Signing someone out on a network blip or a Google 500
+     * turns a retry into a re-authentication — and these all resolve on their
+     * own, so the connection must survive them.
+     */
+    expect(isRefreshTokenDead({ error: 'temporarily_unavailable' })).toBe(false);
+    expect(isRefreshTokenDead({ error: 'internal_failure' })).toBe(false);
+    expect(isRefreshTokenDead(null)).toBe(false);
+    expect(isRefreshTokenDead(undefined)).toBe(false);
+    expect(isRefreshTokenDead('Service Unavailable')).toBe(false);
+    expect(isRefreshTokenDead({})).toBe(false);
+  });
+
+  it('is false for a SUCCESSFUL response, which carries no error', () => {
+    expect(isRefreshTokenDead({ access_token: 'abc', expires_in: 3600 })).toBe(false);
   });
 });

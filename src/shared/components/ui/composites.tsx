@@ -915,3 +915,84 @@ export function Empty({
     </View>
   );
 }
+
+/**
+ * A two-or-three-way exclusive choice, rendered as one pill with the selected
+ * segment raised out of a sunken track.
+ *
+ * For a small, FIXED set of modes where seeing the alternatives matters — the
+ * account/card switch, the manual/paste switch on the entry form. Anything
+ * longer belongs in a picker: segments divide the width evenly, so a fourth
+ * option starts truncating labels.
+ *
+ * Lived inside the Accounts screen until a second caller needed it; shared here
+ * so the two cannot drift into looking like different controls.
+ */
+export function Segmented({
+  options,
+  selectedKey,
+  onSelect,
+}: {
+  options: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap }[];
+  selectedKey: string;
+  onSelect: (key: string) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        backgroundColor: colors.surfaceSunken,
+        borderRadius: radius.md,
+        padding: 4,
+        gap: 4,
+      }}
+    >
+      {options.map((option) => {
+        const selected = selectedKey === option.key;
+        return (
+          <Pressable
+            key={option.key}
+            onPress={() => onSelect(option.key)}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={option.label}
+            style={{
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              paddingVertical: 11,
+              borderRadius: radius.sm,
+              backgroundColor: selected ? colors.surface : 'transparent',
+              ...(selected
+                ? {
+                    borderWidth: 1,
+                    borderColor: colors.hairline,
+                    shadowColor: '#000',
+                    shadowOpacity: 0.06,
+                    shadowRadius: 4,
+                    shadowOffset: { width: 0, height: 1 },
+                  }
+                : {}),
+            }}
+          >
+            <Ionicons
+              name={option.icon}
+              size={17}
+              color={selected ? colors.accent : colors.inkSecondary}
+            />
+            <Text
+              variant="small"
+              color={selected ? colors.ink : colors.inkSecondary}
+              style={{ fontWeight: selected ? '800' : '600' }}
+            >
+              {option.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}

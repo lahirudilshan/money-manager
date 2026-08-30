@@ -1,8 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { AccountField } from '~/features/accounts/components/AccountPicker';
-import { DayPicker } from '~/features/budget/components/DayPicker';
-import { IconPicker, NameWithIconField } from '~/shared/components/forms';
+import { ColorPicker, IconPicker, NameWithIconField } from '~/shared/components/forms';
+import { DEFAULT_CATEGORY_COLOR, suggestCategoryColor } from '~/shared/data/categoryColors';
 import { DEFAULT_CATEGORY_ICON, suggestCategoryIcon } from '~/shared/data/categoryIcons';
 import { BottomSheet, GradientButton, Text } from '~/shared/components/ui';
 import { useModalClose } from '~/shared/hooks/useModalClose';
@@ -18,14 +17,29 @@ export default function NewCategoryScreen() {
   const [name, setName] = useState('');
   const [icon, setIcon] = useState<keyof typeof Ionicons.glyphMap>(DEFAULT_CATEGORY_ICON);
   const [iconTouched, setIconTouched] = useState(false);
-  const [cardId, setCardId] = useState<string | null>(state.cards[0]?.id ?? null);
-  const [dueDay, setDueDay] = useState(1);
+  const [color, setColor] = useState(DEFAULT_CATEGORY_COLOR);
+  /*
+   * Both marks auto-suggest as the name is typed, and both stop the moment the
+   * user picks one by hand — overriding a deliberate choice on the next
+   * keystroke is the behaviour that makes an auto-suggestion feel hostile.
+   * Tracked separately so choosing a colour does not freeze the icon.
+   */
+  const [colorTouched, setColorTouched] = useState(false);
+  /** True while the shown colour came from the name, so the picker can say so. */
+  const [colorSuggested, setColorSuggested] = useState(false);
 
   function onNameChange(next: string) {
     setName(next);
     if (!iconTouched) {
       const suggested = suggestCategoryIcon(next);
       if (suggested) setIcon(suggested);
+    }
+    if (!colorTouched) {
+      const suggested = suggestCategoryColor(next);
+      if (suggested) {
+        setColor(suggested);
+        setColorSuggested(true);
+      }
     }
   }
 
@@ -35,12 +49,24 @@ export default function NewCategoryScreen() {
 
     state.addCategory({
       name: trimmed,
-      cardId,
       icon,
-      dueDay,
-      // A category has no cadence of its own — only its bills do. New bills
-      // default to monthly (the schema default) and each sets its own "How
-      // often?" when added.
+      color,
+      /*
+       * No account and no due day.
+       *
+       * A category is a CONTAINER — every bill inside it names its own account
+       * and its own day, and those are the ones that are actually paid. Asking
+       * again at the container level created a default that silently disagreed
+       * with its own contents: a "Utilities" category funded from HNB whose
+       * three bills were all paid from BOC still read "HNB" on the board.
+       *
+       * The category now derives what it shows from its bills (see the bank
+       * list on the category card), so there is nothing left to set here.
+       *
+       * A category has no cadence of its own either — only its bills do. New
+       * bills default to monthly (the schema default) and each sets its own
+       * "How often?" when added.
+       */
       sortOrder: state.categories.length,
     });
     closeModal();
@@ -53,7 +79,7 @@ export default function NewCategoryScreen() {
       onClose={closeModal}
       title="New category"
       icon={icon}
-      iconColor={colors.accent}
+      iconColor={color}
       scroll
       footer={
         <GradientButton
@@ -68,29 +94,22 @@ export default function NewCategoryScreen() {
           value={name}
           onChangeText={onNameChange}
           icon={icon}
-          iconColor={colors.accent}
+          iconColor={color}
           placeholder="e.g. Home Expenses"
           autoFocus
         />
 
-        <IconPicker value={icon} onChange={(next) => { setIcon(next); setIconTouched(true); }} accent={colors.accent} />
+        <IconPicker value={icon} onChange={(next) => { setIcon(next); setIconTouched(true); }} accent={color} />
 
-        {/*
-          Always shown — the picker itself offers "Add an account".
-
-          This used to fall back to a line of grey text saying to add an account
-          first, which named the problem and gave no way to act on it. The
-          picker now routes to the account editor, so the field IS the way
-          forward rather than a message about one.
-        */}
-        <AccountField
-          label="Transfer money to"
-          cards={state.cards}
-          selectedId={cardId}
-          onSelect={setCardId}
+        <ColorPicker
+          value={color}
+          suggested={colorSuggested}
+          onChange={(next) => {
+            setColor(next);
+            setColorTouched(true);
+            setColorSuggested(false);
+          }}
         />
-
-        <DayPicker value={dueDay} onChange={setDueDay} />
     </BottomSheet>
   );
 }

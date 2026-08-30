@@ -58,11 +58,7 @@ export function AccountField({
         {selected ? (
           <>
             <BankLogo
-              brand={resolveBrand({
-                bankId: selected.bankId,
-                bankName: selected.bankName,
-                name: selected.name,
-              })}
+              brand={resolveBrand({ bankId: selected.bankId, bankName: selected.bankName })}
               size={30}
             />
             <View style={{ flex: 1 }}>
@@ -156,7 +152,7 @@ export function AccountPickerSheet({
       >
         {card ? (
           <BankLogo
-            brand={resolveBrand({ bankId: card.bankId, bankName: card.bankName, name: card.name })}
+            brand={resolveBrand({ bankId: card.bankId, bankName: card.bankName })}
             size={34}
           />
         ) : (
@@ -367,9 +363,8 @@ function AccountEditorSheet({
 
     if (!brand) return;
     const created = state.addCard({
-      // The bank's short name is the fallback identity; the nickname is what
-      // the lists actually lead with when it is set.
-      name: brand.shortName,
+      // The bank IS the fallback identity — `accountLabel` leads with it when
+      // no nickname is given, so there is nothing to copy into a second field.
       kind: 'bank',
       bankId: brand.id,
       bankName: brand.name,
@@ -456,15 +451,11 @@ function AccountEditorSheet({
         existing && (
           <Row gap={space.md}>
             <BankLogo
-              brand={resolveBrand({
-                bankId: existing.bankId,
-                bankName: existing.bankName,
-                name: existing.name,
-              })}
+              brand={resolveBrand({ bankId: existing.bankId, bankName: existing.bankName })}
               size={36}
             />
             <Text variant="bodyStrong" style={{ flex: 1 }} numberOfLines={1}>
-              {existing.bankName ?? existing.name}
+              {accountLabel(existing).primary}
             </Text>
           </Row>
         )
