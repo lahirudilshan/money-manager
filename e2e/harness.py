@@ -538,7 +538,16 @@ def built_board(bank="Commercial Bank of Ceylon", hint="Commercial Bank",
         tap("Go to Dashboard")
         time.sleep(3)
 
-    # Save what was just built so nothing walks this flow again.
+    # Save what was just built so nothing walks this flow again — but only once
+    # it is demonstrably a finished board.
+    #
+    # An unchecked save is how the two-bank fixture came to hold a copy of a
+    # real phone's board: whatever was on the device at the time got written
+    # under this name, and every later case restored it believing it had asked
+    # for a freshly walked one. A snapshot is trusted for the rest of the
+    # suite's life, so it is worth one query to confirm before writing it.
+    if not db_query("SELECT 1 FROM subcategories LIMIT 1"):
+        return False
     snapshot_db(cache)
     return True
 
@@ -564,25 +573,49 @@ def blank_slate(wait=2.0):
     reproduces against it — but that case is about the wipe itself, so it keeps
     calling `fresh_install()` directly rather than coming through here.
     """
-    if has_snapshot(BLANK) and restore_db(BLANK):
-        if start_onboarding(wait) and _no_banks_selected(wait):
+    had_snapshot = has_snapshot(BLANK)
+    if had_snapshot and restore_db(BLANK):
+        if _ready_for_banks(wait):
             return True
         # Restored, but not usable: iOS resumed the app deeper in, or the
         # previous case's bank tiles are still selected. Fall through to a real
         # wipe rather than hand back a dirty screen.
         relaunch()
-        if start_onboarding(wait) and _no_banks_selected(wait):
+        if _ready_for_banks(wait):
             return True
 
     fresh_install()
-    if not start_onboarding(wait):
+    if not _ready_for_banks(wait):
         return False
-    snapshot_db(BLANK)
-    # Saving relaunches the app, which lands back on the welcome gate.
-    return start_onboarding(wait)
+
+    # Save only the FIRST time. Re-saving on every fallthrough overwrote a good
+    # snapshot with whatever was on screen at the time — once that was a
+    # half-loaded app, and every later case restored the broken copy and failed
+    # looking for a bank tile on a splash screen. The snapshot is a fixture: it
+    # is written once and then only read.
+    if not had_snapshot:
+        snapshot_db(BLANK)
+        # Saving relaunches the app, which lands back on the welcome gate.
+        return _ready_for_banks(wait)
+    return True
 
 
-def _no_banks_selected(wait=2.0):
+def _ready_for_banks(wait=2.0):
+    """Wait for the bank question to be showing, with nothing selected.
+
+    Both halves matter, and neither is instant: a relaunched app spends a second
+    or two on its splash screen before any tile exists, so asking once answers
+    "no tiles" for a screen that is merely still loading.
+    """
+    for _ in range(8):
+        if start_onboarding(wait) and _no_banks_selected():
+            return True
+        time.sleep(1.0)
+        invalidate_source()
+    return False
+
+
+def _no_banks_selected():
     """Is the bank question showing with nothing picked?
 
     The selection lives in React component state, NOT in the database: picking a

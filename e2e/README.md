@@ -174,6 +174,23 @@ the dashboard, and failed with "settings shows no sections" — which reads as a
 broken Settings screen rather than a tap that went nowhere. If a case fails
 claiming a screen is empty, screenshot it before believing the assertion.
 
+**A snapshot is written once, then only read.** Re-saving one on a later call
+looks harmless and is not: `blank_slate()` briefly re-saved on every fallthrough,
+so the first time it fell through with the app still on its splash screen it
+overwrote the blank fixture with a *finished board*. Every later persona then
+restored that and failed looking for a bank tile — on a device whose database
+was not blank at all. The failures pointed at the tiles, the cache was the
+culprit, and it survived across runs.
+
+Two habits follow. Guard any `snapshot_db()` behind "did this exist already?",
+and when a cached case fails inexplicably, check the fixture before the app:
+
+```bash
+sqlite3 e2e/artifacts/snapshots/blank-onboarding.db "select count(*) from cards"
+```
+
+Delete a snapshot to force a rebuild — nothing invalidates one automatically.
+
 **Restoring data does not reset the SCREEN.** Picking a bank in onboarding
 writes no row — `cards` stays empty until the plan is committed — so the
 selection lives in React state, which survives both a database restore and a
