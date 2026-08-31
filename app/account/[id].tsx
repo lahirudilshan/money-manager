@@ -6,7 +6,7 @@ import { BottomSheet, Button, DetailRow, Divider, GradientButton, Label, Row, Su
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { formatMoney } from '~/shared/lib/money';
-import { effectiveAmount } from '~/features/budget/logic/planning';
+import { effectiveAmount, resolveCardId } from '~/features/budget/logic/planning';
 import { accountLabel } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
@@ -55,21 +55,56 @@ export default function AccountDetailScreen() {
   // effective (actual-or-planned) amounts — so the detail shows *where the
   // money goes*, not just a list of names.
   const fundedCategories = useMemo(() => {
+    /*
+     * Resolved per LEAF, matching `selectAccountTransfers`.
+     *
+     * Filtering on `category.cardId` alone was wrong in both directions,
+     * because a bill can override the account its category names:
+     *
+     *   - it MISSED an account funded only by overrides. A category sitting on
+     *     one account with its grocery bills pointed at another showed that
+     *     second account as funding nothing at all — the section was empty
+     *     while the dashboard was asking for real money to be moved there.
+     *   - it INVENTED categories for the account named at category level even
+     *     when every line inside had been pointed somewhere else.
+     *
+     * So each category is filtered down to the lines that actually resolve here
+     * and dropped when none do, and the header total is the sum of those lines
+     * rather than the category's whole summary — which would otherwise report
+     * money that belongs to a different account.
+     */
     return selectCategoryViews(state)
-      .filter((cv) => cv.category.cardId === card.id)
-      .map((cv) => ({
-        id: cv.category.id,
-        name: cv.category.name,
-        color: cv.category.color,
-        icon: cv.category.icon,
-        totalMinor: cv.summary.totalMinor,
-        lines: cv.subcategories.map((s) => ({
-          id: s.id,
-          name: s.name,
-          amountMinor: effectiveAmount(s),
-          isActual: s.actualMinor != null,
-        })),
-      }));
+      .map((cv) => {
+        const lines = cv.subcategories.filter((s) => {
+          const raw = cv.rawSubcategories.find((r) => r.id === s.id);
+          return resolveCardId(raw?.cardId, cv.category.cardId) === card.id;
+        });
+
+        return {
+          id: cv.category.id,
+          name: cv.category.name,
+          color: cv.category.color,
+          icon: cv.category.icon,
+          totalMinor: lines.reduce((sum, s) => sum + effectiveAmount(s), 0),
+          lines: lines.map((s) => ({
+            id: s.id,
+            name: s.name,
+            amountMinor: effectiveAmount(s),
+            /*
+             * Whether the figure shown is REAL money rather than a plan.
+             *
+             * `!= null` alone is true for every ongoing line: a spending budget
+             * reports its entry total, which is a real `0` before the month's
+             * first receipt rather than the `null` a dated bill reports. So an
+             * untouched grocery budget was tinted as though it had already been
+             * spent. Requiring a non-zero figure makes the tint mean what it
+             * looks like it means on both cadences.
+             */
+            isActual: (s.actualMinor ?? 0) > 0,
+          })),
+        };
+      })
+      .filter((cat) => cat.lines.length > 0);
   }, [state, card.id]);
 
   /**
@@ -165,7 +200,28 @@ export default function AccountDetailScreen() {
         `icon` takes a node for exactly this case, and doing so opts out of the
         white tint the glyph path applies, which a multicolour logo needs.
       */
-      icon={<BankLogo brand={brand} size={30} />}
+      /*
+       * The mark FILLS the header tile — 40px, matching the tile's own size.
+       *
+       * At 30px it floated inside a 40px tile painted `iconColor`, so five
+       * points of the bank's colour showed on every side and read as a thick
+       * coloured ring around the logo rather than as the tile it actually is.
+       * A white 40px chip covers the tile exactly, leaving the logo framed by
+       * its own hairline the way it is everywhere else in the app.
+       */
+      icon={
+        <BankLogo
+          brand={brand}
+          size={40}
+          /*
+           * A 1px hairline around the mark, since the logo now sits on white
+           * with nothing behind it: a wordmark with white corners (most are)
+           * would otherwise dissolve into the header. `BankSelectTile` frames
+           * its chip the same way, with the same colour.
+           */
+          style={{ borderWidth: 1, borderColor: 'rgba(16,24,40,0.08)' }}
+        />
+      }
       iconColor={brand.color}
       scroll
       footer={

@@ -534,6 +534,19 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
    */
   const [planDraft, setPlanDraft] = useState<SavingPlanDraft>(emptySavingPlanDraft);
 
+  /*
+   * The amount field holds its own TEXT, like every other money field in the app.
+   *
+   * It used to derive its value from the draft's `plannedMinor` on every render
+   * — parse on keystroke, divide by 100 and re-format on the way back out. That
+   * round trip cannot represent a half-typed number: "5000." lost its point the
+   * instant it was typed, and "5000.0" came back as "5000", so entering any
+   * decimal was impossible and a figure appeared to lose its trailing digits
+   * while being typed. Keeping the string means what the user typed is what
+   * stays on screen, and the draft is updated alongside it.
+   */
+  const [amountText, setAmountText] = useState('');
+
   React.useEffect(() => {
     setPlanDraft(
       line
@@ -542,6 +555,19 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
             planDueDate: line.planDueDate ? new Date(line.planDueDate) : null,
           })
         : emptySavingPlanDraft,
+    );
+    // Reseed from whichever figure this line's currency mode shows, so
+    // reopening a line presents what was entered rather than an empty field.
+    setAmountText(
+      line
+        ? line.currency === 'usd'
+          ? line.foreignAmount
+            ? formatAmountInput(String(line.foreignAmount))
+            : ''
+          : line.plannedMinor > 0
+            ? formatAmountInput(String(line.plannedMinor / 100))
+            : ''
+        : '',
     );
   }, [line?.id]);
 
@@ -599,14 +625,27 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                     <Chip
                       label={state.currency}
                       selected={line.currency === 'local'}
-                      onPress={() =>
-                        draft.updateLine(line.id, { currency: 'local', foreignAmount: null })
-                      }
+                      onPress={() => {
+                        // The field now holds text, so switching the mode has to
+                        // reseed it — otherwise the USD digits stay on screen
+                        // while the draft reads them as a local amount.
+                        setAmountText(
+                          line.plannedMinor > 0
+                            ? formatAmountInput(String(line.plannedMinor / 100))
+                            : '',
+                        );
+                        draft.updateLine(line.id, { currency: 'local', foreignAmount: null });
+                      }}
                     />
                     <Chip
                       label="USD"
                       selected={line.currency === 'usd'}
-                      onPress={() => draft.updateLine(line.id, { currency: 'usd' })}
+                      onPress={() => {
+                        setAmountText(
+                          line.foreignAmount ? formatAmountInput(String(line.foreignAmount)) : '',
+                        );
+                        draft.updateLine(line.id, { currency: 'usd' });
+                      }}
                     />
                   </Row>
                 </Row>
@@ -616,24 +655,21 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                    * Grouped for display, so a seven-digit salary is readable as
                    * it is typed rather than a wall of digits.
                    *
-                   * This field is unusual: it holds no text state of its own —
-                   * the value is derived from the parsed number in the draft on
-                   * every render. So the formatting is applied to what is shown
-                   * rather than in `onChangeText`, and `parseAmount` below
-                   * strips the separators straight back out.
+                   * The string is the source of truth (see `amountText`), and
+                   * the draft's `plannedMinor` is derived from it — the reverse
+                   * of what this field used to do.
                    */
-                  value={
-                    line.currency === 'usd'
-                      ? line.foreignAmount
-                        ? formatAmountInput(String(line.foreignAmount))
-                        : ''
-                      : line.plannedMinor > 0
-                        ? formatAmountInput(String(line.plannedMinor / 100))
-                        : ''
-                  }
+                  value={amountText}
                   onChangeText={(text) => {
+                    // Reshaped once, here, and KEPT — the field shows exactly
+                    // this string, so separators appear as the figure grows and
+                    // a trailing "." or "0" survives long enough to type the
+                    // rest of the decimal.
+                    const next = formatAmountInput(text);
+                    setAmountText(next);
+
                     if (line.currency === 'usd') {
-                      const foreign = Number.parseFloat(text.replace(/[^0-9.]/g, ''));
+                      const foreign = Number.parseFloat(next.replace(/[^0-9.]/g, ''));
                       const valid = Number.isFinite(foreign) ? foreign : null;
                       draft.updateLine(line.id, {
                         foreignAmount: valid,
@@ -642,7 +678,7 @@ function LineEditorSheet({ line, onClose }: { line: DraftLine | undefined; onClo
                         plannedMinor: valid ? convertToLocalMinor(valid, state.usdRate) : 0,
                       });
                     } else {
-                      draft.updateLine(line.id, { plannedMinor: parseAmount(text) ?? 0 });
+                      draft.updateLine(line.id, { plannedMinor: parseAmount(next) ?? 0 });
                     }
                   }}
                   placeholder="0"

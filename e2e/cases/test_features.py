@@ -37,9 +37,13 @@ def test_loan_installment_and_editing(check):
     tap("Loans", required=True)
     time.sleep(2.5)
 
+    # Two different affordances, depending on what the board already holds:
+    # the empty state offers "Add your first loan", while a tab that already
+    # lists loans offers the "Add loan" header button. Only the empty-state
+    # wording was tried before, so this case could not run on any board that
+    # already had a loan — a real one always does.
     opened = (tap("Add your first loan", partial=True)
-              or tap("Add a loan", partial=True)
-              or tap("Add another loan", partial=True))
+              or tap("Add loan", partial=True))
     if not check.that(opened, "opened the add-loan form"):
         return
     time.sleep(2.5)
@@ -153,8 +157,13 @@ def test_accounts_screen_add_and_edit(check):
     time.sleep(2.5)
 
     text = screen_text()
-    check.that("ComBank" in text or "Commercial" in text,
-               "the onboarding account is listed")
+    # Derived from the database, not hardcoded: this case must pass on whatever
+    # board is loaded — the fixture's ComBank, or a real one restored through
+    # `E2E_SNAPSHOT` whose accounts are named something else entirely.
+    names = [n for n in db_query(
+        "SELECT COALESCE(NULLIF(nickname,''), bank_name) FROM cards") if n]
+    check.that(bool(names) and any(n in text for n in names),
+               f"an account from the board is listed ({len(names)} exist)")
     check.that("Add" in text, "a new account can be added later")
     check.no_errors(mark)
 

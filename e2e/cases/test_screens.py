@@ -44,8 +44,13 @@ def test_cards_tab(check):
     time.sleep(2)
 
     text = screen_text()
-    check.that("Commercial" in text or "ComBank" in text,
-               "the onboarding account is listed")
+    # Derived from the database, not hardcoded: this case must pass on whatever
+    # board is loaded — the fixture's ComBank, or a real one restored through
+    # `E2E_SNAPSHOT` whose accounts are named something else entirely.
+    names = [n for n in db_query(
+        "SELECT COALESCE(NULLIF(nickname,''), bank_name) FROM cards") if n]
+    check.that(bool(names) and any(n in text for n in names),
+               f"an account from the board is listed ({len(names)} exist)")
     check.no_errors(mark)
 
 
@@ -85,7 +90,13 @@ def test_category_detail_and_edit(check):
     time.sleep(2.5)
 
     text = screen_text()
-    check.that("NAME" in text or "Name" in text, "the category can be renamed")
+    # Assert the editor is OPEN and offers its real actions, rather than looking
+    # for a "NAME" caption: `NameWithIconField` renders its label through a
+    # styled `Label`, and the row's own accessibility label shadows the input's,
+    # so neither reaches the tree. Checking for the caption tested the chrome
+    # and failed on an editor that works perfectly.
+    check.that("Edit category" in text, "the category editor opened")
+    check.that("Delete category" in text, "the editor offers its destructive action")
     check.no_errors(mark)
 
 

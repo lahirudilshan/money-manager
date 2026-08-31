@@ -63,24 +63,58 @@ interface EditorChrome {
 export function ManagePlanSheet({
   visible,
   onClose,
+  onSelectLine,
+  selectedLineId = null,
 }: {
   visible: boolean;
   onClose: () => void;
+  /**
+   * Turns the sheet into a PICKER as well as an editor.
+   *
+   * When given, tapping a bill row selects it rather than opening its editor,
+   * and a "Save selection" button appears in the footer to hand the chosen id
+   * back. The caller is a screen that has a destination to correct — the SMS
+   * review screen, whose suggested category can be wrong — and the fix and the
+   * correction are the same gesture from the user's side: find the right line,
+   * creating or renaming one on the way if that is what it takes.
+   *
+   * Editing stays reachable throughout via each row's pencil, so the sheet does
+   * not become two different controls depending on who opened it.
+   */
+  onSelectLine?: (subcategoryId: string) => void;
+  /** The line already chosen by the caller, shown ticked on open. */
+  selectedLineId?: string | null;
 }) {
   const { colors, radius, space, mode: themeMode } = useTheme();
   const state = useAppStore();
   const [mode, setMode] = React.useState<Mode>({ kind: 'list' });
   /** Which category is showing its bills. One at a time keeps the list short. */
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
+  const picking = Boolean(onSelectLine);
+  /**
+   * The pending pick, confirmed with "Save selection".
+   *
+   * Held here rather than pushed straight to the caller so choosing is
+   * reversible: the user can tap through several lines, and nothing changes on
+   * the screen behind until they commit.
+   */
+  const [pendingLineId, setPendingLineId] = React.useState<string | null>(selectedLineId);
 
   // Always reopen at the list — a sheet that resumes mid-edit from last time is
   // disorienting, and the draft state below is seeded per open anyway.
   React.useEffect(() => {
     if (visible) {
       setMode({ kind: 'list' });
-      setExpandedId(null);
+      // Open on the category holding the current pick, so the line the caller
+      // already has is on screen rather than behind a collapsed row.
+      const current = selectedLineId
+        ? state.subcategories.find((sub) => sub.id === selectedLineId)
+        : undefined;
+      setExpandedId(current?.categoryId ?? null);
+      setPendingLineId(selectedLineId);
     }
-  }, [visible]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, selectedLineId]);
 
   const categories = state.categories;
   const linesOf = (categoryId: string) =>
@@ -147,7 +181,24 @@ export function ManagePlanSheet({
     ]);
   }
 
-  const backToList = () => setMode({ kind: 'list' });
+  /** Zero-arg, for the category editor and every Cancel/Back. */
+  const backToList: () => void = () => setMode({ kind: 'list' });
+
+  /**
+   * Return to the list after a bill was saved, carrying it into the selection.
+   *
+   * Only while picking: outside that mode there is no selection for a save to
+   * land in, and quietly marking a row would imply a choice the user has not
+   * been asked to make.
+   */
+  const lineSaved = (savedLineId: string) => {
+    if (picking) {
+      setPendingLineId(savedLineId);
+      const saved = state.subcategories.find((sub) => sub.id === savedLineId);
+      if (saved) setExpandedId(saved.categoryId);
+    }
+    setMode({ kind: 'list' });
+  };
 
   // Both editors are evaluated every render — hooks cannot be called
   // conditionally — and the active mode picks which chrome is used. They only
@@ -171,7 +222,7 @@ export function ManagePlanSheet({
     lineId: mode.kind === 'line' ? mode.id : null,
     categoryId: mode.kind === 'line' ? mode.categoryId : (categories[0]?.id ?? ''),
     onCancel: backToList,
-    onDone: backToList,
+    onDone: lineSaved,
     onDelete: editingLine
       ? () => confirmDeleteLine(editingLine.id, editingLine.name, editingLine.loanId)
       : undefined,
@@ -183,10 +234,38 @@ export function ManagePlanSheet({
       : mode.kind === 'line'
         ? lineChrome
         : {
-            title: 'Manage plan',
+            title: picking ? 'Pick a category' : 'Manage plan',
             eyebrow: 'Categories & bills',
             icon: 'options-outline',
-            footer: (
+            /*
+             * Picking mode leads with the commit, because that is the task the
+             * user came to finish; "New category" stays reachable beside it,
+             * since the right line not existing yet is exactly the case that
+             * sent them here. Disabled until something is picked, so the button
+             * never returns the caller's original wrong answer.
+             */
+            footer: picking ? (
+              <Row gap={space.sm}>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    label="New category"
+                    icon="add"
+                    variant="secondary"
+                    onPress={() => setMode({ kind: 'category', id: null })}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <GradientButton
+                    label="Save selection"
+                    icon="checkmark"
+                    disabled={!pendingLineId}
+                    onPress={() => {
+                      if (pendingLineId) onSelectLine!(pendingLineId);
+                    }}
+                  />
+                </View>
+              </Row>
+            ) : (
               <GradientButton
                 label="New category"
                 icon="add"
@@ -219,7 +298,9 @@ export function ManagePlanSheet({
         </Text>
       ) : (
         <Text variant="caption" tone="muted">
-          Tap a category to see its bills. Tap any row to edit it.
+          {picking
+            ? 'Tap a category to see its bills, then tap the right one. The pencil edits a row.'
+            : 'Tap a category to see its bills. Tap any row to edit it.'}
         </Text>
       )}
 
@@ -322,9 +403,14 @@ export function ManagePlanSheet({
                     <Row key={line.id} gap={0}>
                       <Pressable
                         onPress={() =>
-                          setMode({ kind: 'line', id: line.id, categoryId: category.id })
+                          picking
+                            ? setPendingLineId(line.id)
+                            : setMode({ kind: 'line', id: line.id, categoryId: category.id })
                         }
-                        accessibilityRole="button"
+                        accessibilityRole={picking ? 'radio' : 'button'}
+                        accessibilityState={
+                          picking ? { selected: pendingLineId === line.id } : undefined
+                        }
                         accessibilityLabel={`${line.name}, ${formatMoney(line.plannedMinor)}`}
                         style={({ pressed }) => ({
                           flex: 1,
@@ -335,21 +421,32 @@ export function ManagePlanSheet({
                           paddingLeft: space.md,
                           borderTopWidth: index === 0 ? 0 : 1,
                           borderTopColor: colors.hairline,
-                          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                          backgroundColor: pressed
+                            ? colors.surfaceSunken
+                            : picking && pendingLineId === line.id
+                              ? washFor(tint, themeMode)
+                              : 'transparent',
                         })}
                       >
                         {/* A dot in the leading slot, centred in the same width
                             the category's icon occupies — so bills indent under
                             it without needing a separate rail. */}
                         <View style={{ width: ROW_ICON, alignItems: 'center' }}>
-                          <View
-                            style={{
-                              width: 7,
-                              height: 7,
-                              borderRadius: 4,
-                              backgroundColor: tint,
-                            }}
-                          />
+                          {/* The picked row swaps its dot for a tick, in the
+                              same slot — the selection reads without the list
+                              reflowing as it moves between rows. */}
+                          {picking && pendingLineId === line.id ? (
+                            <Ionicons name="checkmark-circle" size={18} color={tint} />
+                          ) : (
+                            <View
+                              style={{
+                                width: 7,
+                                height: 7,
+                                borderRadius: 4,
+                                backgroundColor: tint,
+                              }}
+                            />
+                          )}
                         </View>
 
                         <Text variant="small" numberOfLines={1} style={{ flex: 1 }}>
@@ -615,7 +712,13 @@ function useLineEditor({
   lineId: string | null;
   categoryId: string;
   onCancel: () => void;
-  onDone: () => void;
+  /**
+   * Called with the id of the line that was just written — the existing one on
+   * an edit, the new one on a create. The picking caller uses it to make a bill
+   * the user just built the pending selection, so creating the missing line and
+   * choosing it is one gesture rather than two.
+   */
+  onDone: (savedLineId: string) => void;
   /** Absent while creating — there is nothing to delete yet. */
   onDelete?: () => void;
 }): EditorChrome {
@@ -640,10 +743,11 @@ function useLineEditor({
 
     if (existing) {
       state.updateSubcategory(existing.id, patch);
+      onDone(existing.id);
     } else {
-      state.addSubcategory({ ...patch, categoryId });
+      const created = state.addSubcategory({ ...patch, categoryId });
+      onDone(created.id);
     }
-    onDone();
   }
 
   return {

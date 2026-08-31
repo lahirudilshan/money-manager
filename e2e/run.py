@@ -8,6 +8,7 @@
 Exits non-zero when any case fails, so it can gate a commit.
 """
 import importlib.util
+import inspect
 import os
 import sys
 import time
@@ -42,7 +43,46 @@ def load_cases():
         group = filename[5:-3]
         for name, fn in getattr(module, "CASES", []):
             found.append((group, name, fn))
-    return found
+    return _ordered(found)
+
+
+def _wipes_device(fn):
+    """Does this case wipe the database to test first-run behaviour?
+
+    Read off the source rather than kept as a list, so a case that starts or
+    stops calling `fresh_install()` is ordered correctly without anyone
+    remembering to update a table here.
+
+    Per CASE, not per file: four of the seven regression cases only want a
+    board, and grouping by file alone pushed them behind the three that wipe —
+    making each one restore again for no reason.
+    """
+    try:
+        src = inspect.getsource(fn)
+    except (OSError, TypeError):
+        return True  # Unreadable: assume the expensive path and order it last.
+    # `blank_slate()` is deliberately NOT a wipe for ordering purposes: it
+    # restores a cached empty database rather than deleting one, so it costs
+    # about the same as any other restore and need not be quarantined at the end.
+    return "fresh_install(" in src
+
+
+def _ordered(cases):
+    """Board cases first, onboarding walks last.
+
+    Ordering is a runtime decision, not a correctness one: every case builds its
+    own state and passes in any order (see the README). But a case that wipes
+    the device forces the NEXT board case to restore from disk, and running the
+    files alphabetically interleaved the two — `screens` sat after three wipes
+    and paid a full restore to get back a board that `amounts` had already had
+    loaded minutes earlier.
+
+    Grouping them means the board is restored once, reused by every case that
+    wants it, and only then thrown away by the walks that must have it gone.
+    """
+    board_first = [c for c in cases if not _wipes_device(c[2])]
+    walkers = [c for c in cases if _wipes_device(c[2])]
+    return board_first + walkers
 
 
 def main():
@@ -70,6 +110,7 @@ def main():
         for group, name, fn in cases:
             print(f"\n[{group}] {name}")
             check = Check(name)
+            case_started = time.time()
             try:
                 fn(check)
             except Exception:
@@ -81,6 +122,7 @@ def main():
                     print(f"          screenshot: {shot}")
                 except Exception:
                     pass
+            check.seconds = time.time() - case_started
             results.append((group, name, check))
     finally:
         stop_session()
@@ -94,6 +136,14 @@ def main():
     for group, name, check in failed:
         for f in check.failures:
             print(f"        {group}/{name}: {f}")
+
+    # Slowest cases first. Runtime is the reason this suite gets skipped, so it
+    # is worth printing rather than timing by hand.
+    slow = sorted(results, key=lambda r: -getattr(r[2], "seconds", 0))[:5]
+    if slow:
+        print("\n  slowest:")
+        for group, name, check in slow:
+            print(f"        {int(getattr(check, 'seconds', 0)):4d}s  {group}/{name}")
 
     total_checks = sum(len(c.passes) + len(c.failures) for _, _, c in results)
     print(f"\n  {len(results) - len(failed)}/{len(results)} cases, "

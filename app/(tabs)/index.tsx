@@ -601,7 +601,9 @@ export default function DashboardScreen() {
                 bankId: account.card.bankId,
                 bankName: account.card.bankName,
               });
-              const done = account.toTransferMinor === 0;
+              // Moved: there WAS money to move and it has been. Empty: there
+              // never was any, so there is nothing to tick.
+              const done = account.toTransferMinor === 0 && !account.empty;
               const label = accountLabel(account.card);
 
               return (
@@ -609,11 +611,25 @@ export default function DashboardScreen() {
                   {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
                   <Row
                     gap={space.md}
-                    style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
+                    style={{
+                      paddingHorizontal: space.lg,
+                      paddingVertical: space.md,
+                      // An account with nothing planned against it is shown but
+                      // dimmed — present, so the list is a complete picture of
+                      // the user's accounts, without inviting a tap that would
+                      // move nothing.
+                      opacity: account.empty ? 0.45 : 1,
+                    }}
                   >
                     {/* Identity and amount — tapping opens the account detail. */}
                     <Pressable
                       onPress={() => router.push(`/account/${account.card.id}`)}
+                      // Still openable when empty: the detail screen is exactly
+                      // where the user goes to find out WHY nothing is planned
+                      // against this account, so disabling it would close the
+                      // only route to the answer. It is the transfer tick that
+                      // is disabled below, since that is the action with
+                      // nothing to act on.
                       accessibilityRole="button"
                       accessibilityLabel={`${label.primary} details`}
                       style={({ pressed }) => ({
@@ -647,12 +663,14 @@ export default function DashboardScreen() {
                           color={done ? colors.completed : colors.ink}
                           numberOfLines={1}
                         >
-                          {done
-                            ? formatMoney(account.plannedMinor)
-                            : formatMoney(account.toTransferMinor)}
+                          {account.empty
+                            ? formatMoney(0)
+                            : done
+                              ? formatMoney(account.plannedMinor)
+                              : formatMoney(account.toTransferMinor)}
                         </Text>
                         <Text variant="caption" tone="muted">
-                          {done ? 'moved' : 'click to move'}
+                          {account.empty ? 'nothing planned' : done ? 'moved' : 'click to move'}
                         </Text>
                       </View>
                     </Pressable>
@@ -668,12 +686,15 @@ export default function DashboardScreen() {
                     */}
                     <Pressable
                       onPress={() => state.toggleAccountTransfer(account.card.id)}
+                      disabled={account.empty}
                       accessibilityRole="checkbox"
-                      accessibilityState={{ checked: done }}
+                      accessibilityState={{ checked: done, disabled: account.empty }}
                       accessibilityLabel={
-                        done
-                          ? `${label.primary}, money moved. Tap to undo.`
-                          : `Mark money moved to ${label.primary}`
+                        account.empty
+                          ? `${label.primary}, nothing planned this month`
+                          : done
+                            ? `${label.primary}, money moved. Tap to undo.`
+                            : `Mark money moved to ${label.primary}`
                       }
                       hitSlop={12}
                       style={({ pressed }) => ({

@@ -29,14 +29,29 @@ def _settle_on_dashboard(tries=3):
     tab tap underneath it.
     """
     for _ in range(tries):
-        text = screen_text()
-        if "BALANCE" in text:
-            return True
-
-        # A sheet is up: close it before trying to move tabs.
+        # Close any sheet FIRST, before looking for the dashboard.
+        #
+        # A sheet is presented OVER the dashboard, which stays in the tree
+        # behind it — so "BALANCE" is on screen while the board is completely
+        # unreachable, and checking for it first declared victory without
+        # noticing the sheet. The tab bar underneath then swallowed every tap:
+        # the SMS case left "Paste a message" open, and the next case to want
+        # Settings tapped a keyboard key instead and asserted against the
+        # dashboard it had never left.
+        #
+        # Closing is therefore unconditional, and cheap when there is nothing to
+        # close (`tap` simply finds no such element).
         if tap("Close") or tap("Go back"):
             time.sleep(1.2)
             continue
+
+        # The keyboard also overlays the tab bar, and outlives the sheet that
+        # raised it.
+        if dismiss_keyboard():
+            continue
+
+        if "BALANCE" in screen_text():
+            return True
 
         if tap("Dashboard"):
             time.sleep(2)
@@ -44,11 +59,26 @@ def _settle_on_dashboard(tries=3):
 
         relaunch()
 
-    return "BALANCE" in screen_text()
+    return "BALANCE" in screen_text() and not _sheet_is_open()
+
+
+def _sheet_is_open():
+    """Is a modal sheet covering the board?
+
+    `BALANCE` alone cannot answer this — the dashboard renders behind any sheet.
+    A "Close" affordance is what actually distinguishes the two: the dashboard
+    has none, and every sheet in this app does.
+    """
+    return exists("Close", partial=False) or exists("Go back", partial=False)
+
+
+#: Distinguishes "caller said nothing" from an explicit `snapshot=None`, which
+#: means "walk onboarding for real" and must keep working — see `build`.
+_UNSET = object()
 
 
 def build(bank="Commercial Bank of Ceylon", hint="Commercial Bank",
-          second_bank=None, second_hint=None, amounts=None, snapshot="default"):
+          second_bank=None, second_hint=None, amounts=None, snapshot=_UNSET):
     """Get to a finished board — from a saved snapshot when one exists.
 
     Walking onboarding costs 90-120 seconds, and the suite needs a board roughly
@@ -59,14 +89,25 @@ def build(bank="Commercial Bank of Ceylon", hint="Commercial Bank",
     every later call restores those files in a few seconds. Pass
     `snapshot=None` to force the full walk — the onboarding cases themselves
     must, since the flow IS what they are testing.
+
+    With nothing passed, `E2E_SNAPSHOT` chooses the board, so the same cases can
+    run against a real one pulled off a phone (see `pull_device_db.py`). A
+    fixture board is necessarily small and tidy; the shapes that break the money
+    code — a line overriding its category's account, a category with no account
+    at all — only appear once someone has actually used the app for a while.
     """
+    if snapshot is _UNSET:
+        snapshot = os.environ.get("E2E_SNAPSHOT", "default")
+
     if snapshot and restore_db(snapshot):
         return _settle_on_dashboard()
 
     amounts = amounts or DEFAULT_AMOUNTS
 
     fresh_install()
-    if not exists("Where do you bank?"):
+    # A fresh install opens on the restore/welcome gate, not on the first
+    # question — see `start_onboarding`.
+    if not start_onboarding():
         return False
 
     tap(bank, required=True)
@@ -129,8 +170,24 @@ def open_settings():
     rather than raising — a case can then say "could not reach Settings", which
     is a far more useful failure than a traceback inside `tap`.
     """
+    # A focused text field puts the keyboard over the tab bar; tapping Settings
+    # then hits a key and silently leaves the app where it was.
+    dismiss_keyboard()
+
     if not exists("Settings"):
         return False
     tap("Settings")
     time.sleep(2)
-    return True
+
+    # Verify arrival rather than trusting the tap. This returned True
+    # unconditionally, so a swallowed tap was reported as success and the case
+    # went on to assert against the dashboard — failing with "settings shows no
+    # sections", which pointed at the app instead of at the tap.
+    if "PREFERENCES" in screen_text(refresh=True):
+        return True
+
+    # One retry: whatever ate the tap is usually gone by now.
+    dismiss_keyboard()
+    tap("Settings")
+    time.sleep(2)
+    return "PREFERENCES" in screen_text(refresh=True)

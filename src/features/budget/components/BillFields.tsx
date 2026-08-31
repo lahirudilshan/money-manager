@@ -243,8 +243,23 @@ export function BillFields({
         includeOngoing
       />
 
-      {/* Payment day — not applicable to ongoing bills. */}
-      {!ongoing ? <DayPicker value={draft.dueDay} onChange={draft.setDueDay} /> : null}
+      {/*
+        Payment day — shown for every cadence, ongoing included.
+
+        Hiding it for an ongoing line made that one option behave unlike its
+        three siblings: the form visibly shortened when it was picked, which
+        read as the choice having broken something. And the field does mean
+        something here — a spending budget still has a day the money is set
+        aside on, and "Flexible" is right there for a budget that genuinely has
+        none. An ongoing line is left out of due-date reminders by its cadence
+        (see `isReminderCandidate`), not by having no day, so nothing downstream
+        turns it overdue.
+      */}
+      <DayPicker
+        value={draft.dueDay}
+        onChange={draft.setDueDay}
+        label={ongoing ? 'SET-ASIDE DAY' : 'PAYMENT DAY'}
+      />
 
       {/* Saving plan — yearly bills only: a big amount due later, collected
           monthly. */}

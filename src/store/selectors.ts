@@ -24,6 +24,7 @@ import {
   billStatus,
   calculateRatios,
   daysUntil,
+  effectiveAmount,
   isFlexibleDueDay,
   isSpend,
   monthlyAmount,
@@ -403,6 +404,31 @@ export function selectCardViews(state: AppState): CardView[] {
         // Income arrives in the account; it is neither a bill to pay nor a
         // deduction from the balance, so it takes no part in either figure.
         if (sub.type === 'income') continue;
+
+        /*
+         * An ONGOING line is committed, never "spent", and asks for its budget.
+         *
+         * Two things went wrong here, both from treating a budget like a bill:
+         *
+         *   - `actualMinor ?? plannedMinor` took the `0` an untouched budget
+         *     reports (a dated bill reports `null` — see `billActual`), so a
+         *     Rs 50,000 grocery budget contributed nothing and an account funded
+         *     only by budgets showed "0 to pay";
+         *   - `toPlanned` marks a budget `paid` as soon as ANY money is logged
+         *     against it, so a single Rs 100 receipt moved the whole line into
+         *     `spent` and out of the commitment — the card then claimed nothing
+         *     was left to pay on a budget with Rs 49,900 still to go.
+         *
+         * A budget is never settled: it accumulates until the month ends. So it
+         * always counts as committed, at `effectiveAmount` — the budget, or the
+         * overspend when that is larger. Matches `selectAccountTransfers`.
+         */
+        if (isOngoing(sub.frequency)) {
+          committed += effectiveAmount(planned);
+          spent += planned.actualMinor ?? 0;
+          continue;
+        }
+
         const amount = planned.actualMinor ?? planned.plannedMinor;
         if (planned.status === 'paid') spent += amount;
         else committed += amount;
@@ -449,6 +475,14 @@ export interface AccountTransferView {
   pendingCount: number;
   /** Category names drawing from this card, for the row's subtitle. */
   categoryNames: string[];
+  /**
+   * True when nothing at all is planned against this account this month.
+   *
+   * Distinct from `toTransferMinor === 0`, which an account reaches by having
+   * its money moved — that is a completed action and reads as one. This one has
+   * no action to complete, so the dashboard renders it inert rather than ticked.
+   */
+  empty: boolean;
 }
 
 export function selectAccountTransfers(state: AppState): AccountTransferView[] {
@@ -471,7 +505,25 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
           // Income lands *in* an account rather than being moved out to it.
           if (sub.type === 'income') continue;
 
-          const amount = line.actualMinor ?? line.plannedMinor;
+          /*
+           * What this line asks the account for.
+           *
+           * `??` alone was wrong for an ONGOING line. A dated bill reports
+           * `actualMinor: null` until something is logged (see `billActual`),
+           * so the fallback fires and its plan amount is funded — but an
+           * ongoing line reports a real `0`, which `??` happily accepts. A
+           * grocery budget therefore asked for nothing until the first receipt
+           * of the month landed, and an account holding ONLY ongoing lines read
+           * as having nothing to move at all.
+           *
+           * Spending against a budget does not reduce what must be moved onto
+           * the card: the money still has to be there to spend. So the budget
+           * is the floor, and a month that has already overspent it asks for
+           * the larger real figure instead.
+           */
+          const amount = isOngoing(sub.frequency)
+            ? Math.max(line.plannedMinor, line.actualMinor ?? 0)
+            : (line.actualMinor ?? line.plannedMinor);
           planned += amount;
           categoryNames.add(view.category.name);
 
@@ -509,10 +561,23 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
         movedMinor: moved,
         pendingCount,
         categoryNames: [...categoryNames],
+        empty: planned === 0,
       };
     })
-    .filter((view) => view.plannedMinor > 0)
-    .sort((a, b) => b.toTransferMinor - a.toTransferMinor);
+    /*
+     * EVERY account is listed, including ones nothing is planned against.
+     *
+     * Dropping the empty ones made the section quietly incomplete: an account
+     * the user had just added, or one whose bills all sit in another account,
+     * simply was not there — which reads as the account having failed to save
+     * rather than as having nothing to move. The dashboard is also where the
+     * user checks their setup, and "which of my accounts needs nothing this
+     * month" is only answerable if all of them are on screen.
+     *
+     * An empty row is rendered inert instead (see the dashboard), so the list
+     * stays a list of actions without hiding the accounts that have none.
+     */
+    .sort((a, b) => b.toTransferMinor - a.toTransferMinor || b.plannedMinor - a.plannedMinor);
 }
 
 /**

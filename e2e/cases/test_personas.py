@@ -23,7 +23,7 @@ def test_kasun_23_no_dependants(check):
     lose a first-time user.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Commercial Bank of Ceylon", required=True)
     check.on_screen("1 account selected", "bank selection registers")
@@ -60,7 +60,7 @@ def test_nilanthi_41_family_car_parents(check):
     counted twice.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Sampath Bank", required=True)
     tap("Hatton National Bank", required=True)
@@ -107,41 +107,12 @@ def test_multi_account_transfers_split(check):
     running two banks has to see a separate figure per account.
     """
     mark = now_ms()
-    fresh_install()
-
-    tap("Sampath Bank", required=True)
-    tap("Hatton National Bank", required=True)
-    tap("Continue", required=True)
-    tap("Build my plan", required=True)
-    tap("Continue", required=True)
-
-    # Alternate the funding account so both end up with real bills.
-    seen, i = set(), 0
-    amounts = [50000, 12000, 3000, 2500, 8000, 25000, 4000]
-    for _ in range(30):
-        rows = [l for l in labels() if l.endswith(", LKR 0") and l not in seen]
-        if not rows:
-            break
-        row = rows[0]
-        seen.add(row)
-        if not tap(row):
-            continue
-        time.sleep(1.0)
-        set_text(amounts[i % len(amounts)])
-        tap("Sampath" if i % 2 == 0 else "Hatton", partial=True)
-        time.sleep(0.4)
-        tap("Done")
-        time.sleep(0.9)
-        i += 1
-
-    tap("Build my plan", required=True)
-    time.sleep(3)
-    if scroll_to("loans or leases", tries=6):
-        tap("Skip — no loans")
-        time.sleep(2)
-    if scroll_to("Go to Dashboard", tries=6):
-        tap("Go to Dashboard")
-        time.sleep(3)
+    # The two-bank board is CACHED, like every other board here: this case is
+    # about what the dashboard does with two funded accounts, not about walking
+    # onboarding to produce them. Building it by hand cost four minutes to reach
+    # the single assertion below.
+    built_board(bank="Sampath Bank", hint="Sampath",
+                second_bank="Hatton National Bank", second_hint="Hatton")
 
     moves = [l for l in labels() if "Mark money moved" in l]
     check.that(len(moves) >= 2,
@@ -180,40 +151,14 @@ def test_mark_transfer_and_pay_a_bill(check):
 
 
 def _build_board(bank="Commercial Bank of Ceylon", hint="Commercial Bank"):
-    """A finished board with real amounts, from a clean install."""
-    fresh_install()
-    tap(bank, required=True)
-    tap("Continue", required=True)
-    tap("Build my plan", required=True)
-    tap("Continue", required=True)
+    """A finished board with real amounts.
 
-    seen, i = set(), 0
-    amounts = [50000, 12000, 3000, 2500, 8000, 25000, 4000, 1800, 6000]
-    for _ in range(30):
-        rows = [l for l in labels() if l.endswith(", LKR 0") and l not in seen]
-        if not rows:
-            break
-        row = rows[0]
-        seen.add(row)
-        if not tap(row):
-            continue
-        time.sleep(1.0)
-        set_text(amounts[i % len(amounts)])
-        if "Required" in screen_text():
-            tap(hint, partial=True)
-            time.sleep(0.4)
-        tap("Done")
-        time.sleep(0.9)
-        i += 1
-
-    tap("Build my plan", required=True)
-    time.sleep(3)
-    if scroll_to("loans or leases", tries=6):
-        tap("Skip — no loans")
-        time.sleep(2)
-    if scroll_to("Go to Dashboard", tries=6):
-        tap("Go to Dashboard")
-        time.sleep(3)
+    Delegates to the shared, CACHED walk in the harness. This was a full
+    onboarding walk duplicated here and in `test_regressions.py`; each copy cost
+    about four minutes and produced an identical board, so the suite spent most
+    of its time rebuilding state it already had.
+    """
+    return built_board(bank=bank, hint=hint)
 
 
 CASES = [

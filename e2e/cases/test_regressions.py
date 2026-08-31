@@ -26,6 +26,9 @@ def test_fresh_install_can_finish_onboarding(check):
     mark = now_ms()
     fresh_install()
 
+    # Past the restore/welcome gate first: a fresh install offers to bring a
+    # backup back before it asks anything.
+    start_onboarding()
     check.on_screen("Where do you bank?", "onboarding starts on a fresh install")
     tap("Commercial Bank of Ceylon", required=True)
     tap("Continue", required=True)
@@ -63,7 +66,7 @@ def test_plan_amount_is_optional(check):
     out of the total.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Commercial Bank of Ceylon", required=True)
     tap("Continue", required=True)
@@ -177,7 +180,7 @@ def test_onboarding_scrolls_clear_of_pinned_footer(check):
     user's answers had produced — the entire payoff for answering the questions.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Commercial Bank of Ceylon", required=True)
     tap("Continue", required=True)
@@ -214,41 +217,17 @@ def _assign_accounts(bank_hint):
 
 def _complete_onboarding_with_amounts(bank="Commercial Bank of Ceylon",
                                       hint="Commercial Bank"):
-    """A finished board with real figures — the starting point for board tests."""
-    fresh_install()
-    tap(bank, required=True)
-    tap("Continue", required=True)
-    tap("Build my plan", required=True)
-    tap("Continue", required=True)
+    """A finished board with real figures — the starting point for board tests.
 
-    seen = set()
-    amounts = [50000, 12000, 3000, 2500, 8000, 25000, 4000, 1800, 6000]
-    i = 0
-    for _ in range(30):
-        rows = [l for l in labels() if l.endswith(", LKR 0") and l not in seen]
-        if not rows:
-            break
-        row = rows[0]
-        seen.add(row)
-        if not tap(row):
-            continue
-        time.sleep(1.0)
-        set_text(amounts[i % len(amounts)])
-        if "Required" in screen_text():
-            tap(hint, partial=True)
-            time.sleep(0.4)
-        tap("Done")
-        time.sleep(0.9)
-        i += 1
+    Delegates to the shared, CACHED walk in the harness, so the three cases
+    below restore a board in seconds instead of each spending four minutes
+    rebuilding an identical one.
 
-    tap("Build my plan", required=True)
-    time.sleep(3)
-    if scroll_to("loans or leases", tries=6):
-        tap("Skip — no loans")
-        time.sleep(2)
-    if scroll_to("Go to Dashboard", tries=6):
-        tap("Go to Dashboard")
-        time.sleep(3)
+    The cases ABOVE that are about onboarding itself deliberately do NOT use
+    this: they call `fresh_install()` and walk the flow, because the walk is
+    what they are testing.
+    """
+    return built_board(bank=bank, hint=hint)
 
 
 def test_new_loan_shows_zero_payments_made(check):
@@ -271,8 +250,10 @@ def test_new_loan_shows_zero_payments_made(check):
 
     tap("Loans", required=True)
     time.sleep(2.5)
+    # Both affordances: the empty state's "Add your first loan", and the
+    # "Add loan" header button a tab that already lists loans shows instead.
     opened = (tap("Add your first loan", partial=True)
-              or tap("Add a loan", partial=True))
+              or tap("Add loan", partial=True))
     if not check.that(opened, "opened the add-loan form"):
         return
     time.sleep(2.5)

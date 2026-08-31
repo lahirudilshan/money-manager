@@ -213,7 +213,21 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
         }
         chevron
         onPress={onOpen}
-        accessibilityLabel={`${label.primary}, ${formatMoney(view.balanceMinor)}. Open details.`}
+        /*
+         * The commitment is part of what this row SAYS, so it belongs in the
+         * label.
+         *
+         * A row's `accessibilityLabel` replaces whatever its children would have
+         * announced, so naming only the balance meant "LKR 53K to pay" — the
+         * figure the row exists to surface — was visible on screen and absent
+         * from the accessibility tree entirely. Someone using VoiceOver heard
+         * "Household, LKR 0" and had no way to learn that Rs 53,000 was owed.
+         */
+        accessibilityLabel={
+          view.committedMinor > 0
+            ? `${label.primary}, ${formatMoney(view.balanceMinor)}, ${formatMoney(view.committedMinor)} to pay. Open details.`
+            : `${label.primary}, ${formatMoney(view.balanceMinor)}. Open details.`
+        }
       />
 
       {hasGoal ? (

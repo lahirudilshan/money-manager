@@ -756,7 +756,35 @@ export default function SmsDraftModal() {
           onPress={markAlreadyLogged}
         />
 
-      <ManagePlanSheet visible={manageOpen} onClose={() => setManageOpen(false)} />
+      {/*
+        The grid's "Manage" tile, as a PICKER as well as an editor.
+
+        The tile used to open the sheet purely to build a missing line, and the
+        user then had to find that line again in the grid behind it — two
+        separate hunts for one decision. Now the sheet reports the line it was
+        left on: whichever bill is ticked (or was just created) becomes this
+        draft's destination when "Save selection" is pressed, and the picker
+        below shows it selected.
+      */}
+      <ManagePlanSheet
+        visible={manageOpen}
+        onClose={() => setManageOpen(false)}
+        selectedLineId={subcategoryId || suggested?.id || null}
+        onSelectLine={(lineId) => {
+          setSubcategoryId(lineId);
+          /*
+           * Stay in picking mode, deliberately.
+           *
+           * Collapsing back to the confirm card would show — and "Yes, that's
+           * right" would then log — the ORIGINAL suggestion, since that card is
+           * built from `draft.subcategoryId` rather than from the choice made
+           * here. Leaving the grid open shows the line the user just picked as
+           * the selected tile, and the footer's "Log it" commits that one.
+           */
+          setPicking(true);
+          setManageOpen(false);
+        }}
+      />
 
       {/*
         Choosing the line for ONE part of a split.

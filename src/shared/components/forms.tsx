@@ -137,6 +137,7 @@ export function NameWithIconField({
   placeholder,
   autoFocus,
   onPressIcon,
+  editable = true,
 }: {
   label?: string;
   value: string;
@@ -147,6 +148,12 @@ export function NameWithIconField({
   autoFocus?: boolean;
   /** Optional: tap the leading tile (e.g. to open the icon picker). */
   onPressIcon?: () => void;
+  /**
+   * Set false for a name this screen SHOWS but does not own — a loan line's
+   * name is derived from the loan's terms. Rendered inert the same way `Field`
+   * does it, so the two read alike on a screen that uses both.
+   */
+  editable?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
   const Tile = onPressIcon ? Pressable : View;
@@ -157,7 +164,7 @@ export function NameWithIconField({
         style={{
           flexDirection: 'row',
           alignItems: 'center',
-          backgroundColor: colors.surface,
+          backgroundColor: editable ? colors.surface : colors.surfaceSunken,
           borderRadius: radius.md,
           borderWidth: 1,
           borderColor: colors.hairline,
@@ -188,6 +195,7 @@ export function NameWithIconField({
           placeholder={placeholder}
           placeholderTextColor={colors.inkMuted}
           autoFocus={autoFocus}
+          editable={editable}
           accessibilityLabel={label}
           style={{
             flex: 1,
@@ -196,7 +204,7 @@ export function NameWithIconField({
             fontSize: 16,
             fontWeight: '400',
             letterSpacing: 0,
-            color: colors.ink,
+            color: editable ? colors.ink : colors.inkSecondary,
           }}
         />
       </View>

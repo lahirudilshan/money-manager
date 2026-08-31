@@ -19,7 +19,7 @@ def test_rohan_58_near_retirement(check):
     should lean toward the things that do track his stage.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Bank of Ceylon", required=True)
     tap("Continue", required=True)
@@ -57,7 +57,7 @@ def test_dilini_29_usd_freelancer(check):
     drifted every month.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Commercial Bank of Ceylon", required=True)
     tap("Continue", required=True)
@@ -108,7 +108,7 @@ def test_frequency_options_and_saving_plan(check):
     here has to be rebuilt line by line afterwards.
     """
     mark = now_ms()
-    fresh_install()
+    blank_slate()
 
     tap("Commercial Bank of Ceylon", required=True)
     tap("Continue", required=True)
@@ -123,7 +123,10 @@ def test_frequency_options_and_saving_plan(check):
     time.sleep(1.5)
 
     text = screen_text()
-    for cadence in ("Monthly", "One-time", "Yearly", "Spending budget"):
+    # "Spending budget" was renamed to "Ongoing" — the word describes what the
+    # line DOES (it keeps happening) and sits on the same axis as its three
+    # siblings, which all name a payment pattern. See `FREQUENCY_LABEL`.
+    for cadence in ("Monthly", "One-time", "Yearly", "Ongoing"):
         check.that(cadence in text, f"offers the {cadence!r} cadence")
 
     # A yearly line should offer to save toward it monthly.
@@ -133,7 +136,7 @@ def test_frequency_options_and_saving_plan(check):
                    "a yearly line offers a monthly save-up plan")
 
     # A spending budget has no single due day and no fixed amount.
-    if tap("Spending budget"):
+    if tap("Ongoing"):
         time.sleep(1.2)
         budget_text = screen_text()
         check.that("MONTHLY BUDGET" in budget_text,

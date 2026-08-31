@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, TextInput, View } from 'react-native';
 import { AccountPickerSheet } from '~/features/accounts/components/AccountPicker';
-import { Field, FrequencyPicker } from '~/shared/components/forms';
+import { Field, FrequencyPicker, IconPicker, NameWithIconField } from '~/shared/components/forms';
 import { BottomSheet, Button, Divider, FundingBar, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { DatePickerField } from '~/shared/components/DatePickerField';
@@ -85,6 +85,18 @@ export default function SubcategoryScreen() {
   }, [state, id]);
 
   const [name, setName] = useState(subcategory?.name ?? '');
+  /*
+   * The line's own icon, editable like its name.
+   *
+   * A bill is identified on the board and in every picker by this glyph, and it
+   * arrives from the catalog — so a line the user renamed ("Netflix" → "Kids'
+   * swimming") kept an icon that no longer said anything about it, with no way
+   * to correct it short of deleting the line. Categories have had a picker all
+   * along; there is no reason a bill should not.
+   */
+  const [icon, setIcon] = useState<keyof typeof Ionicons.glyphMap>(
+    (subcategory?.icon as keyof typeof Ionicons.glyphMap) ?? 'pricetag-outline',
+  );
   // Seeded through `formatAmountInput` so an existing amount opens grouped —
   // the field formats as you type, and a stored value that only gained its
   // separators after the first keystroke would look like a different control.
@@ -237,6 +249,7 @@ export default function SubcategoryScreen() {
     const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
     state.updateSubcategory(subcategory!.id, {
       name: trimmed,
+      icon,
       // A spending-budget line keeps its planned amount too — that is the
       // monthly budget its entries are drawn against, not a bill to pay once.
       plannedMinor: planPatch ? planPatch.monthlyMinor : (parseAmount(planned) ?? 0),
@@ -342,7 +355,7 @@ export default function SubcategoryScreen() {
       onClose={closeModal}
       title={subcategory.name}
       eyebrow={category?.name}
-      icon={(subcategory.icon ?? 'pricetag-outline') as keyof typeof Ionicons.glyphMap}
+      icon={icon}
       iconColor={category?.color ?? colors.accent}
       scroll
       footer={
@@ -616,11 +629,29 @@ export default function SubcategoryScreen() {
             `updateLoan` rewrites it whenever the terms change, so an edit made
             here would be silently reverted.
           */}
-          <Field
+          {/* Name beside a live preview of the chosen icon, so the identity
+              this line will wear on the board reads at a glance. */}
+          <NameWithIconField
             label="Name"
             value={name}
             onChangeText={setName}
+            icon={icon}
+            iconColor={category?.color ?? colors.accent}
             editable={!linkedLoan}
+          />
+
+          {/*
+            Icon grid — the same control the category editor uses, so a bill and
+            its container are re-iconed the same way.
+
+            Offered even on a loan line: the NAME is derived there (see above)
+            and would be reverted, but the icon is not written by `updateLoan`,
+            so choosing one sticks.
+          */}
+          <IconPicker
+            value={icon}
+            onChange={setIcon}
+            accent={category?.color ?? colors.accent}
           />
 
           {/* Parent category — tap to open a searchable picker, so moving a line
