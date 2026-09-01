@@ -5,6 +5,23 @@ import { buildSchedule, paymentsElapsed, remainingBalance } from '~/features/loa
 import { setDisplayCurrency, sumMinor, type Minor } from '~/shared/lib/money';
 import type { PlanId } from '~/features/budget/logic/plans';
 import {
+  hasSiblingTie,
+  nextSiblingSortOrder,
+} from '~/features/budget/logic/sortOrder';
+import { isFullyRepaid } from '~/features/buddyloans/logic/buddyLoans';
+import { buddyLoanRepo, buddyRepaymentRepo } from '~/db/repositories/buddyLoans';
+import { deletePersistedImage } from '~/shared/lib/imageStorage';
+
+/**
+ * A stored repayment row, as the pure logic wants to see it.
+ *
+ * The logic module deliberately knows nothing about Drizzle's row types, so the
+ * two are bridged here rather than by widening its signatures.
+ */
+function toRepaymentLike(row: BuddyRepayment) {
+  return { id: row.id, amountMinor: row.amountMinor, paidOn: row.paidOn };
+}
+import {
   calculateRatios,
   daysUntil,
   dueDateFor,
@@ -108,6 +125,10 @@ import {
   type NewVehicle,
   type Vehicle,
   type HealthPerson,
+  type BuddyLoan,
+  type BuddyRepayment,
+  type NewBuddyLoan,
+  type NewBuddyRepayment,
   type NewHealthPerson,
 } from '../db/schema';
 import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '~/features/budget/logic/houses';
@@ -222,6 +243,31 @@ export interface AppState {
   vehicles: Vehicle[];
   /** Family members tracked by the health add-on — see core/miniApps.ts. */
   healthPeople: HealthPerson[];
+  /**
+   * Money lent to people — see core/miniApps.ts.
+   *
+   * Unlike the health add-on's records, these DO live in the store: the
+   * dashboard's "Coming up" section needs them on every render to show a debt
+   * falling due beside the bills, so reading them per-screen would leave the
+   * reminder out of the one place it matters. Both tables are small — a handful
+   * of rows each — so the cost is negligible even for the majority who never
+   * enable it, where they are simply empty.
+   */
+  buddyLoans: BuddyLoan[];
+  buddyRepayments: BuddyRepayment[];
+  addBuddyLoan: (input: Omit<NewBuddyLoan, 'id'>) => BuddyLoan;
+  updateBuddyLoan: (id: string, patch: Partial<NewBuddyLoan>) => void;
+  deleteBuddyLoan: (id: string) => void;
+  /** Settle or write off a debt, stamping the date it was closed. */
+  closeBuddyLoan: (id: string, status: 'paid' | 'written_off') => void;
+  /** Move a settled or written-off debt back to outstanding. */
+  reopenBuddyLoan: (id: string) => void;
+  /**
+   * Log a part payment. Settles the loan automatically once the repayments
+   * cover it, so the user is never left with "LKR 0 left" still outstanding.
+   */
+  addBuddyRepayment: (input: Omit<NewBuddyRepayment, 'id'>) => void;
+  deleteBuddyRepayment: (id: string) => void;
   addVehicle: (input: Omit<NewVehicle, 'id'>) => Vehicle;
   updateVehicle: (id: string, patch: Partial<NewVehicle>) => void;
   deleteVehicle: (id: string) => void;
@@ -568,13 +614,40 @@ function repairFeePoisonedMerchantRules(): void {
 
 function repairCategorySortOrder(): void {
   const categories = categoryRepo.all();
-
-  const hasTie = categories.some(
-    (category, index) => index > 0 && category.sortOrder === categories[index - 1].sortOrder,
-  );
-  if (!hasTie) return;
+  if (!hasSiblingTie(categories)) return;
 
   categoryRepo.reorder(categories.map((category) => category.id));
+}
+
+/**
+ * The same repair for the BILLS inside each category.
+ *
+ * `repairCategorySortOrder` fixed the top level and the identical fault one
+ * level down went unnoticed, because a tie there is invisible until you try to
+ * drag: onboarding assigns board-wide offsets, so "Living" was created holding
+ * 4..9, and a bill added afterwards took the sibling count (7) and collided
+ * with two rows already at 7. `byCategory` orders by `sort_order` alone, so
+ * SQLite returns tied rows in whatever order it likes — the list draws one
+ * arrangement, the drag writes indexes computed against it, and the next read
+ * disagrees. The bill appears to spring back.
+ *
+ * Each category is renumbered INDEPENDENTLY and only when it actually holds a
+ * tie: positions are compared between siblings and nowhere else, so one
+ * category's dense range says nothing about another's, and an untied category
+ * must not be rewritten just because its neighbour was. The rows are passed in
+ * the order they are already displayed, so this makes the current arrangement
+ * explicit without rearranging anything the user chose.
+ */
+function repairSubcategorySortOrder(): void {
+  const categories = categoryRepo.all();
+
+  for (const category of categories) {
+    // Already ordered by `sort_order` — i.e. the arrangement being displayed.
+    const siblings = subcategoryRepo.byCategory(category.id);
+    if (!hasSiblingTie(siblings)) continue;
+
+    subcategoryRepo.reorder(siblings.map((sibling) => sibling.id));
+  }
 }
 
 /** Round-robin tint so every new item stays visually distinct with zero picker. */
@@ -631,6 +704,8 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   miniApps: '',
   vehicles: [],
   healthPeople: [],
+  buddyLoans: [],
+  buddyRepayments: [],
 
   async initialise() {
     initialiseDatabase();
@@ -639,6 +714,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     merchantRuleRepo.seed();
     repairGenericCategoryIcons();
     repairCategorySortOrder();
+    repairSubcategorySortOrder();
     repairFeePoisonedMerchantRules();
     get().refresh();
     set({
@@ -778,6 +854,8 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   refreshMiniAppData() {
     set({
       vehicles: vehicleRepo.all(),
+      buddyLoans: buddyLoanRepo.all(),
+      buddyRepayments: buddyRepaymentRepo.all(),
       /*
        * People only — never their records.
        *
@@ -790,6 +868,97 @@ export const useAppStore = create<AppState>((set, get, api) => ({
        */
       healthPeople: healthPersonRepo.all(),
     });
+  },
+
+  addBuddyLoan(input) {
+    const created = buddyLoanRepo.create(input);
+    get().refreshMiniAppData();
+    return created;
+  },
+
+  updateBuddyLoan(id, patch) {
+    buddyLoanRepo.update(id, patch);
+    get().refreshMiniAppData();
+  },
+
+  deleteBuddyLoan(id) {
+    /*
+     * The photo goes with the record.
+     *
+     * Repayment rows cascade in SQL, but their images do not — nothing else
+     * references these files, so without this every deleted loan leaves its
+     * slip photos behind in Documents forever.
+     */
+    const loan = buddyLoanRepo.byId(id);
+    if (loan?.imageUri) deletePersistedImage(loan.imageUri);
+    for (const repayment of buddyRepaymentRepo.byLoan(id)) {
+      if (repayment.imageUri) deletePersistedImage(repayment.imageUri);
+    }
+
+    buddyLoanRepo.remove(id);
+    get().refreshMiniAppData();
+  },
+
+  closeBuddyLoan(id, status) {
+    buddyLoanRepo.close(id, status);
+    get().refreshMiniAppData();
+  },
+
+  reopenBuddyLoan(id) {
+    buddyLoanRepo.reopen(id);
+    get().refreshMiniAppData();
+  },
+
+  addBuddyRepayment(input) {
+    buddyRepaymentRepo.create(input);
+
+    /*
+     * Settle the loan the moment the repayments cover it.
+     *
+     * Read back from the repository rather than from the store, because the
+     * store's copy is one refresh behind the row just written — using it would
+     * miss the very payment that completes the debt, and leave a record showing
+     * nothing left to pay that still counts as outstanding.
+     */
+    const loan = buddyLoanRepo.byId(input.loanId);
+    if (loan && loan.status === 'outstanding') {
+      const repayments = buddyRepaymentRepo.byLoan(input.loanId);
+      if (isFullyRepaid(loan, repayments.map(toRepaymentLike))) {
+        // Dated by the payment that closed it, not by "now" — a repayment
+        // logged days later must not stamp today as the settlement date.
+        buddyLoanRepo.close(input.loanId, 'paid', input.paidOn);
+      }
+    }
+
+    get().refreshMiniAppData();
+  },
+
+  deleteBuddyRepayment(id) {
+    const repayment = get().buddyRepayments.find((r) => r.id === id);
+    if (repayment?.imageUri) deletePersistedImage(repayment.imageUri);
+
+    /*
+     * Removing a payment can UNSETTLE a loan.
+     *
+     * The balance is derived, so deleting the payment that completed a debt
+     * leaves money owed again — and a record marked paid with an outstanding
+     * balance is exactly the kind of quiet inconsistency this add-on exists to
+     * avoid. Reopened only when it was closed as PAID: a write-off is the
+     * user's decision and is not reversed by bookkeeping.
+     */
+    if (repayment) {
+      const loan = buddyLoanRepo.byId(repayment.loanId);
+      buddyRepaymentRepo.remove(id);
+
+      if (loan?.status === 'paid') {
+        const left = buddyRepaymentRepo.byLoan(repayment.loanId);
+        if (!isFullyRepaid(loan, left.map(toRepaymentLike))) {
+          buddyLoanRepo.reopen(repayment.loanId);
+        }
+      }
+    }
+
+    get().refreshMiniAppData();
   },
 
   refreshMerchantRules() {
@@ -1383,7 +1552,20 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       // Only meaningful on a house-scoped line; stored regardless so turning
       // scoping on later does not lose a default the caller already knew.
       houseId: input.houseId ?? null,
-      sortOrder: siblings.length,
+      /*
+       * The END of the sibling list, derived from the highest position in use
+       * rather than from the sibling COUNT.
+       *
+       * A count is only the same number when the existing bills occupy a dense
+       * `0..n-1` range, and onboarding does not produce one — it walks its
+       * catalog handing out board-wide offsets, so "Living" was created holding
+       * 4..9. Eight rows then made the next line 7, tying with the two already
+       * there. Every read of `sort_order` orders by that column alone, so a tie
+       * is undefined order: the list draws one arrangement, a drag writes
+       * indexes against it, and the next read comes back different — which is
+       * why reordering a bill appeared to do nothing.
+       */
+      sortOrder: nextSiblingSortOrder(siblings),
     });
     get().refreshBoard();
     return created;
@@ -1490,7 +1672,11 @@ export const useAppStore = create<AppState>((set, get, api) => ({
    * end of the target's list so ordering stays sensible. */
   changeSubcategoryParent(id, newCategoryId) {
     const siblings = get().subcategories.filter((s) => s.categoryId === newCategoryId);
-    subcategoryRepo.update(id, { categoryId: newCategoryId, sortOrder: siblings.length });
+    // Past the target's highest position, not its count — see `addSubcategory`.
+    subcategoryRepo.update(id, {
+      categoryId: newCategoryId,
+      sortOrder: nextSiblingSortOrder(siblings),
+    });
     get().refreshBoard();
   },
 

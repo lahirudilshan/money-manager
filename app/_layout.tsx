@@ -439,6 +439,16 @@ function RootNavigator() {
             costs nothing, whereas conditional registration would leave the
             dashboard card dead until the next reload.
           */}
+          {/*
+            Buddy loans add-on — see core/miniApps.ts.
+
+            The list and one loan's detail are places you go and come back from,
+            so they are pushed screens; the editor is a task that gets filled in
+            and dismissed, so it is a sheet — the same split fuel and health use.
+          */}
+          <Stack.Screen name="mini/buddyloans/index" />
+          <Stack.Screen name="mini/buddyloans/detail" />
+          <Stack.Screen name="mini/buddyloans/edit" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/fuel/index" />
           {/* Logging a fill-up IS a task — filled in once and dismissed — so it
               stays a sheet while the places around it are pushed screens. */}

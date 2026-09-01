@@ -255,6 +255,25 @@ const DEBIT_PATTERNS: RegExp[] = [
   /\bPOS TXN\b/i,
   /\bspent\b/i,
   /*
+   * A payment CONFIRMED as made — "Thank you for your payment of LKR 46,567.00
+   * made to Card # 3766...". Money left the account; the message simply never
+   * conjugates a verb, so every pattern above missed it and `classifyDirection`
+   * returned null. The message then failed to parse, and because it reads as a
+   * transaction it was not discardable noise either — so it sat in the handoff
+   * file forever while 46,567 rupees never reached the board.
+   *
+   * Anchored on "payment ... made/received", NOT on the bare word "payment": a
+   * promo offers to take a payment and a bill notice announces one is due,
+   * while only a receipt says one WAS made. Requiring the participle is what
+   * keeps this from claiming either.
+   */
+  /*
+   * `[\s\S]` rather than `[^.]`, because the amount itself contains a decimal
+   * point — "payment of LKR 46,567.00 made to" — so a dot-excluding gap can
+   * never bridge the two halves of the very phrase this matches.
+   */
+  /\bpayment\b[\s\S]{0,60}?\bmade\s+to\b/i,
+  /*
    * The transaction TYPE stated as a bare label, HNB's field-list style:
    *
    *   "HNB SMS ALERT:INTERNET, Account:1380***6626,Location:UBER EATS, LK,..."
@@ -337,10 +356,25 @@ const CURRENCY_ALTERNATION = CURRENCY_CODES.join('|');
  * "USD2,500.00" — which the user's SWIFT credit alert uses — matches. The `g`
  * flag lets us scan every amount in the message and pick the right one.
  */
+/**
+ * A number body: digits, optionally grouped, optionally with decimals.
+ *
+ * It must START and END with a digit. `[\d,]+` does not, and that cost the
+ * user a real deposit: their bank glues the name to the amount with no space —
+ * "Dear MR M N LAHIRU DILSHAN,LKR 5,000.00 Credited" — so the
+ * amount-before-currency branch matched the bare COMMA as a number and
+ * produced ",LKR". That match sits earlier in the string than the real
+ * "LKR 5,000.00", `extractAmount` returns the first survivor, and the body
+ * parsed to NaN. The message failed to yield an amount at all and sat in the
+ * handoff file as an unreadable "parser gap" — while the classifier scored it
+ * a perfect 1.0, which is what made it look so puzzling.
+ */
+const AMOUNT_BODY = '\\d[\\d,]*(?:\\.\\d{1,2})?';
+
 const AMOUNT_RE = new RegExp(
-  `(?:(${CURRENCY_ALTERNATION})\\s*([\\d,]+(?:\\.\\d{1,2})?))` +
-    `|(?:([\\d,]+(?:\\.\\d{1,2})?)\\s*(${CURRENCY_ALTERNATION})\\b)` +
-    `|(?:Rs\\.?\\s*([\\d,]+(?:\\.\\d{1,2})?))`,
+  `(?:(${CURRENCY_ALTERNATION})\\s*(${AMOUNT_BODY}))` +
+    `|(?:(${AMOUNT_BODY})\\s*(${CURRENCY_ALTERNATION})\\b)` +
+    `|(?:Rs\\.?\\s*(${AMOUNT_BODY}))`,
   'gi',
 );
 
@@ -989,6 +1023,51 @@ function namesPayee(text: string): boolean {
  * "at MERCHANT." (POS) or "as TYPE" (transfers), HNB uses "Location:MERCHANT,"
  * and "Reason:MB:loan-CODE". Tried in that order; empty when none applies.
  */
+/**
+ * A clock time at the START of a captured clause — "09:32", "11:57:03".
+ *
+ * Anchored, so a genuine merchant that merely CONTAINS digits ("CEYLON
+ * ELECTRICITY BOARD 1987", "SPAR 24/7") is untouched; only a capture that
+ * begins with the time is rejected.
+ */
+const LEADING_TIME = /^\d{1,2}:\d{2}(?::\d{2})?\b/;
+
+/**
+ * The transaction type a message states about ITSELF, for when no payee exists.
+ *
+ * Some movements genuinely have no merchant — money went to an account, a card
+ * or a machine, not a shop — and for those the type IS the best description
+ * available. Both of the user's untitled drafts carry one in plain words:
+ *
+ *   "...Transaction ATM Cash Deposit."        -> "ATM Cash Deposit"
+ *   "...payment of LKR 46,567.00 made to Card # 3766..."  -> "Card Payment"
+ *
+ * Read LAST, after every real-merchant clause, so a POS alert that names an
+ * actual payee always keeps it. This only ever fills a blank.
+ */
+const STATED_TYPE: [pattern: RegExp, label: string | null][] = [
+  /*
+   * The bank's own "Transaction <type>." field — captured rather than mapped,
+   * so any type this bank prints comes through verbatim instead of needing a
+   * new entry here for each one.
+   */
+  [/\bTransaction\s+([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3})\s*[.,]/, null],
+  // A payment confirmed against a card — see `DEBIT_PATTERNS`.
+  [/\bpayment\b[\s\S]{0,60}?\bmade\s+to\s+Card\b/i, 'Card Payment'],
+];
+
+/** The type this message states about itself, or ''. */
+function statedType(text: string): string {
+  for (const [pattern, label] of STATED_TYPE) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    // A null label means the pattern captures the wording itself.
+    const value = label ?? match[1];
+    if (value) return clean(value);
+  }
+  return '';
+}
+
 function extractMerchant(text: string): string {
   // "Reason:MB:loan-AML08" — surface the loan code as the description.
   const loan = text.match(/Reason\s*:\s*(?:MB:)?(loan-[A-Z0-9]+)/i);
@@ -1037,9 +1116,22 @@ function extractMerchant(text: string): string {
   const location = text.match(/Location\s*:\s*(.+?)\s*,?\s*(?:Amount|Av\.?Bal|Term ID|$)/i);
   if (location) return clean(location[1]);
 
-  // "at National Water Supply Rathmalana." — POS merchant, up to "Avl Bal".
+  /*
+   * "at National Water Supply Rathmalana." — POS merchant, up to "Avl Bal".
+   *
+   * The capture must not START with a clock time. This clause exists to read a
+   * payee out of "at KEELLS SUPER", but plenty of alerts write the timestamp
+   * the same way — "on 27/08/2026 at 09:32" — and on a message whose only "at"
+   * is that one, the user's ATM deposit reached the review queue TITLED
+   * "09:32". A time is not a payee: it names nothing, matches no category, and
+   * tells the user nothing about what the money was.
+   *
+   * Rejected rather than skipped-over, because a message that says "at <time>"
+   * and nothing else has no merchant to find — the stated transaction type
+   * below is the right answer for it.
+   */
   const at = text.match(/\bat\s+(.+?)(?:\.\s*Avl|\.\s*Av\.|\s+Avl\b|\n|$)/i);
-  if (at) return clean(at[1]);
+  if (at && !LEADING_TIME.test(at[1])) return clean(at[1]);
 
   /*
    * "as CEFTS Outward Transfer." / "as Transfer Out." — the transaction type
@@ -1090,7 +1182,14 @@ function extractMerchant(text: string): string {
     if (/[a-z]{3,}/i.test(value) && !/^\s*(?:LKR|Rs\.?)\b/i.test(value)) return value;
   }
 
-  return '';
+  /*
+   * Nothing named a payee — fall back to the type the message states about
+   * itself, so the card reads "ATM Cash Deposit" rather than being blank.
+   *
+   * Last on purpose: this is the answer for a movement that genuinely has no
+   * merchant, never a substitute for one the message actually carries.
+   */
+  return statedType(text);
 }
 
 

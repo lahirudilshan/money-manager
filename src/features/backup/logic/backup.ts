@@ -103,6 +103,12 @@ export const SNAPSHOT_TABLES = [
   'health_documents',
   'health_readings',
   /*
+   * Buddy loans — money lent to people. Loans before their repayments, which
+   * carry a `loan_id` foreign key.
+   */
+  'buddy_loans',
+  'buddy_repayments',
+  /*
    * The Smart Detect queue — messages waiting for review.
    *
    * Last in the list because nothing references it, and it is the only table a
@@ -183,6 +189,18 @@ export const HISTORY_TABLES: readonly SnapshotTable[] = [
   'health_visits',
   'health_documents',
   'health_readings',
+  /*
+   * Buddy loans are HISTORY, both tables.
+   *
+   * Unlike a vehicle or a family member, a debt is not structure the user would
+   * want carried into a fresh board — it is a specific sum lent on a specific
+   * day. Restoring "Nuwan owes you 5,000" onto a board being started clean
+   * would put a stranger's debt in someone's reminders, and the same test used
+   * everywhere else here settles it: carrying it over would make a figure on
+   * the new board wrong.
+   */
+  'buddy_loans',
+  'buddy_repayments',
 ];
 
 /** Whether a table survives a `setup`-only restore. */

@@ -1139,6 +1139,110 @@ export const healthReadings = sqliteTable(
   ],
 );
 
+/**
+ * Buddy loans mini-app — see shared/lib/miniApps.ts. Opt-in, so these tables
+ * stay empty on a device that never enables it.
+ *
+ * Deliberately separate from `loans`, which models a BANK product: principal,
+ * interest, an amortisation schedule, a fixed monthly installment. None of that
+ * applies when a neighbour asks for 5,000 in cash and says they will return it
+ * "sometime next month". The facts worth keeping are who, how much, when it
+ * went out, and what has come back — so this is its own small table rather than
+ * a pile of nullable columns bolted onto a schedule it does not have.
+ */
+export const buddyLoans = sqliteTable(
+  'buddy_loans',
+  {
+    id: text('id').primaryKey(),
+    /**
+     * Free text, not a reference to a `health_people` row.
+     *
+     * The people involved here overlap barely at all with the family the health
+     * add-on tracks, and forcing a person record first would put a form in
+     * front of someone trying to note down a loan in ten seconds.
+     */
+    personName: text('person_name').notNull(),
+    /**
+     * UNUSED — no screen reads or writes this.
+     *
+     * A phone number was on the form and came off it: the contact is already in
+     * the phone's own address book under the same name, so re-typing it here
+     * was a field to fill in for something a tap on the name already does
+     * better.
+     *
+     * The column stays because SQLite cannot drop one without rebuilding the
+     * table, and a nullable column nothing writes costs nothing. Anything
+     * stored by an earlier build is still here if this is ever wanted back.
+     */
+    personContact: text('person_contact'),
+    amountMinor: integer('amount_minor').notNull(),
+    /** Which way the money went — the user can also be the borrower. */
+    direction: text('direction', { enum: ['lent', 'borrowed'] })
+      .notNull()
+      .default('lent'),
+    /** Cash, or a transfer that will show on a statement. */
+    method: text('method', { enum: ['cash', 'transfer', 'other'] })
+      .notNull()
+      .default('cash'),
+    lentOn: integer('lent_on', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * NULLABLE on purpose.
+     *
+     * Plenty of these are handed over with no agreed date, and inventing one
+     * would put a reminder on the dashboard about a promise nobody made. A
+     * record without a date simply never becomes a reminder — see
+     * `dueBuddyLoans`.
+     */
+    dueOn: integer('due_on', { mode: 'timestamp_ms' }),
+    /**
+     * `written_off` is an OUTCOME, not a missing value.
+     *
+     * Money that is not coming back is a fact worth keeping: deleting the row
+     * would erase who did not repay, and marking it paid would flatter the
+     * totals. It keeps its own state, drops out of reminders, and is reported
+     * on its own line.
+     */
+    status: text('status', { enum: ['outstanding', 'paid', 'written_off'] })
+      .notNull()
+      .default('outstanding'),
+    /** When it was settled or written off, for the history. */
+    closedOn: integer('closed_on', { mode: 'timestamp_ms' }),
+    /** Local file URI — see shared/lib/imageStorage.ts. Stays on the device. */
+    imageUri: text('image_uri'),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [
+    // The add-on's list, and the reminder sweep, both read by status then date.
+    index('buddy_loans_status_idx').on(t.status, t.dueOn),
+  ],
+);
+
+/**
+ * One repayment against a buddy loan.
+ *
+ * Separate rows rather than a running `repaidMinor` column, because a stored
+ * total is one write away from disagreeing with the history beneath it. What is
+ * still owed is DERIVED — see `remainingMinor` — so deleting a mistaken
+ * repayment corrects the balance automatically instead of leaving it wrong.
+ */
+export const buddyRepayments = sqliteTable(
+  'buddy_repayments',
+  {
+    id: text('id').primaryKey(),
+    loanId: text('loan_id')
+      .notNull()
+      .references(() => buddyLoans.id, { onDelete: 'cascade' }),
+    amountMinor: integer('amount_minor').notNull(),
+    paidOn: integer('paid_on', { mode: 'timestamp_ms' }).notNull(),
+    /** A photo of the slip, same as the loan itself may carry. */
+    imageUri: text('image_uri'),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [index('buddy_repayments_loan_idx').on(t.loanId, t.paidOn)],
+);
+
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
@@ -1229,6 +1333,11 @@ export type HealthDocument = typeof healthDocuments.$inferSelect;
 export type NewHealthDocument = typeof healthDocuments.$inferInsert;
 export type HealthReading = typeof healthReadings.$inferSelect;
 export type NewHealthReading = typeof healthReadings.$inferInsert;
+
+export type BuddyLoan = typeof buddyLoans.$inferSelect;
+export type NewBuddyLoan = typeof buddyLoans.$inferInsert;
+export type BuddyRepayment = typeof buddyRepayments.$inferSelect;
+export type NewBuddyRepayment = typeof buddyRepayments.$inferInsert;
 
 /**
  * The eight blood groups, in the order they are normally listed.

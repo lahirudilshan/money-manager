@@ -17,7 +17,7 @@
 
 import type { Ionicons } from '@expo/vector-icons';
 
-export type MiniAppId = 'fuel' | 'health';
+export type MiniAppId = 'fuel' | 'health' | 'buddyloans';
 
 export interface MiniApp {
   id: MiniAppId;
@@ -40,6 +40,20 @@ export const MINI_APPS: MiniApp[] = [
     icon: 'car-sport-outline',
     color: '#0E9F6E',
     route: '/mini/fuel',
+  },
+  {
+    id: 'buddyloans',
+    name: 'Buddy loans',
+    description: 'Money you lend to friends and family. See who owes you and when it is due back.',
+    icon: 'people-outline',
+    /*
+     * Teal — the far end of the app's own brand gradient (blue → teal), so the
+     * add-on reads as part of the product rather than a bolt-on. Distinct from
+     * Fuel's green and Health's pink at a glance, which is the whole point of
+     * each mini app having its own.
+     */
+    color: '#0E7C86',
+    route: '/mini/buddyloans',
   },
   {
     id: 'health',

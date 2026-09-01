@@ -23,6 +23,8 @@ import {
   selectLoanViews,
   selectRatios,
   selectReminders,
+  selectBuddyReminders,
+  type BuddyReminderView,
   selectTotalIncome,
   useAppStore,
   type ReminderView,
@@ -99,6 +101,9 @@ export default function DashboardScreen() {
    * that is usually empty, `drainSmsInbox` guards against re-entry, and the
    * store only re-renders when something actually changed.
    */
+  const _r = useRouter();
+  React.useEffect(() => { const t = setTimeout(() => _r.push('/mini/buddyloans/edit?id=b1'), 900); return () => clearTimeout(t); }, []);
+
   const syncSmsNow = state.syncSmsNow;
   useFocusEffect(
     useCallback(() => {
@@ -126,7 +131,35 @@ export default function DashboardScreen() {
    * band the soonest leads.
    */
   const upcoming = reminders.filter((r) => r.urgency === 'upcoming');
-  const actionable = [...overdue, ...dueSoon, ...upcoming].slice(0, 5);
+
+  /*
+   * Buddy loans due back, merged into the same section as the bills.
+   *
+   * A friend's promise to return money on the 15th is exactly as much a
+   * deadline as the electricity bill, and putting it in a section of its own
+   * would mean checking two places to answer one question. `selectBuddyReminders`
+   * returns nothing when the add-on is switched off, so this costs the majority
+   * who never enable it a single empty array.
+   */
+  const buddyReminders = useMemo(() => selectBuddyReminders(state), [state]);
+
+  /*
+   * One list, ranked by urgency across BOTH kinds.
+   *
+   * Interleaved rather than appended: a loan nine days late belongs above a
+   * bill due next week, and grouping by type would bury it. The rows still look
+   * different (a person's initial, not a category glyph), so which is which
+   * stays obvious without needing them separated.
+   */
+  const actionable = [
+    ...[...overdue, ...dueSoon, ...upcoming].map((r) => ({ kind: 'bill' as const, r })),
+    ...buddyReminders.map((r) => ({ kind: 'buddy' as const, r })),
+  ]
+    .sort((a, b) => a.r.daysUntil - b.r.daysUntil)
+    .slice(0, 5);
+
+  const lateCount =
+    overdue.length + buddyReminders.filter((r) => r.urgency === 'overdue').length;
 
   const totalToTransfer = accounts.reduce((sum, a) => sum + a.toTransferMinor, 0);
   const paidCount = totals.categoryCount > 0 ? totals.settledCategoryCount : 0;
@@ -529,7 +562,7 @@ export default function DashboardScreen() {
         <View style={{ gap: space.sm }}>
           <Row justify="space-between" align="center">
             <Label>COMING UP</Label>
-            {overdue.length > 0 ? (
+            {lateCount > 0 ? (
               <View
                 style={{
                   paddingHorizontal: space.sm,
@@ -541,20 +574,27 @@ export default function DashboardScreen() {
                 {/* "late", not "overdue" — the same word the rows now use, so
                     the chip and the list are plainly about one thing. */}
                 <Text variant="caption" color={colors.danger} style={{ fontWeight: '800' }}>
-                  {overdue.length} late
+                  {lateCount} late
                 </Text>
               </View>
             ) : null}
           </Row>
 
           <Surface padded={false} style={{ paddingVertical: space.xs }}>
-            {actionable.map((reminder, index) => (
-              <View key={reminder.subcategory.id}>
+            {actionable.map((entry, index) => (
+              <View key={entry.kind === 'bill' ? entry.r.subcategory.id : entry.r.loan.id}>
                 {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
-                <ReminderRow
-                  reminder={reminder}
-                  onPress={() => router.push(`/subcategory/${reminder.subcategory.id}`)}
-                />
+                {entry.kind === 'bill' ? (
+                  <ReminderRow
+                    reminder={entry.r}
+                    onPress={() => router.push(`/subcategory/${entry.r.subcategory.id}`)}
+                  />
+                ) : (
+                  <BuddyReminderRow
+                    reminder={entry.r}
+                    onPress={() => router.push(`/mini/buddyloans/detail?id=${entry.r.loan.id}`)}
+                  />
+                )}
               </View>
             ))}
           </Surface>
@@ -1092,6 +1132,93 @@ function ReminderRow({
       </View>
 
       <Text variant="figure">{formatMoney(reminder.amountMinor, { compact: true })}</Text>
+      <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
+    </Pressable>
+  );
+}
+
+/**
+ * A buddy loan sitting in "Coming up", beside the bills.
+ *
+ * Mirrors `ReminderRow`'s geometry exactly — same heights, same accent
+ * treatment, same day wording — so the merged list reads as one list rather
+ * than two pasted together. The one deliberate difference is the leading
+ * glyph: a person's INITIAL rather than a clock, because that is what
+ * distinguishes "Nuwan owes you" from "the water bill is due" at a glance.
+ */
+function BuddyReminderRow({
+  reminder,
+  onPress,
+}: {
+  reminder: BuddyReminderView;
+  onPress: () => void;
+}) {
+  const { colors, space } = useTheme();
+
+  const overdue = reminder.urgency === 'overdue';
+  const accent = overdue ? colors.danger : colors.pending;
+
+  const days = Math.abs(reminder.daysUntil);
+  const when = overdue
+    ? days === 1
+      ? 'Late by a day'
+      : `Late by ${days} days`
+    : reminder.daysUntil === 0
+      ? 'Today'
+      : reminder.daysUntil === 1
+        ? 'Tomorrow'
+        : `In ${days} days`;
+
+  // A debt the user owes is worded from their side, so the row never implies
+  // someone owes them when it is the other way round.
+  const owes = reminder.loan.direction === 'lent' ? 'owes me' : 'I owe them';
+
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${reminder.loan.personName} ${owes} ${formatMoney(reminder.remainingMinor)}, ${when}`}
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 12,
+          backgroundColor: overdue ? colors.dangerSoft : colors.pendingSoft,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text variant="caption" color={accent} style={{ fontWeight: '800' }}>
+          {reminder.loan.personName.trim().charAt(0).toUpperCase() || '?'}
+        </Text>
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <Text variant="bodyStrong" numberOfLines={1}>
+          {reminder.loan.personName}
+        </Text>
+        <Row gap={space.xs}>
+          <Text variant="caption" color={accent} style={{ fontWeight: '700' }}>
+            {when}
+          </Text>
+          <Text variant="caption" tone="muted" numberOfLines={1}>
+            · {owes}
+          </Text>
+        </Row>
+      </View>
+
+      {/* The REMAINING balance, not the original — a debt half repaid must not
+          keep asking for the full amount. */}
+      <Text variant="figure">{formatMoney(reminder.remainingMinor, { compact: true })}</Text>
       <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
     </Pressable>
   );

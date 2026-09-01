@@ -15,6 +15,9 @@ import {
   paymentsElapsed,
   remainingBalance,
 } from '~/features/loans/logic/amortization';
+import { dueBuddyLoans } from '~/features/buddyloans/logic/buddyLoans';
+import { parseEnabled } from '~/shared/lib/miniApps';
+import type { BuddyLoan, BuddyRepayment as BuddyRepaymentRow } from '~/db/schema';
 import {
   sumMinor,
   type Minor,
@@ -754,4 +757,50 @@ export function selectLoanViews(state: AppState): LoanView[] {
       progressPct: loan.termMonths > 0 ? (paidCount / loan.termMonths) * 100 : 0,
     };
   });
+}
+
+/** One buddy loan falling due, as the dashboard's "Coming up" renders it. */
+export interface BuddyReminderView {
+  loan: BuddyLoan;
+  /** What is still owed — never the original amount once part paid. */
+  remainingMinor: Minor;
+  dueDate: Date;
+  daysUntil: number;
+  urgency: DueUrgency;
+}
+
+/**
+ * Buddy loans that belong beside the bills in "Coming up".
+ *
+ * Kept as its own selector rather than folded into `selectReminders`, because
+ * that one returns `ReminderView`, whose every field is a `Subcategory` — a
+ * board line with a category, a card and a monthly period. A friend's loan has
+ * none of those, and widening the shared type with a pile of nullable fields
+ * would push the difference into every consumer. Two small selectors and one
+ * merge at the call site keeps each honest about what it describes.
+ *
+ * Returns nothing at all when the add-on is switched off, so a user who never
+ * enables it cannot see one of these on their dashboard.
+ */
+export function selectBuddyReminders(
+  state: AppState,
+  today = new Date(),
+): BuddyReminderView[] {
+  if (!parseEnabled(state.miniApps).has('buddyloans')) return [];
+
+  const byLoan = new Map<string, BuddyRepaymentRow[]>();
+  for (const repayment of state.buddyRepayments) {
+    const bucket = byLoan.get(repayment.loanId) ?? [];
+    bucket.push(repayment);
+    byLoan.set(repayment.loanId, bucket);
+  }
+
+  return dueBuddyLoans(state.buddyLoans, byLoan, today).map((entry) => ({
+    loan: entry.loan,
+    remainingMinor: entry.remainingMinor,
+    // Non-null by construction: `dueBuddyLoans` drops every dateless record.
+    dueDate: entry.loan.dueOn!,
+    daysUntil: entry.daysUntil,
+    urgency: entry.urgency,
+  }));
 }

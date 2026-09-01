@@ -89,6 +89,7 @@ const DISQUALIFIERS: [name: string, pattern: RegExp][] = [
   ['promo-discount', /\b\d{1,3}\s*%\s*(?:off|discount|savings|cashback)\b/i],
   ['promo-savings', /\b(?:max(?:imum)?\s+savings|special\s+offer|promo(?:tion|tional)?\b|limited\s+time)/i],
   ['promo-win', /\b(?:you\s+could\s+win|congratulations|lucky\s+draw|free\s+gift)\b/i],
+
 ];
 
 /**
@@ -127,7 +128,19 @@ const SIGNALS: [name: string, pattern: RegExp, weight: number][] = [
    * message is naming a completed money movement. Kept as a separate signal so
    * the movement gate below can accept either.
    */
-  ['noun-moved', /\b(?:purchase|withdrawal|deposit|transfer|payment|debit|credit|reversal|refund)\b(?=\s*[,:.\n]|\s+(?:e-?Receipt|account|alert|to|from))|\bSMS\s+ALERT\s*:/i, 0.4],
+  /*
+   * `of` is in the lookahead because a card-payment confirmation states the
+   * movement that way and nothing else in it reads as one: "Thank you for your
+   * payment OF LKR 46,567.00 made to Card # 3766...". Without it the message
+   * scored 0.25, failed the movement gate as `no-movement-verb`, and — being
+   * unparseable but not recognisable as noise — was RETAINED in the handoff
+   * file indefinitely. That is 46,567 rupees that never reached the board.
+   *
+   * `made to` is matched for the same message: it is the phrase that turns the
+   * noun into a completed act, and it cannot appear in an offer, which
+   * promises a payment rather than confirming one.
+   */
+  ['noun-moved', /\b(?:purchase|withdrawal|deposit|transfer|payment|debit|credit|reversal|refund)\b(?=\s*[,:.\n]|\s+(?:e-?Receipt|account|alert|to|from|of)\b|\s+made\s+to\b)|\bSMS\s+ALERT\s*:/i, 0.4],
 
   /*
    * An account reference. Strong because promos are broadcast to a list and
@@ -281,6 +294,36 @@ const MOVEMENT_WORDING =
   /\b(?:debited|credited|withdrawn|deposited|transferred|spent|charged|paid|purchased|reversed|refunded|purchase|withdrawal|transfer|payment)\b/i;
 
 /**
+ * Advisory wording that CANCELS the movement claim above.
+ *
+ * The retention rule asks "does this text claim money moved". A security blast
+ * does not — it warns you about money — but it says so using the same nouns,
+ * and one word was enough to keep it forever: "beware of fake traffic fine
+ * PAYMENT links" matched `MOVEMENT_WORDING`, so the file retained it as a
+ * parser gap and re-retained it on every drain. Two copies were still sitting
+ * in the user's inbox weeks later.
+ *
+ * These messages carry no amount, so `classifySms` returns at `no-amount`
+ * before the disqualifier list ever runs — which is why the fix has to live
+ * here rather than as another veto.
+ *
+ * Deliberately only THREE phrases, and each was checked against the real
+ * corpus first. A broader rule is actively dangerous here: nearly every HNB
+ * alert carries "Protect from scams *DO NOT SHARE ACCOUNT DETAILS /OTP*", so
+ * matching "do not share", "security alert" or "fraud" discards genuine
+ * transactions — the one failure mode that actually costs the user money. It
+ * was tried, and it broke 29 tests covering real messages.
+ *
+ * What survives is wording no bank puts in a receipt: telling you to beware of
+ * something, saying a scam is circulating, or naming phishing outright.
+ *
+ * This is also reached ONLY for a message with no amount, so a real alert —
+ * which always states a figure — cannot get here however its footer reads.
+ */
+const ADVISORY_WORDING =
+  /\bbeware\s+of\b|\b(?:currently\s+)?(?:being\s+)?circulat(?:ed|ing)\b|\bphishing\b/i;
+
+/**
  * Whether a message should be DISCARDED rather than kept for a future parser.
  *
  * The inbox file retains anything unreadable so a parser gap stays visible and
@@ -309,6 +352,13 @@ export function isDiscardableNoise(input: string): boolean {
    * genuinely not about money and is dropped.
    */
   if (result.signals.includes('no-amount')) {
+    /*
+     * An advisory is discarded even though it uses movement wording — see
+     * `ADVISORY_WORDING`. Checked first because these messages contain both
+     * kinds of phrasing, and the warning is the one that describes what the
+     * message IS.
+     */
+    if (ADVISORY_WORDING.test(input)) return true;
     return !MOVEMENT_WORDING.test(input);
   }
 

@@ -22,6 +22,35 @@ export function startOfDay(date: Date): Date {
 }
 
 /** Same calendar day, ignoring the time of day. */
+/** `date` shifted by whole days, at midnight. Negative goes back. */
+export function addDays(date: Date, days: number): Date {
+  const next = startOfDay(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+/**
+ * `date` shifted by whole months, at midnight, CLAMPED to the target month.
+ *
+ * `setMonth` alone overflows: a month after 31 January is 31 February, which
+ * JavaScript silently rolls into 3 March. That is never what "in a month"
+ * means to someone picking a repayment date — they mean the end of the next
+ * month, not a few days into the one after. So the day is clamped to the last
+ * day the target month actually has.
+ */
+export function addMonths(date: Date, months: number): Date {
+  const day = date.getDate();
+  const next = startOfDay(date);
+
+  // Move to the 1st first, so the month shift cannot overflow on the way.
+  next.setDate(1);
+  next.setMonth(next.getMonth() + months);
+
+  const lastDay = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+  next.setDate(Math.min(day, lastDay));
+  return next;
+}
+
 export function isSameDay(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&

@@ -2,6 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, View } from 'react-native';
 import {
+  addDays,
+  addMonths,
   formatDateLabel,
   isSameDay,
   MONTH_NAMES,
@@ -26,17 +28,32 @@ import { BottomSheet, Label, Row, Text } from './ui';
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
+/** Stands in for "no upper bound" on a future-facing field. */
+const MAX_FUTURE = new Date(9999, 11, 31);
+
 export function DatePickerField({
   label = 'Date',
   value,
   onChange,
   /** Latest selectable day. Defaults to today — a transaction cannot be future. */
   maximumDate,
+  /**
+   * Let the user pick a date in the FUTURE.
+   *
+   * An explicit flag rather than `maximumDate={undefined}`, which reads as "no
+   * limit" and does the opposite: the default is today, so passing undefined
+   * silently clamped a repayment-date field to the past and the grid refused
+   * every day the field existed to choose. A boolean cannot be misread that
+   * way, and it is what swaps the footer shortcuts to Yesterday/Today or
+   * 1 week / 2 weeks / 1 month.
+   */
+  allowFuture = false,
 }: {
   label?: string;
   value: Date;
   onChange: (date: Date) => void;
   maximumDate?: Date;
+  allowFuture?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
   const [open, setOpen] = React.useState(false);
@@ -45,9 +62,32 @@ export function DatePickerField({
   const [cursor, setCursor] = React.useState(() => startOfDay(value));
 
   const today = startOfDay(new Date());
-  const max = startOfDay(maximumDate ?? today);
+  /*
+   * A forward-looking field has no ceiling unless the caller names one — you
+   * can promise to repay in a year. `MAX_FUTURE` stands in for "no limit" so
+   * the comparison below stays a plain date test.
+   */
+  const max = startOfDay(maximumDate ?? (allowFuture ? MAX_FUTURE : today));
   // The two dates people actually reach for when logging an entry late.
-  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const yesterday = addDays(today, -1);
+
+  /*
+   * Which way this field points, and therefore which shortcuts help.
+   *
+   * Nearly every date in the app is something that ALREADY happened — a
+   * transaction, a fill-up, a doctor's visit — so the shortcuts are Yesterday
+   * and Today. A repayment date is the exception: it is a promise about the
+   * future, and offering "Yesterday" there is offering a date the field's own
+   * rules would reject.
+   *
+   * Inferred from `maximumDate` rather than asking the caller for another flag:
+   * a field that permits future dates passes `undefined` (or a date beyond
+   * today), and that IS the statement that this one looks forward. The two can
+   * never fall out of step because they are the same fact.
+   */
+  const looksForward = allowFuture || max > today;
+  const inAWeek = addDays(today, 7);
+  const inAMonth = addMonths(today, 1);
 
   function openPicker() {
     setCursor(startOfDay(value));
@@ -63,10 +103,21 @@ export function DatePickerField({
 
   const cells = monthGrid(cursor.getFullYear(), cursor.getMonth());
   const isToday = isSameDay(value, today);
+  /*
+   * Whether the headline reads as a WORD rather than a date.
+   *
+   * Derived from the same two days `formatDateLabel` special-cases, rather than
+   * string-matching its output — the two can then never disagree about what
+   * counts as relative.
+   */
+  const isRelativeLabel = isToday || isSameDay(value, yesterday);
+
 
   return (
     <View style={{ gap: space.sm }}>
-      <Label>{label.toUpperCase()}</Label>
+      {/* An empty label renders nothing, so a caller that has already headed
+          the field itself does not get a blank line of space above it. */}
+      {label ? <Label>{label.toUpperCase()}</Label> : null}
 
       <Pressable
         onPress={openPicker}
@@ -120,32 +171,80 @@ export function DatePickerField({
          */
         footer={
           <Row gap={space.sm}>
-            <QuickDate
-              label="Yesterday"
-              active={isSameDay(value, yesterday)}
-              // Guarded: with a maximumDate in the past, yesterday may be out of
-              // range, and the shortcut must not set a date the grid forbids.
-              disabled={yesterday > max}
-              onPress={() => {
-                onChange(yesterday);
-                setOpen(false);
-              }}
-            />
-            <QuickDate
-              label="Today"
-              active={isSameDay(value, today)}
-              onPress={() => {
-                onChange(today);
-                setOpen(false);
-              }}
-            />
+            {looksForward ? (
+              <>
+                {/*
+                  Forward shortcuts, for a field asking when something is DUE.
+
+                  Worded "In 1 week" rather than "1 week": a bare duration
+                  beside Yesterday/Today reads as a length of time, not a date,
+                  and these buttons SET a date. The preposition is what makes
+                  them answer the question the field asked.
+
+                  Ordered nearest-first, left to right, so the row reads as a
+                  scale rather than an unordered set — and the furthest option
+                  sits nearest the thumb, since "next month" is the commonest
+                  informal promise.
+                */}
+                <QuickDate
+                  label="In 1 week"
+                  active={isSameDay(value, inAWeek)}
+                  onPress={() => {
+                    onChange(inAWeek);
+                    setOpen(false);
+                  }}
+                />
+                <QuickDate
+                  label="In 2 weeks"
+                  active={isSameDay(value, addDays(today, 14))}
+                  onPress={() => {
+                    onChange(addDays(today, 14));
+                    setOpen(false);
+                  }}
+                />
+                <QuickDate
+                  label="In 1 month"
+                  active={isSameDay(value, inAMonth)}
+                  onPress={() => {
+                    onChange(inAMonth);
+                    setOpen(false);
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                <QuickDate
+                  label="Yesterday"
+                  active={isSameDay(value, yesterday)}
+                  // Guarded: with a maximumDate in the past, yesterday may be out of
+                  // range, and the shortcut must not set a date the grid forbids.
+                  disabled={yesterday > max}
+                  onPress={() => {
+                    onChange(yesterday);
+                    setOpen(false);
+                  }}
+                />
+                <QuickDate
+                  label="Today"
+                  active={isSameDay(value, today)}
+                  onPress={() => {
+                    onChange(today);
+                    setOpen(false);
+                  }}
+                />
+              </>
+            )}
           </Row>
         }
       >
         <View style={{ padding: space.lg, gap: space.md }}>
-          {/* The date being chosen, echoed in full. The sheet is opened from a row
-              that may scroll out of view, so the current value is restated rather
-              than left to memory — and it gives the month nav a visible anchor. */}
+          {/*
+            The date being chosen, echoed in full.
+
+            The sheet is opened from a row that may scroll out of view, so the
+            current value is restated rather than left to memory — and it gives
+            the month nav a visible anchor.
+          */}
           <View
             style={{
               flexDirection: 'row',
@@ -158,12 +257,27 @@ export function DatePickerField({
             }}
           >
             <Ionicons name="checkmark-circle" size={16} color={colors.accent} />
-            <Text variant="small" color={colors.accentInk} style={{ fontWeight: '700' }}>
+            <Text
+              variant="small"
+              color={colors.accentInk}
+              style={{ flex: 1, fontWeight: '700' }}
+            >
               {formatDateLabel(value)}
             </Text>
-            <Text variant="caption" color={colors.accentInk} style={{ flex: 1, opacity: 0.75 }}>
-              {value.getDate()} {MONTH_NAMES[value.getMonth()]} {value.getFullYear()}
-            </Text>
+            {/*
+              The spelled-out date, ONLY beside a relative label.
+
+              `formatDateLabel` returns "Today"/"Yesterday" for those two days
+              and the full date for every other, so printing this unconditionally
+              stated the same date twice — "4 Sep 2026   4 September 2026". It
+              exists to say WHICH day "Today" is, and has nothing to add once the
+              label is already a date.
+            */}
+            {isRelativeLabel ? (
+              <Text variant="caption" color={colors.accentInk} style={{ opacity: 0.75 }}>
+                {value.getDate()} {MONTH_NAMES[value.getMonth()]} {value.getFullYear()}
+              </Text>
+            ) : null}
           </View>
 
           {/* Month navigation. Forward is blocked once the visible month reaches

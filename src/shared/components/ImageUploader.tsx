@@ -4,7 +4,7 @@ import React from 'react';
 import { ActivityIndicator, Image, Pressable, View } from 'react-native';
 import { deletePersistedImage, persistPickedImage } from '~/shared/lib/imageStorage';
 import { useTheme } from '../theme/ThemeProvider';
-import { Label, Text } from './ui';
+import { Glyph, Label, Text } from './ui';
 
 /**
  * The one receipt/photo attachment control, used everywhere a slip can be
@@ -87,15 +87,17 @@ export function ImageUploader({
 
           <View style={{ flex: 1, gap: space.sm }}>
             <SlotButton
-              icon="camera-outline"
+              icon="camera"
               label="Retake"
+              accent={colors.accent}
               busy={busy}
               compact
               onPress={() => pick('camera')}
             />
             <SlotButton
-              icon="image-outline"
-              label="Change"
+              icon="images"
+              label="Choose"
+              accent={colors.completed}
               busy={busy}
               compact
               onPress={() => pick('library')}
@@ -104,19 +106,30 @@ export function ImageUploader({
           </View>
         </View>
       ) : (
-        // Two dashed squares side by side: camera and library, no intermediate
-        // "where from?" step.
+        /*
+          Two dashed squares side by side: camera and library, no intermediate
+          "where from?" step.
+
+          Each carries its own TINTED ICON TILE rather than a bare grey glyph.
+          The two slots were otherwise identical — same box, same border, same
+          muted icon — so telling "take a photo now" from "pick one you already
+          have" meant reading the caption every time. A filled tile in its own
+          colour is recognised before the words are, and the same pair appears
+          on every screen that attaches an image, so the shapes become familiar.
+        */
         <View style={{ flexDirection: 'row', gap: space.sm }}>
           <SlotButton
-            icon="camera-outline"
+            icon="camera"
             label="Take photo"
+            accent={colors.accent}
             busy={busy}
             size={size}
             onPress={() => pick('camera')}
           />
           <SlotButton
-            icon="cloud-upload-outline"
-            label="Upload"
+            icon="images"
+            label="Choose"
+            accent={colors.completed}
             busy={busy}
             size={size}
             onPress={() => pick('library')}
@@ -139,6 +152,7 @@ function SlotButton({
   size,
   compact,
   tone,
+  accent,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -147,9 +161,34 @@ function SlotButton({
   size?: number;
   compact?: boolean;
   tone?: 'danger';
+  /**
+   * Draw the glyph on a filled tile in this colour, rather than bare.
+   *
+   * What separates the camera slot from the library one. Omitted by the
+   * Remove action, which should stay quiet rather than compete with the two
+   * that actually attach something.
+   */
+  accent?: string;
 }) {
   const { colors, radius, space } = useTheme();
   const color = tone === 'danger' ? colors.danger : colors.inkSecondary;
+
+  /*
+   * The glyph, on the app's own tinted tile when an accent is given.
+   *
+   * Uses the shared `Glyph` rather than a hand-rolled `View`. A saturated
+   * filled tile was tried first and read as two bright buttons sitting inside a
+   * quiet dashed slot — louder than the thing they attach to. `Glyph`'s default
+   * is a SOFT tint with a coloured icon, which is what every other tile in the
+   * app uses, so these now belong to the same family as the row icons on the
+   * dashboard and in settings.
+   */
+  const glyph = (tileSize: number) =>
+    accent ? (
+      <Glyph icon={icon} color={accent} size={tileSize} />
+    ) : (
+      <Ionicons name={icon} size={tileSize * 0.48} color={color} />
+    );
 
   if (compact) {
     return (
@@ -164,16 +203,26 @@ function SlotButton({
           gap: 8,
           paddingVertical: 9,
           paddingHorizontal: space.md,
-          borderRadius: radius.sm,
+          borderRadius: radius.md,
           borderWidth: 1,
           borderStyle: 'dashed',
-          borderColor: colors.hairlineStrong,
-          backgroundColor: pressed ? colors.hairline : colors.surfaceSunken,
+          /*
+           * Tinted the same way as the large slots above, so the actions beside
+           * an attached photo belong to the same family as the ones that
+           * attached it. The Remove action passes no accent and stays neutral —
+           * it is the one button here that should not invite a tap.
+           */
+          borderColor: accent ? `${accent}${pressed ? 'AA' : '55'}` : colors.hairlineStrong,
+          backgroundColor: accent
+            ? `${accent}${pressed ? '22' : '0D'}`
+            : pressed
+              ? colors.hairline
+              : colors.surfaceSunken,
           opacity: busy ? 0.5 : 1,
         })}
       >
-        <Ionicons name={icon} size={15} color={color} />
-        <Text variant="caption" color={color} style={{ fontWeight: '600' }}>
+        {glyph(24)}
+        <Text variant="caption" color={accent ?? color} style={{ fontWeight: '700' }}>
           {label}
         </Text>
       </Pressable>
@@ -192,11 +241,24 @@ function SlotButton({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        borderRadius: radius.md,
-        borderWidth: 1.5,
+        borderRadius: radius.lg,
+        borderWidth: 1,
         borderStyle: 'dashed',
-        borderColor: pressed ? colors.accent : colors.hairlineStrong,
-        backgroundColor: pressed ? colors.hairline : colors.surfaceSunken,
+        /*
+         * The dashes carry the slot's OWN colour, at low opacity.
+         *
+         * A neutral grey outline around a tinted tile left the two halves of
+         * one control looking unrelated — the tile said "camera", the box said
+         * nothing. Tinting the border makes the whole slot read as a single
+         * blue or green thing, which is what makes the pair recognisable at a
+         * glance rather than only after finding the icon.
+         *
+         * Kept at `55`/`14` hex alpha rather than full strength: a solid
+         * coloured dash would compete with the tile and turn an empty slot into
+         * the loudest thing on the form. It reads as tinted, not as filled.
+         */
+        borderColor: accent ? `${accent}${pressed ? 'AA' : '55'}` : colors.hairline,
+        backgroundColor: accent ? `${accent}${pressed ? '22' : '0D'}` : colors.surface,
         opacity: busy ? 0.6 : 1,
       })}
     >
@@ -204,8 +266,15 @@ function SlotButton({
         <ActivityIndicator color={colors.accent} />
       ) : (
         <>
-          <Ionicons name={icon} size={22} color={colors.inkMuted} />
-          <Text variant="caption" tone="muted" style={{ fontWeight: '600' }}>
+          {glyph(42)}
+          {/* The caption takes the slot's colour too, so tile, dashes and words
+              are one thing rather than three. */}
+          <Text
+            variant="caption"
+            tone={accent ? undefined : 'muted'}
+            color={accent}
+            style={{ fontWeight: '700' }}
+          >
             {label}
           </Text>
         </>

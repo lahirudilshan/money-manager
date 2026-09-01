@@ -363,6 +363,19 @@ export function AmountField({
    */
   const handleChange = (next: string) => onChangeText(formatAmountInput(next));
 
+  /*
+   * The headline shrinks as the number grows.
+   *
+   * `TextInput` has no `adjustsFontSizeToFit` — that is a `Text` prop — so the
+   * size is stepped from the character count instead. Without it a seven-figure
+   * amount ran past both edges of the sheet and the user could not read the
+   * figure they had just typed.
+   *
+   * Stepped rather than continuous so the digits do not jitter on every
+   * keystroke: the size holds until the number genuinely needs more room.
+   */
+  const heroFontSize = value.length > 12 ? 28 : value.length > 9 ? 34 : 42;
+
   if (!hero) {
     return (
       <View style={{ gap: space.sm }}>
@@ -408,7 +421,24 @@ export function AmountField({
       {/* `sm` rather than `xs`: the gap sits against 42px digits here, and the
           4px that reads as a space beside body text reads as the code touching
           the number at this size. */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
+      {/*
+        Padded and width-bounded, so a big figure cannot reach the edges.
+        
+        `LKR 7,500,000` ran flush into both sides of the sheet: the row had no
+        horizontal padding, and a fixed 42px font has no way to give ground. The
+        padding buys the margin; `maxWidth` plus `flexShrink` stop the input
+        claiming more room than the row has.
+      */}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: space.sm,
+          paddingHorizontal: space.lg,
+          alignSelf: 'stretch',
+        }}
+      >
         <Text variant="title" tone="muted">
           {currency}
         </Text>
@@ -424,12 +454,22 @@ export function AmountField({
           placeholderTextColor={colors.inkMuted}
           accessibilityLabel={label ?? 'Amount'}
           style={{
-            fontSize: 42,
+            fontSize: heroFontSize,
             fontWeight: '800',
             letterSpacing: -1.2,
             color: error ? colors.danger : colors.ink,
-            minWidth: 110,
-            textAlign: 'center',
+            /*
+             * Sized to its CONTENT, not to a fixed floor.
+             *
+             * `minWidth: 110` held the input wider than a short amount needed,
+             * and since the row centres `LKR` and the input as a pair, that
+             * empty slack sat to the right of the digits — pushing the visible
+             * number off centre and parking the cursor near the edge. The
+             * placeholder keeps an empty field from collapsing, so nothing is
+             * gained by reserving width up front.
+             */
+            flexShrink: 1,
+            textAlign: 'left',
             padding: 0,
           }}
         />

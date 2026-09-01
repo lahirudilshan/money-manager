@@ -440,6 +440,37 @@ const DDL = [
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`,
   `CREATE INDEX IF NOT EXISTS health_readings_person_idx ON health_readings(person_id, metric, measured_at)`,
+  // Buddy loans mini-app — see shared/lib/miniApps.ts. Opt-in, so these stay
+  // empty on a device that never enables it. Column comments live in schema.ts.
+  `CREATE TABLE IF NOT EXISTS buddy_loans (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_name TEXT NOT NULL,
+    person_contact TEXT,
+    amount_minor INTEGER NOT NULL,
+    direction TEXT NOT NULL DEFAULT 'lent',
+    method TEXT NOT NULL DEFAULT 'cash',
+    lent_on INTEGER NOT NULL,
+    -- Nullable: a loan with no promised date never becomes a reminder.
+    due_on INTEGER,
+    status TEXT NOT NULL DEFAULT 'outstanding',
+    closed_on INTEGER,
+    image_uri TEXT,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS buddy_loans_status_idx ON buddy_loans(status, due_on)`,
+  `CREATE TABLE IF NOT EXISTS buddy_repayments (
+    id TEXT PRIMARY KEY NOT NULL,
+    loan_id TEXT NOT NULL REFERENCES buddy_loans(id) ON DELETE CASCADE,
+    amount_minor INTEGER NOT NULL,
+    paid_on INTEGER NOT NULL,
+    image_uri TEXT,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS buddy_repayments_loan_idx ON buddy_repayments(loan_id, paid_on)`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL,
