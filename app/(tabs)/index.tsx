@@ -10,7 +10,7 @@ import { SmsDraftCard } from '~/features/sms/components/SmsDraftCard';
 import { UpgradeSheet } from '~/features/onboarding/components/UpgradeSheet';
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { BottomSheet, Divider, Empty, GradientCard, Glyph, Label, Row, Stat, Surface, Text } from '~/shared/components/ui';
-import { formatMoney } from '~/shared/lib/money';
+import { formatMoney, toMajor } from '~/shared/lib/money';
 import { formatPeriod, planHealth, shiftPeriod } from '~/features/budget/logic/planning';
 import { canUse } from '~/features/budget/logic/plans';
 import { enabledMiniApps, MINI_APPS, parseEnabled } from '~/shared/lib/miniApps';
@@ -30,6 +30,9 @@ import {
   type ReminderView,
 } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
+import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
+import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
+import { usdNeededFor } from '~/features/rates/logic/bankRates';
 
 /** Thickness of the gradient edge grouping the Smart Detect section. */
 const DETECT_BORDER = 1.5;
@@ -54,6 +57,9 @@ const DETECT_WASH_DARK = -0.86;
 export default function DashboardScreen() {
   const { colors, mode, space } = useTheme();
   const tabClearance = useTabBarClearance();
+  // Every visit starts at the top — a tab screen stays mounted, so its scroll
+  // offset otherwise survives being left and returned to. See the hook.
+  const scrollRef = useScrollToTopOnFocus();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -101,9 +107,6 @@ export default function DashboardScreen() {
    * that is usually empty, `drainSmsInbox` guards against re-entry, and the
    * store only re-renders when something actually changed.
    */
-  const _r = useRouter();
-  React.useEffect(() => { const t = setTimeout(() => _r.push('/mini/buddyloans/edit?id=b1'), 900); return () => clearTimeout(t); }, []);
-
   const syncSmsNow = state.syncSmsNow;
   useFocusEffect(
     useCallback(() => {
@@ -161,7 +164,38 @@ export default function DashboardScreen() {
   const lateCount =
     overdue.length + buddyReminders.filter((r) => r.urgency === 'overdue').length;
 
-  const totalToTransfer = accounts.reduce((sum, a) => sum + a.toTransferMinor, 0);
+  /*
+   * Summed in the HOME currency, deliberately.
+   *
+   * `toTransferMinor` is each account's figure in the currency that account
+   * holds, which is right for its own row and wrong to add up: a USD account's
+   * dollars would be summed with the others' rupees into a number that is not
+   * money in any unit. `toTransferHomeMinor` is the same amount before
+   * conversion, which is what a cross-account total needs.
+   */
+  const totalToTransfer = accounts.reduce((sum, a) => sum + a.toTransferHomeMinor, 0);
+
+  /*
+   * The same total in DOLLARS, for anyone paid in them.
+   *
+   * The rupee figure says what has to land in the accounts; it does not say
+   * what to actually DO, because the money being moved is dollars sitting in a
+   * salary account. Converting at the salary bank's own rate — not mid-market,
+   * which nobody is paid at — turns the total into the number the user types
+   * into their transfer.
+   *
+   * Renders nothing at all when there is no foreign income or no cached rate,
+   * so a purely local plan never sees a currency it does not use.
+   */
+  const salaryRate = useSalaryRate({
+    cards: state.cards,
+    incomes: state.incomes,
+    homeCurrency: state.currency,
+    rates: state.bankRates,
+  });
+  const usdToConvert = salaryRate.rate?.ttBuying
+    ? usdNeededFor(totalToTransfer, salaryRate.rate.ttBuying)
+    : null;
   const paidCount = totals.categoryCount > 0 ? totals.settledCategoryCount : 0;
 
   const loanMonthly = loanViews.reduce((sum, l) => sum + l.installmentMinor, 0);
@@ -238,6 +272,7 @@ export default function DashboardScreen() {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -628,9 +663,48 @@ export default function DashboardScreen() {
         <View style={{ gap: space.sm }}>
           <Row justify="space-between" align="center">
             <Label>MONEY TO MOVE</Label>
-            <Text variant="figure" color={totalToTransfer > 0 ? colors.pending : colors.completed}>
-              {totalToTransfer > 0 ? formatMoney(totalToTransfer) : 'All moved'}
-            </Text>
+            {/*
+              The rupee total, and beside it what that costs in dollars.
+
+              Two units for one figure rather than two figures: the rupees are
+              what the bills need, the dollars are what the user actually sends
+              from their salary account, and putting them on one line keeps
+              them read as the same amount rather than as separate demands. The
+              dollar half is muted and parenthesised for that reason — it is a
+              restatement, not a second total.
+
+              Hidden entirely once everything is moved, since "all moved" has
+              no amount left to restate.
+            */}
+            <Row gap={6} align="center">
+              {/*
+                Amber while money is still to move, green once it has been —
+                the `pending` -> `completed` half of the status progression,
+                matching how every other unsettled figure on the board reads.
+              */}
+              <Text variant="figure" color={totalToTransfer > 0 ? colors.pending : colors.completed}>
+                {totalToTransfer > 0 ? formatMoney(totalToTransfer) : 'All moved'}
+              </Text>
+              {totalToTransfer > 0 && usdToConvert !== null ? (
+                /*
+                  Blue against the rupee figure's amber — two CURRENCIES, told
+                  apart by colour.
+
+                  Not a state distinction: both halves are the same money in
+                  the same state. The hues separate the units, so the eye can
+                  pick out the dollar figure (the one actually retyped into a
+                  transfer) without reading the symbols. Same size and weight
+                  as the rupees, since neither is a footnote to the other.
+
+                  Whole dollars — see `usdNeededFor`.
+                */
+                <Text variant="figure" color={colors.transferred}>
+                  (${toMajor(usdToConvert).toLocaleString(undefined, {
+                    maximumFractionDigits: 0,
+                  })})
+                </Text>
+              ) : null}
+            </Row>
           </Row>
 
           {/* One surface, hairline-divided: with three or four accounts this
@@ -703,14 +777,43 @@ export default function DashboardScreen() {
                           color={done ? colors.completed : colors.ink}
                           numberOfLines={1}
                         >
+                          {/*
+                            In the account's OWN currency.
+
+                            Bills are planned in the home currency, but this
+                            figure names an amount to put INTO this account, so
+                            a USD account has to state dollars — the selector
+                            converts, and this renders the unit it converted to.
+                            Without both halves the row showed a rupee figure
+                            captioned as if it were dollars.
+                          */}
                           {account.empty
-                            ? formatMoney(0)
+                            ? formatMoney(0, { currency: account.currency })
                             : done
-                              ? formatMoney(account.plannedMinor)
-                              : formatMoney(account.toTransferMinor)}
+                              ? formatMoney(account.plannedMinor, { currency: account.currency })
+                              : formatMoney(account.toTransferMinor, {
+                                  currency: account.currency,
+                                })}
                         </Text>
-                        <Text variant="caption" tone="muted">
-                          {account.empty ? 'nothing planned' : done ? 'moved' : 'click to move'}
+                        <Text
+                          variant="caption"
+                          tone={account.needsRate ? 'secondary' : 'muted'}
+                          color={account.needsRate ? colors.pending : undefined}
+                        >
+                          {/*
+                            `needsRate` wins over every other caption: the
+                            figure beside it is in the WRONG unit (the app
+                            stores a rate for USD only), and saying "click to
+                            move" over a number that is 300x off is worse than
+                            saying nothing.
+                          */}
+                          {account.needsRate
+                            ? `no ${account.currency} rate`
+                            : account.empty
+                              ? 'nothing planned'
+                              : done
+                                ? 'moved'
+                                : 'click to move'}
                         </Text>
                       </View>
                     </Pressable>

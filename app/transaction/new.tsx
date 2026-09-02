@@ -177,7 +177,9 @@ export default function NewTransactionScreen() {
     if (id !== '__new__') {
       const line = destinations.find((d) => d.line.id === id)?.line;
       // Prefill the plan so logging an as-expected bill is one tap.
-      if (line && !amount) setAmount(String(line.plannedMinor / 100));
+      // Formatted like anything else typed into this field, so a prefilled
+      // plan amount is not the one figure on screen missing its separators.
+      if (line && !amount) setAmount(formatAmountInput(String(line.plannedMinor / 100)));
     }
   }
 

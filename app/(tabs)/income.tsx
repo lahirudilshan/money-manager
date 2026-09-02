@@ -17,11 +17,15 @@ import {
 } from '../../src/store/useAppStore';
 import type { Income } from '../../src/db/schema';
 import { useTheme } from '~/shared/theme/ThemeProvider';
+import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 
 /** Income sources, including foreign-currency ones converted at a stored rate. */
 export default function IncomeScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
+  // Every visit starts at the top — a tab screen stays mounted, so its scroll
+  // offset otherwise survives being left and returned to. See the hook.
+  const scrollRef = useScrollToTopOnFocus();
   const router = useRouter();
   const state = useAppStore();
 
@@ -60,6 +64,7 @@ export default function IncomeScreen() {
       />
 
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: space.md,

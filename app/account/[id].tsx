@@ -10,6 +10,10 @@ import { effectiveAmount, resolveCardId } from '~/features/budget/logic/planning
 import { accountLabel } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
+import {
+  accountCurrency,
+  isForeignAccount,
+} from '~/features/accounts/logic/accountCurrency';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
@@ -24,6 +28,7 @@ export default function AccountDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const state = useAppStore();
+  const homeCurrency = state.currency;
 
   const view = useMemo(
     () => selectCardViews(state).find((v) => v.card.id === id),
@@ -158,6 +163,18 @@ export default function AccountDetailScreen() {
       add('Bank', card.bankName ?? brand.name);
       add('Branch', card.branch);
       add('Bank code', card.bankCode);
+    }
+
+    /*
+     * Shown only when it is NOT the home currency.
+     *
+     * Every account was in the home currency before this column existed, and
+     * for almost everyone still is — a "Currency: LKR" row on all of them is
+     * noise that says nothing. It appears precisely when it carries
+     * information: this account holds something different.
+     */
+    if (isForeignAccount(card, homeCurrency)) {
+      add('Currency', accountCurrency(card, homeCurrency));
     }
 
     // The digits bank SMS quote — the field that makes auto-detection match

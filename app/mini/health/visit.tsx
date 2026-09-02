@@ -4,7 +4,7 @@ import { Alert, View } from 'react-native';
 import { BottomSheet, Button, GradientButton, Surface, Text } from '~/shared/components/ui';
 import { Field, PillSelect } from '~/shared/components/forms';
 import { DatePickerField } from '~/shared/components/DatePickerField';
-import { parseAmount } from '~/shared/lib/money';
+import { formatAmountInput, parseAmount } from '~/shared/lib/money';
 import { healthVisitRepo } from '../../../src/db/repositories';
 import { VISIT_KIND_LABEL, type VisitKind } from '../../../src/db/schema';
 import { useModalClose } from '~/shared/hooks/useModalClose';
@@ -52,8 +52,10 @@ export default function HealthVisitForm() {
   const [facility, setFacility] = useState(existing?.facility ?? '');
   const [reason, setReason] = useState(existing?.reason ?? '');
   const [diagnosis, setDiagnosis] = useState(existing?.diagnosis ?? '');
+  // Seeded through the field's own formatter so an existing cost opens grouped
+  // rather than gaining its separators on the first keystroke.
   const [cost, setCost] = useState(
-    existing?.costMinor != null ? String(existing.costMinor / 100) : '',
+    existing?.costMinor != null ? formatAmountInput(String(existing.costMinor / 100)) : '',
   );
   const [note, setNote] = useState(existing?.note ?? '');
   const [followUp, setFollowUp] = useState<Date | null>(existing?.followUpOn ?? null);

@@ -12,6 +12,10 @@ import { extractSmsFromUrl, looksTruncated } from '~/features/sms/logic/smsIntak
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
 import { syncCategoryReminders } from '~/shared/lib/notifications';
+import { refreshBankRates } from '~/features/rates/logic/bankRatesApi';
+import { resolveUsdRate } from '~/features/rates/logic/bankRates';
+import { salaryBankRate } from '~/features/rates/logic/useSalaryRate';
+import { settingsRepo, SETTINGS_KEYS } from '../src/db/repositories';
 import { Text } from '~/shared/components/ui';
 
 /**
@@ -223,6 +227,61 @@ function RootNavigator() {
         void syncCategoryReminders([...reminders, ...planReminders]).catch((error) =>
           console.warn('Reminder sync skipped:', error),
         );
+
+        /*
+         * Refresh the per-bank USD rates, in the background.
+         *
+         * Deliberately NOT awaited and never able to reject: the dashboard now
+         * states what to move in dollars as well as rupees, and that figure
+         * comes from the salary bank's rate — so it must be current without the
+         * board ever waiting on a network call to render. The cached rates
+         * paint immediately; this quietly replaces them a moment later.
+         *
+         * Guarded to once a day by `isFetchDue`, because published bank rates
+         * move on a daily cycle and refetching per launch would spend the
+         * user's data redrawing the same number.
+         */
+        void refreshBankRates({
+          get: (key) => settingsRepo.get(key),
+          set: (key, value) => settingsRepo.set(key, value),
+          keyRates: SETTINGS_KEYS.bankRates,
+          keyFetchedAt: SETTINGS_KEYS.bankRatesFetchedAt,
+        }).then((fetched) => {
+          // Only when something actually arrived. `refreshBankRates` returns
+          // null both for a failure and for a refresh the daily guard skipped,
+          // and neither changed the cache — so re-reading settings would be a
+          // pointless store write and re-render on every launch.
+          if (!fetched) return;
+
+          useAppStore.getState().refreshSettings();
+
+          /*
+           * Adopt the salary bank's rate as THE rate.
+           *
+           * The board converts at `usdRate`, and leaving that on a
+           * hand-entered or mid-market figure meant the app kept planning
+           * against money the bank was never going to pay. The bank's
+           * published TT buying rate is not an opinion to be confirmed, so it
+           * is applied rather than offered — with the last known figure behind
+           * it for the launch that finds no network.
+           *
+           * The snapshot is re-read AFTER `refreshSettings`, and the rows just
+           * fetched are passed in explicitly rather than trusted to have
+           * landed in it. A snapshot taken before the refresh still holds the
+           * pre-fetch (empty) rates, which resolved to no bank and silently
+           * skipped the adoption entirely.
+           */
+          const store = useAppStore.getState();
+          const rate = resolveUsdRate({
+            bankRate: salaryBankRate({ ...store, bankRates: fetched }),
+            lastKnown: settingsRepo.getNumber(SETTINGS_KEYS.lastBankRate, 0) || null,
+          });
+
+          if (rate !== null && rate !== store.usdRate) {
+            store.setUsdRate(rate);
+            settingsRepo.set(SETTINGS_KEYS.lastBankRate, String(rate));
+          }
+        });
       })
       .catch((error: unknown) => {
         console.error('Startup failed', error);
@@ -425,6 +484,7 @@ function RootNavigator() {
             bar and no way to dismiss. A sheet route that is not registered here
             looks broken in a way the screen's own code cannot fix.
           */}
+          <Stack.Screen name="settings/rates" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/backup" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/sms-history" options={SHEET_ROUTE} />
           {/*

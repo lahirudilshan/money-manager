@@ -24,6 +24,8 @@ import {
 import { orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsReconcile';
 import { payeeAccountKey, planRuleUpsert } from '~/features/sms/logic/merchantRules';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
+import { matchTransferToAccount } from '~/features/budget/logic/autoTransfer';
+import { selectAccountTransfers } from '~/store/selectors';
 import {
   cancelInternalTransfers,
   cancelReversals,
@@ -712,7 +714,15 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
          */
         const ownAccounts = inferOwnAccounts(
           movements.map((entry) => entry.sms.account),
-          get().cards.map((card) => card.last4 ?? ''),
+          /*
+             BOTH legs of every card, not just the primary number.
+
+             A bank that issues a separate number per currency puts the USD
+             side on a tail no card's `last4` carries, so the conversion's two
+             halves never paired and both surfaced as spending. Feeding the
+             foreign tail in as well is what lets that pair form.
+           */
+          get().cards.flatMap((card) => [card.last4 ?? '', card.foreignLast4 ?? '']),
         );
 
         const afterReversals = cancelReversals(movements.map((entry) => entry.sms));
@@ -725,15 +735,62 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         // feature exists to remove.
         internalTransfers += afterReversals.length - surviving.length;
 
+        /*
+         * An internal transfer that matches what an account was WAITING for is
+         * the funding move itself — so mark it moved.
+         *
+         * This is the step that closes the loop. The dashboard asks for a
+         * figure, the user transfers it, the bank confirms it, and the row
+         * ticks itself. Only the CREDIT half is considered: the debit leaves an
+         * account and would otherwise match the account it left.
+         *
+         * `matchTransferToAccount` requires the destination account AND the
+         * exact outstanding amount to agree, and refuses to choose when two
+         * accounts match equally — this writes board state nobody confirmed, so
+         * every uncertain case must resolve to doing nothing.
+         */
+        const pendingAccounts = selectAccountTransfers(get()).map((view) => ({
+          cardId: view.card.id,
+          toTransferMinor: view.toTransferHomeMinor,
+          last4: view.card.last4,
+          foreignLast4: view.card.foreignLast4,
+        }));
+
+        const autoMarked = new Map<ParsedSms, string>();
+        for (const entry of movements) {
+          if (keep.has(entry.sms)) continue;
+          if (entry.sms.direction !== 'credit') continue;
+
+          const match = matchTransferToAccount(
+            {
+              account: entry.sms.account,
+              amountMinor: entry.sms.amountMinor,
+              isCredit: true,
+            },
+            pendingAccounts,
+          );
+          if (match && get().markAccountTransferred(match.cardId)) {
+            autoMarked.set(entry.sms, match.cardId);
+          }
+        }
+
         // Both halves of a cancelled pair are logged, so "where did my transfer
         // go?" has an answer. They are dropped deliberately, not lost.
         for (const entry of movements) {
           if (keep.has(entry.sms)) continue;
+          const marked = autoMarked.get(entry.sms);
           smsLogRepo.record({
             raw: entry.raw,
             fingerprint: fingerprintMessage(entry.raw),
             outcome: 'skipped',
-            reason: 'Own-account transfer — not income or spend',
+            /*
+              An auto-marked transfer says so, because it is the one skip that
+              CHANGED the board. "Own-account transfer" alone would leave the
+              user unable to explain why a row ticked itself.
+            */
+            reason: marked
+              ? 'Own-account transfer — matched money to move, marked as moved'
+              : 'Own-account transfer — not income or spend',
             amountMinor: entry.sms.amountMinor,
             merchant: entry.sms.merchant,
             kind: entry.sms.kind,

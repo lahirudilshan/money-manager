@@ -322,6 +322,16 @@ export default function SubcategoryScreen() {
 
   const isDirty =
     name.trim() !== subcategory.name ||
+    /*
+      Re-iconing a line is an edit like renaming it.
+
+      The picker wrote to `icon` and `handleSave` already persisted it, but the
+      field was missing from this list — so choosing a glyph left Save disabled
+      and the only way to commit it was to also touch something else. The
+      fallback matches the one the state is seeded with, so a line stored
+      without an icon does not read as dirty the moment it opens.
+    */
+    icon !== ((subcategory.icon as keyof typeof Ionicons.glyphMap) ?? 'pricetag-outline') ||
     parentId !== subcategory.categoryId ||
     /*
       Only when the field is actually on screen.
@@ -1132,7 +1142,10 @@ function EditTransactionSheet({
 }) {
   const { colors, space } = useTheme();
   const [name, setName] = useState(txn.name);
-  const [amount, setAmount] = useState(String(txn.amountMinor / 100));
+  // Through the field's own formatter, like every other seeded money value in
+  // the app — `Field money` reshapes typing only, so a raw string opened
+  // ungrouped and gained its separators on the first keystroke.
+  const [amount, setAmount] = useState(formatAmountInput(String(txn.amountMinor / 100)));
   const [date, setDate] = useState(() => new Date(txn.date));
   const [note, setNote] = useState(txn.note ?? '');
   const [imageUri, setImageUri] = useState<string | null>(txn.imageUri ?? null);

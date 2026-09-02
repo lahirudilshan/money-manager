@@ -43,6 +43,7 @@ import {
 } from '../../src/store/useAppStore';
 import { HEALTH_VISUALS, shadeHex, statusStyle, washFor } from '~/shared/theme';
 import { useTheme } from '~/shared/theme/ThemeProvider';
+import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -74,6 +75,9 @@ const animate = () =>
 export default function ListScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
+  // Every visit starts at the top — a tab screen stays mounted, so its scroll
+  // offset otherwise survives being left and returned to. See the hook.
+  const scrollRef = useScrollToTopOnFocus();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -222,6 +226,7 @@ export default function ListScreen() {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -453,6 +458,16 @@ interface DueLine {
   name: string;
   categoryName: string;
   categoryColor: string;
+  /**
+   * The BILL's own glyph, not its category's.
+   *
+   * Every row in the detail sheet used to draw a `pricetag`, which said the
+   * same thing about a rent payment and a Netflix subscription — the icon was
+   * decoration rather than information. Lines already carry an icon the user
+   * can set (see the subcategory editor), so the sheet shows that instead and
+   * the rows become scannable by shape.
+   */
+  icon: string;
   amountMinor: number;
   /** Null for lines with no fixed day — they can never be "overdue". */
   dueDate: Date | null;
@@ -531,6 +546,9 @@ function computePlanInsights(views: CategoryView[], period: string): PlanInsight
           name: line.name,
           categoryName: view.category.name,
           categoryColor: view.category.color,
+          // Falls back to the neutral tag only when a line genuinely has no
+          // glyph of its own, which is what the column defaults to anyway.
+          icon: raw?.icon ?? 'pricetag',
           amountMinor: amount,
           dueDate,
           overdue: dueDate != null && dueDate < today,
@@ -764,8 +782,20 @@ function PlanDetailSheet({
    * the dismissal commit first makes the transition reliable.
    */
   const openLine = (id: string) => {
-    onClose();
-    requestAnimationFrame(() => router.push(`/subcategory/${id}`));
+    /*
+     * The sheet STAYS OPEN behind the line it opened.
+     *
+     * It used to dismiss itself first, so returning from a bill landed the user
+     * back on the bare list with the breakdown gone — and re-opening it meant
+     * finding the card and tapping through again, for what is a glance at one
+     * bill in a list the user is working down. Left open, closing the bill
+     * reveals the group it came from and the next row is one tap away.
+     *
+     * The deferral that used to work around iOS refusing to present a second
+     * modal while the first animates away is no longer needed: nothing is
+     * animating away, so the push happens in the same tick.
+     */
+    router.push(`/subcategory/${id}`);
   };
 
   return (
@@ -981,7 +1011,7 @@ function DueGroup({
                 backgroundColor: washFor(line.categoryColor, mode),
               }}
             >
-              <Ionicons name="pricetag" size={13} color={line.categoryColor} />
+              <Ionicons name={line.icon as never} size={13} color={line.categoryColor} />
             </View>
 
             <View style={{ flex: 1, gap: 1 }}>

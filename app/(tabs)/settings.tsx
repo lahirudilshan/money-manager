@@ -35,6 +35,10 @@ import {
   type RateMode,
 } from '~/shared/lib/exchangeRate';
 import { useTheme } from '~/shared/theme/ThemeProvider';
+import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
+import { BankLogo } from '~/features/accounts/components/BankLogo';
+import { resolveBrand } from '~/shared/data/banks';
+import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
 
 
 /** Currencies offered, with a symbol and full name for the richer picker. */
@@ -85,6 +89,9 @@ const RATE_MODES: { key: RateMode; label: string; hint: string }[] = [
 export default function SettingsScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
+  // Every visit starts at the top — a tab screen stays mounted, so its scroll
+  // offset otherwise survives being left and returned to. See the hook.
+  const scrollRef = useScrollToTopOnFocus();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -151,6 +158,21 @@ export default function SettingsScreen() {
     parseHistory(settingsRepo.get(SETTINGS_KEYS.rateHistory)),
   );
   const lastFetched = settingsRepo.get(SETTINGS_KEYS.rateFetchedAt) ?? null;
+
+  /*
+   * The user's own bank's rate, read from the per-bank cache.
+   *
+   * Read-only here — the rates screen owns fetching and adopting. This sheet
+   * only needs enough to show what their bank actually pays beside the figure
+   * the board is using, because that comparison is the reason to open the
+   * fuller screen at all.
+   */
+  const { rate: myBankRate } = useSalaryRate({
+    cards: state.cards,
+    incomes: state.incomes,
+    homeCurrency: state.currency,
+    rates: state.bankRates,
+  });
   const drift = driftPercent(latestRate(rateHistory), parseFloat(rateText) || 0);
 
   /** Fetch the live USD→currency rate. Uses a free, key-less endpoint; on any
@@ -411,6 +433,7 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView
+        ref={scrollRef}
         style={{ flex: 1, backgroundColor: colors.canvas }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -560,7 +583,7 @@ export default function SettingsScreen() {
             icon="swap-horizontal-outline"
             color={colors.transferred}
             title="USD exchange rate"
-            subtitle="For foreign-currency income"
+            subtitle="Bank rates, and what to plan at"
             valueLabel={`${state.currency} ${state.usdRate}`}
             onPress={() => {
               setRateText(String(state.usdRate));
@@ -744,6 +767,79 @@ export default function SettingsScreen() {
               {state.currency} {parseFloat(rateText) || 0}
             </Text>
           </Surface>
+
+          {/*
+            What the user's OWN bank pays, next to the figure above.
+
+            The rate in this sheet has always been a mid-market number, which
+            is not one anybody is paid at — a bank credits its own telegraphic
+            transfer buying rate, several rupees lower. Putting the two side by
+            side is the whole argument: the difference is money the plan is
+            counting on and will not receive.
+
+            Only shown once the per-bank rates have been fetched at least once,
+            since a row reading "—" would raise the question without answering
+            it. The link below is offered either way.
+          */}
+          {myBankRate?.ttBuying ? (
+            <Pressable
+              onPress={() => {
+                setRateOpen(false);
+                router.push('/settings/rates');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Your bank pays ${myBankRate.ttBuying.toFixed(2)}. See all bank rates.`}
+              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+            >
+              <Surface padded={false}>
+                <Row gap={space.md} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
+                  <BankLogo brand={resolveBrand({ bankName: myBankRate.bankName })} size={32} />
+                  <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
+                    <Text variant="bodyStrong" numberOfLines={1}>
+                      {myBankRate.bankName}
+                    </Text>
+                    <Text variant="caption" tone="muted" numberOfLines={1}>
+                      What your salary bank actually pays
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text variant="figure" color={colors.accent}>
+                      {myBankRate.ttBuying.toFixed(2)}
+                    </Text>
+                    {/*
+                      The shortfall against the figure in use, only when the
+                      board is set ABOVE what the bank pays — that is the
+                      direction that leaves a plan short, and the only one
+                      worth interrupting the user about.
+                    */}
+                    {(parseFloat(rateText) || 0) > myBankRate.ttBuying ? (
+                      <Text variant="caption" color={colors.pending}>
+                        {((parseFloat(rateText) || 0) - myBankRate.ttBuying).toFixed(2)} below yours
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+                </Row>
+              </Surface>
+            </Pressable>
+          ) : null}
+
+          {/*
+            The route to the full board of banks.
+
+            Kept as a plain secondary action rather than a card: the list is
+            reference, consulted when setting the rate or shopping for a better
+            bank, not something to act on every time this sheet opens.
+          */}
+          <Button
+            label={myBankRate ? 'See all bank rates' : 'Compare all bank rates'}
+            icon="list-outline"
+            variant="ghost"
+            onPress={() => {
+              setRateOpen(false);
+              router.push('/settings/rates');
+            }}
+          />
 
           <View style={{ gap: space.sm }}>
             <Label>SET RATE</Label>

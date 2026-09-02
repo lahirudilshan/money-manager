@@ -139,6 +139,15 @@ const DDL = [
     account_number TEXT,
     branch TEXT,
     bank_code TEXT,
+    -- What the account holds, as an ISO code. Null means the home currency;
+    -- see the cards table in schema.ts and accountCurrency().
+    currency TEXT,
+    -- The FOREIGN leg of a dual-currency relationship: a second number, the
+    -- currency behind it, and its last 4 for SMS matching. All null on a
+    -- single-currency account. See the cards table in schema.ts.
+    foreign_account_number TEXT,
+    foreign_currency TEXT,
+    foreign_last4 TEXT,
     target_minor INTEGER,
     opening_balance_minor INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
@@ -962,6 +971,25 @@ function ensureAdditiveColumns(): void {
     ensureColumn('cards', 'bank_code', 'bank_code TEXT');
     // The user's own name for the account — see `cards` in schema.ts.
     ensureColumn('cards', 'nickname', 'nickname TEXT');
+    /*
+     * What the account holds — see `cards` in schema.ts.
+     *
+     * Nullable with no default on purpose: null reads as "the home currency"
+     * and every existing row means exactly that. Stamping a literal 'LKR' here
+     * would make old rows assert a currency the user could later change.
+     */
+    ensureColumn('cards', 'currency', 'currency TEXT');
+    /*
+     * The FOREIGN leg of a dual-currency account — see `cards` in schema.ts.
+     *
+     * All three nullable: a single-currency account leaves them empty, which is
+     * every row that existed before this. They exist for SMS matching, so a
+     * conversion between the user's own two numbers can be recognised as an
+     * internal move rather than counted as a spend.
+     */
+    ensureColumn('cards', 'foreign_account_number', 'foreign_account_number TEXT');
+    ensureColumn('cards', 'foreign_currency', 'foreign_currency TEXT');
+    ensureColumn('cards', 'foreign_last4', 'foreign_last4 TEXT');
   }
 
   /*

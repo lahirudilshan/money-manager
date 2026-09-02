@@ -133,6 +133,8 @@ import {
 } from '../db/schema';
 import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '~/features/budget/logic/houses';
 import { toggleMiniApp, type MiniAppId } from '~/shared/lib/miniApps';
+import { readCachedRates } from '~/features/rates/logic/bankRatesApi';
+import type { BankRate } from '~/features/rates/logic/bankRates';
 import type {
   Card,
   Category,
@@ -184,6 +186,16 @@ export interface AppState {
   loans: Loan[];
   currency: string;
   usdRate: number;
+  /**
+   * Per-bank USD rates, as last fetched — see features/rates.
+   *
+   * Held in STORE state, not read straight from settings at the point of use.
+   * The launch refresh writes them after the dashboard has already mounted, and
+   * a screen reading the settings row directly has nothing to tell it the value
+   * changed — so the dollar figure beside "money to move" stayed blank until
+   * the next cold start. Putting them here makes that arrival a re-render.
+   */
+  bankRates: BankRate[];
   /** 'system' follows the OS; 'light'/'dark' force a mode. */
   themeMode: 'system' | 'light' | 'dark';
   hapticsEnabled: boolean;
@@ -354,6 +366,12 @@ export interface AppState {
    * categories the account funds.
    */
   toggleAccountTransfer: (cardId: string) => void;
+  /**
+   * Mark every category an account funds as transferred — one-way, for the
+   * automatic confirmation from a matching bank credit. Returns whether
+   * anything actually changed.
+   */
+  markAccountTransferred: (cardId: string) => boolean;
 
   fundCategory: (categoryId: string, amountMinor: Minor, note?: string) => void;
   unfundCategory: (categoryId: string) => void;
@@ -378,6 +396,13 @@ export interface AppState {
    */
   addCategory: (input: Omit<NewCategory, 'id' | 'color'> & { color?: string }) => Category;
   updateCategory: (id: string, patch: Partial<NewCategory>) => void;
+  /**
+   * Move every category and expense line funded by one account onto another.
+   *
+   * For splitting a single account into a foreign "salary lands here" account
+   * and a local "bills are paid from here" one. Income is left where it is.
+   */
+  moveAccountFunding: (fromCardId: string, toCardId: string) => void;
   /**
    * Delete a category and its lines. Refuses — reporting why — when it holds a
    * loan installment, since removing that would leave the debt owed with no
@@ -691,6 +716,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   loans: [],
   currency: 'LKR',
   usdRate: 300,
+  bankRates: [],
   themeMode: 'system',
   hapticsEnabled: true,
   appLockEnabled: false,
@@ -837,6 +863,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     set({
       currency,
       usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
+      bankRates: readCachedRates(settingsRepo.get(SETTINGS_KEYS.bankRates)),
       themeMode:
         (settingsRepo.get(SETTINGS_KEYS.themeMode) as 'system' | 'light' | 'dark') ?? 'system',
       hapticsEnabled: settingsRepo.get(SETTINGS_KEYS.haptics) !== 'false',
@@ -1383,6 +1410,47 @@ export const useAppStore = create<AppState>((set, get, api) => ({
    * override its category's card, so "categories funded from this account"
    * means any category with at least one line drawing on it.
    */
+  /**
+   * Mark an account's funding as moved, from the bank's own confirmation.
+   *
+   * The dashboard says "move LKR 158,347 onto Spending"; the user does it; the
+   * bank texts to say it arrived. Without this they must still come back and
+   * tick the row by hand, restating something already confirmed.
+   *
+   * Deliberately one-way: it only ever marks TRANSFERRED, never back to
+   * pending. `toggleAccountTransfer` flips, which is right for a tap but wrong
+   * here — a second matching credit must not silently un-fund a month.
+   *
+   * Returns whether anything changed, so the caller can log an auto-mark
+   * distinctly from a message that merely happened to be internal.
+   */
+  markAccountTransferred(cardId) {
+    const { period, categories, subcategories, categoryStates } = get();
+
+    const fundedCategoryIds = categories
+      .filter((category) =>
+        subcategories.some(
+          (sub) =>
+            sub.categoryId === category.id &&
+            sub.type === 'expense' &&
+            resolveCardId(sub.cardId, category.cardId) === cardId,
+        ),
+      )
+      .map((category) => category.id)
+      // Already transferred categories are skipped rather than rewritten, so
+      // the return value reports a real change.
+      .filter((id) => (categoryStates.get(id)?.status ?? 'pending') !== 'transferred');
+
+    if (fundedCategoryIds.length === 0) return false;
+
+    for (const id of fundedCategoryIds) {
+      categoryStateRepo.setStatus(id, period, 'transferred');
+    }
+
+    get().refreshBoard();
+    return true;
+  },
+
   toggleAccountTransfer(cardId) {
     const { period, categories, subcategories, categoryStates } = get();
 
@@ -1500,6 +1568,44 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   },
   updateCategory(id, patch) {
     categoryRepo.update(id, patch);
+    get().refreshBoard();
+  },
+
+  /**
+   * Repoint every category and line funded by one account at another.
+   *
+   * The case this exists for: someone holds a foreign-currency account that
+   * RECEIVES their salary and a local one their bills are actually paid from.
+   * Setting the first to USD restates its funding total in dollars, which is
+   * correct and almost never intended — the fix is to move the bills, and
+   * doing that one at a time across a real board is 25 trips through a picker.
+   *
+   * Both levels are moved, and they are not the same thing. A CATEGORY names
+   * the account its bills inherit; a LINE may override that. Moving only
+   * categories would leave every overriding line behind on the old account,
+   * which is exactly the half-migration that makes the totals stop adding up.
+   *
+   * Income is deliberately untouched. A salary LANDS in the foreign account —
+   * that is the whole point of holding it — so sweeping income lines across
+   * would undo the arrangement this is meant to support.
+   */
+  moveAccountFunding(fromCardId, toCardId) {
+    if (fromCardId === toCardId) return;
+
+    const { categories, subcategories } = get();
+
+    for (const category of categories) {
+      if (category.cardId === fromCardId) categoryRepo.update(category.id, { cardId: toCardId });
+    }
+
+    for (const sub of subcategories) {
+      // Only explicit overrides. A line with a null `cardId` inherits from its
+      // category, which has just been moved — rewriting it would convert an
+      // inheritance into an override and quietly pin it to this account.
+      if (sub.type === 'income') continue;
+      if (sub.cardId === fromCardId) subcategoryRepo.update(sub.id, { cardId: toCardId });
+    }
+
     get().refreshBoard();
   },
   deleteCategory(id) {

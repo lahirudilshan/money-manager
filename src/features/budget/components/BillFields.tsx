@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View } from 'react-native';
-import { parseAmount, toMajor, type Minor } from '~/shared/lib/money';
+import { formatAmountInput, parseAmount, toMajor, type Minor } from '~/shared/lib/money';
 import { resolveCardId } from '~/features/budget/logic/planning';
 import type { Card, Subcategory, SubcategoryFrequency } from '~/db/schema';
 import { useAppStore } from '~/store/useAppStore';
@@ -76,8 +76,17 @@ export function useBillDraft({
   resetKey?: string | null;
 }): BillDraft {
   const [name, setName] = React.useState(existing?.name ?? '');
+  /*
+   * Seeded through the SAME formatter the field applies to typing.
+   *
+   * `AmountField` reshapes only what the user types, so a value put in
+   * programmatically bypassed it: an existing bill opened reading "5000" while
+   * the very first keystroke rewrote it to "5,000". Worse, the raw string is
+   * what the caller then compares and saves, so a figure the user never
+   * retyped round-tripped through a formatter that had never seen it.
+   */
   const [amount, setAmount] = React.useState(
-    existing ? String(toMajor(existing.plannedMinor)) : '',
+    existing ? formatAmountInput(String(toMajor(existing.plannedMinor))) : '',
   );
   const [dueDay, setDueDay] = React.useState(existing?.dueDay ?? categoryDueDay ?? 1);
   const [frequency, setFrequency] = React.useState<SubcategoryFrequency>(
@@ -96,7 +105,7 @@ export function useBillDraft({
   // refresh mid-edit never clears what the user is typing.
   React.useEffect(() => {
     setName(existing?.name ?? '');
-    setAmount(existing ? String(toMajor(existing.plannedMinor)) : '');
+    setAmount(existing ? formatAmountInput(String(toMajor(existing.plannedMinor))) : '');
     setDueDay(existing?.dueDay ?? categoryDueDay ?? 1);
     setFrequency(existing?.frequency ?? 'monthly');
     setCardId(existing?.cardId ?? categoryCardId ?? null);

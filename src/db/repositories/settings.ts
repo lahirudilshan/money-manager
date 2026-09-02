@@ -76,4 +76,33 @@ export const SETTINGS_KEYS = {
   rateHistory: 'rate_history',
   /** ISO timestamp of the last successful fetch, for the daily cadence. */
   rateFetchedAt: 'rate_fetched_at',
+
+  /**
+   * JSON list of per-BANK rates, as last fetched — see features/rates.
+   *
+   * Cached so the rates screen renders instantly and offline. The figures are
+   * captioned with their own timestamp, so stale data is shown as stale rather
+   * than passed off as current.
+   */
+  bankRates: 'bank_rates',
+  /** ISO timestamp of the last successful per-bank fetch. */
+  bankRatesFetchedAt: 'bank_rates_fetched_at',
+  /**
+   * The last salary-bank rate the app successfully resolved.
+   *
+   * Kept separately from the full `bankRates` blob so the fallback survives
+   * anything that invalidates that cache — a source that drops the bank, a
+   * schema change, a corrupt write. Rates move by fractions of a percent a
+   * day, so yesterday's figure is far closer to the truth than any default.
+   */
+  lastBankRate: 'last_bank_rate',
+  /**
+   * The account a USD salary lands in, as a card id.
+   *
+   * Null means "infer it" — the app picks the USD account with income planned
+   * against it (see `resolveSalaryCardId`), which is right for the common case
+   * of exactly one. Set explicitly only when that inference is wrong, so most
+   * users never see this and the rest can correct it.
+   */
+  salaryCardId: 'salary_card_id',
 } as const;

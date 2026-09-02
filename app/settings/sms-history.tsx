@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { BottomSheet, Row, Surface, Text } from '~/shared/components/ui';
 import { formatMoney } from '~/shared/lib/money';
+import { copyToClipboard } from '~/shared/lib/clipboard';
 import { smsLogRepo, type SmsLogRow } from '../../src/db/repositories';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -183,9 +184,16 @@ export default function SmsHistoryScreen() {
         </Surface>
       ) : (
         days.map(([day, entries]) => (
-          <View key={day} style={{ gap: 0 }}>
+          /*
+            `space.lg` above each day heading (except the first).
+
+            The groups ran straight into each other — the last row of TODAY sat
+            as close to the YESTERDAY heading as to its own siblings, so the
+            headings read as interruptions rather than as the tops of sections.
+          */
+          <View key={day} style={{ gap: 0, marginTop: space.lg }}>
             {/* Day separator — the log's only heading. */}
-            <Row gap={space.sm} style={{ paddingLeft: 2, paddingBottom: 6 }}>
+            <Row gap={space.sm} style={{ paddingLeft: 2, paddingBottom: space.sm }}>
               <Text
                 variant="caption"
                 tone="muted"
@@ -244,6 +252,15 @@ function LogLine({
 }) {
   const { colors, space, radius } = useTheme();
   const look = OUTCOME_LOOK[row.outcome] ?? OUTCOME_LOOK.ignored;
+  /*
+   * Whether the raw message has just been copied.
+   *
+   * Per-row rather than per-screen so the confirmation appears on the row that
+   * was actually copied. Never reset on a timer: the row collapses when the
+   * user moves on, which unmounts this and clears it — a tick that vanished
+   * while the message was still on screen would read as the copy expiring.
+   */
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
 
   return (
     <Pressable
@@ -253,7 +270,7 @@ function LogLine({
       style={({ pressed }) => ({
         opacity: pressed ? 0.6 : 1,
         flexDirection: 'row',
-        gap: space.sm,
+        gap: space.md,
       })}
     >
       {/* Gutter: the clock time, monospaced so every row lines up. */}
@@ -280,8 +297,16 @@ function LogLine({
         />
       </View>
 
-      <View style={{ flex: 1, gap: 2, paddingBottom: space.md }}>
-        <Row gap={space.xs}>
+      {/*
+        A row's own two lines sit CLOSER together than two rows sit apart.
+
+        Both gaps used to be about 2pt, so the verdict under one row was as
+        near the next row's title as its own — the log read as one dense column
+        rather than a list of discrete events. 4 inside, `space.lg` between, is
+        the proportion that makes each row read as a unit.
+      */}
+      <View style={{ flex: 1, gap: 4, paddingBottom: space.lg }}>
+        <Row gap={space.xs} align="center">
           {/*
             A recognised merchant is the title; anything else is quoted.
 
@@ -293,7 +318,16 @@ function LogLine({
           */}
           <Text
             variant="body"
-            numberOfLines={1}
+            /*
+              Two lines when collapsed, not one.
+
+              These titles are bank descriptors — "CEFT-KELANIYA HOME ELECTRIC"
+              — and a raw promo quote is longer still, so at one line the log
+              was a column of ellipses that all looked alike. The row grows by a
+              line only where it needs to, and identifying the message is the
+              entire point of the screen.
+            */
+            numberOfLines={expanded ? undefined : 2}
             tone={row.merchant ? undefined : 'secondary'}
             style={{
               flex: 1,
@@ -303,11 +337,14 @@ function LogLine({
           >
             {row.merchant || `“${firstWords(row.raw)}”`}
           </Text>
+          {/* `flexShrink: 0` — the figure is the row's most scannable value
+              and must stay whole; a long merchant truncates instead. */}
           {row.amount_minor ? (
-            <Text variant="body" style={{ fontWeight: '700' }}>
+            <Text variant="body" style={{ fontWeight: '700', flexShrink: 0 }}>
               {formatMoney(row.amount_minor)}
             </Text>
           ) : null}
+
           {/* Nothing on the row said it could be opened, so the detail below
               was effectively undiscoverable. */}
           <Ionicons
@@ -318,19 +355,40 @@ function LogLine({
         </Row>
 
         {/*
-          Two lines, not one.
+          The verdict as a short PILL when collapsed; the full sentence only
+          once the row is opened.
 
-          The reason is the whole point of a row the app did NOT act on, and at
-          one line the most important ones were cut mid-sentence: "Not a
-          transaction — OTP, promo, or no money mov…" and "Arrived cut short —
-          add a URL Encode step to you…", which hides the actual instruction.
+          `row.reason` is a fixed explanatory sentence per outcome — "Not a
+          transaction — OTP, promo, or no money movement" — so at two lines it
+          repeated verbatim down the entire log, spending more vertical space
+          than the merchant and amount it was explaining and pushing the next
+          row out of view. Ninety of the same sentence is wallpaper, not
+          information: the colour and the two-word label already say which
+          bucket a row is in, and the full reason matters only for the one row
+          being investigated, which is exactly the row that gets expanded.
         */}
-        <Text variant="caption" color={colors[look.color]} numberOfLines={expanded ? undefined : 2}>
-          {row.reason ?? look.label}
+        {/*
+          The verdict on its own line, under the title.
+
+          It briefly shared the title's line to save vertical space, and that
+          was the wrong trade: with a time gutter, a rail, an amount and a
+          chevron already on that row, the title — the one part that identifies
+          the message — was crushed to "CEFTS…" on nearly every entry. A log you
+          cannot read is not compact, it is just short.
+
+          Collapsed it shows the SHORT label; the full explanatory sentence
+          appears only when the row is opened, since that sentence is identical
+          across every row of a given outcome and reads as wallpaper repeated
+          ninety times down the list.
+        */}
+        <Text variant="caption" color={colors[look.color]} style={{ fontWeight: '600' }}>
+          {expanded ? (row.reason ?? look.label) : look.label}
         </Text>
 
         {expanded ? (
-          <View style={{ gap: space.sm, marginTop: 6 }}>
+          /* Clear of the verdict above it, so the detail reads as a panel the
+             row opened rather than as more of the row. */
+          <View style={{ gap: space.md, marginTop: space.sm, marginBottom: space.xs }}>
             {/*
               WHAT THE APP READ, as labelled facts.
 
@@ -369,9 +427,60 @@ function LogLine({
             {/* The raw text — what proves the app saw what you think it did,
                 and what gets pasted into a bug report. */}
             <View style={{ gap: 4 }}>
-              <Text variant="caption" tone="muted" style={{ fontWeight: '700' }}>
-                ORIGINAL MESSAGE
-              </Text>
+              <Row justify="space-between" align="center">
+                <Text variant="caption" tone="muted" style={{ fontWeight: '700' }}>
+                  ORIGINAL MESSAGE
+                </Text>
+                {/*
+                  Copy, next to the thing it copies.
+
+                  This block is already described as what gets pasted into a
+                  bug report — but a `Text` inside a scroll view cannot be
+                  selected by dragging on iOS, so the only way to actually get
+                  it out was to retype it. The message is also the input to
+                  "Paste SMS", so copying one the parser mis-read is the fastest
+                  route to re-testing it.
+
+                  `stopPropagation` because the whole row is a Pressable that
+                  toggles expansion — without it, copying would collapse the
+                  row it just copied from.
+                */}
+                <Pressable
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    void copyToClipboard(row.raw).then((ok) =>
+                      setCopied(ok ? 'done' : 'failed'),
+                    );
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy message"
+                  /*
+                    `accessible` explicitly, because the label lives on the
+                    child `Text` nodes otherwise: RN only merges children into
+                    one accessibility element when told to, so VoiceOver (and
+                    UI tests) saw two unlabelled fragments rather than one
+                    button called "Copy message".
+                  */
+                  accessible
+                  hitSlop={8}
+                  style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+                >
+                  <Row gap={4} align="center">
+                    <Ionicons
+                      name={copied === 'done' ? 'checkmark' : 'copy-outline'}
+                      size={13}
+                      color={copied === 'done' ? colors.completed : colors.accent}
+                    />
+                    <Text
+                      variant="caption"
+                      color={copied === 'done' ? colors.completed : colors.accent}
+                      style={{ fontWeight: '700' }}
+                    >
+                      {copied === 'done' ? 'Copied' : copied === 'failed' ? 'Select by hand' : 'Copy'}
+                    </Text>
+                  </Row>
+                </Pressable>
+              </Row>
               <View
                 style={{
                   padding: space.sm,

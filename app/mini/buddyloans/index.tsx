@@ -234,7 +234,25 @@ export default function BuddyLoansHome() {
         <Surface padded={false}>
           {visible.map((loan, index) => (
             <React.Fragment key={loan.id}>
-              {index > 0 ? <Divider style={{ marginLeft: 62 }} /> : null}
+              {/*
+                A full point of the ORDINARY hairline, edge to edge.
+
+                Two independent things were making the old rule invisible: it
+                was sub-pixel (`StyleSheet.hairlineWidth`) AND inset to the
+                name, so it read as a stray mark rather than a line between two
+                loans. Fixing the width and the inset is enough — going up to
+                `hairlineStrong` as well then over-corrected, drawing a rule
+                heavier than the card's own border for a boundary between two
+                rows of the same list.
+
+                Full width rather than inset because the avatar-aligned inset
+                suits a list of uniform one-line rows. These vary in height and
+                now carry a full-width progress bar of their own, which a short
+                rule sat awkwardly against.
+              */}
+              {index > 0 ? (
+                <Divider style={{ height: 1, backgroundColor: colors.hairline }} />
+              ) : null}
               <LoanRow
                 loan={loan}
                 repayments={byLoan.get(loan.id) ?? []}
@@ -314,7 +332,25 @@ function LoanRow({
                     it would give a settled debt the same visual weight as one
                     still owed.
                   */
-                  backgroundColor: open ? `${personTint}18` : colors.surfaceSunken,
+                  /*
+                    A ring at full strength over a deeper wash of the same tint.
+
+                    The fill alone was the tint at `18` — barely a tenth of the
+                    colour, which is all a large soft area can carry before it
+                    competes with the name beside it. At that strength the
+                    circles read as grey smudges and the per-person colour they
+                    exist to show was invisible.
+
+                    The border does the identifying, since it spends the colour
+                    on far less area and can therefore run undiluted. That in
+                    turn frees the fill to go deeper — `2E` rather than `18` —
+                    without the two fighting: the ring holds the shape's edge,
+                    so the wash behind it only has to separate the circle from
+                    the card, not define it.
+                  */
+                  borderWidth: 1,
+                  borderColor: open ? personTint : colors.hairlineStrong,
+                  backgroundColor: open ? `${personTint}2E` : colors.surfaceSunken,
                 }}
               >
                 <Text
@@ -365,14 +401,8 @@ function LoanRow({
                 {loan.personName}
               </Text>
               {/*
-                The ORIGINAL amount is dropped once part of it has come back —
-                the remainder is already on the right, and the full figure sits
-                under the progress bar. Repeating it here pushed the age, the
-                one fact shown nowhere else, into an ellipsis.
-              */}
-              {/*
                 Direction and age only.
-                
+
                 The original amount used to sit here too and it made the line
                 too long to fit — it truncated on every row with a longer name.
                 It is not lost: the remainder is on the right, and the full
@@ -382,39 +412,16 @@ function LoanRow({
               <Text variant="caption" tone="muted" numberOfLines={1}>
                 {directionOwes(loan.direction)} · {describeAge(daysSince(loan.lentOn, today))}
               </Text>
-
-              {/*
-                The progress sits INSIDE the text column, not across the whole
-                row, so it starts at the name rather than under the avatar and
-                lines up with everything above it.
-              */}
-              {open && repaid > 0 ? (
-                <View style={{ gap: 4, marginTop: 4 }}>
-                  <View
-                    style={{
-                      height: 4,
-                      borderRadius: radius.pill,
-                      backgroundColor: colors.surfaceSunken,
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: `${Math.min(100, (repaid / loan.amountMinor) * 100)}%`,
-                        height: '100%',
-                        backgroundColor: colors.positive,
-                      }}
-                    />
-                  </View>
-                  <Text variant="caption" tone="muted" numberOfLines={1}>
-                    {formatMoney(repaid)} back of {formatMoney(loan.amountMinor)}
-                  </Text>
-                </View>
-              ) : null}
             </View>
           </Row>
 
-          <View style={{ alignItems: 'flex-end', gap: 2, minWidth: 96 }}>
+          {/*
+            `flexShrink: 0` so the remainder keeps its width and the text
+            column yields instead — without it the two columns competed and a
+            long amount was squeezed into its own ellipsis, which is the one
+            figure on the row that must stay whole.
+          */}
+          <View style={{ alignItems: 'flex-end', gap: 2, minWidth: 96, flexShrink: 0 }}>
             <Text variant="bodyStrong" color={open ? colors.ink : colors.inkMuted}>
               {open ? formatMoney(left) : STATUS_LABEL[loan.status]}
             </Text>
@@ -429,6 +436,44 @@ function LoanRow({
             ) : null}
           </View>
         </Row>
+
+        {/*
+          Progress spans the FULL row, below everything else.
+
+          It used to sit inside the text column so it would start at the name
+          rather than under the avatar — but that column is narrowed by the
+          remainder beside it, and nothing sits beside the bar at this height.
+          The caption paid for that borrowed width: "LKR 10,000 back of LKR
+          15,000" wrapped to a second line to leave one orphaned figure, in the
+          empty space to its own right.
+
+          Given the whole width it fits on one line, so `numberOfLines={1}` is
+          honest again — and the bar reading edge to edge says "of the whole
+          loan" more directly than one indented to match the text above it.
+        */}
+        {open && repaid > 0 ? (
+          <View style={{ gap: space.sm, marginTop: space.md }}>
+            <View
+              style={{
+                height: 4,
+                borderRadius: radius.pill,
+                backgroundColor: colors.surfaceSunken,
+                overflow: 'hidden',
+              }}
+            >
+              <View
+                style={{
+                  width: `${Math.min(100, (repaid / loan.amountMinor) * 100)}%`,
+                  height: '100%',
+                  backgroundColor: colors.positive,
+                }}
+              />
+            </View>
+            <Text variant="caption" tone="muted" numberOfLines={1}>
+              {formatMoney(repaid)} back of {formatMoney(loan.amountMinor)}
+            </Text>
+          </View>
+        ) : null}
       </View>
     </Pressable>
   );

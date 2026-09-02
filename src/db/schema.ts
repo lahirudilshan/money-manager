@@ -67,8 +67,54 @@ export const cards = sqliteTable('cards', {
   expiry: text('expiry'),
   /** Account-only details. */
   accountNumber: text('account_number'),
+  /**
+   * A SECOND account number, for the other currency this relationship holds.
+   *
+   * Sri Lankan banks split two ways on a foreign-currency account: some put
+   * both currencies behind one number, some issue a separate number per
+   * currency. The row therefore carries an optional second number and the
+   * currency that goes with it, so the same entry covers both shapes — one
+   * number means `foreignAccountNumber` is null and `currency` says what the
+   * single account holds.
+   *
+   * This exists for MATCHING, not for funding. Bills still point at one card
+   * and fund in the home currency; what the second number buys is the ability
+   * to recognise a bank message about the foreign leg — which is what makes a
+   * USD→LKR conversion between the user's own two numbers identifiable as an
+   * internal move rather than a spend.
+   */
+  foreignAccountNumber: text('foreign_account_number'),
+  /**
+   * The currency behind `foreignAccountNumber` — "USD", "EUR".
+   *
+   * Held separately from `currency` (which describes the primary number)
+   * because the pair is the point: one row can now say "this number is my LKR
+   * side, that number is my USD side".
+   */
+  foreignCurrency: text('foreign_currency'),
+  /** Last 4 of `foreignAccountNumber`, for SMS matching. */
+  foreignLast4: text('foreign_last4'),
   branch: text('branch'),
   bankCode: text('bank_code'),
+  /**
+   * What this account HOLDS, as an ISO code — "LKR", "USD".
+   *
+   * Null on every row that predates this column, which is exactly right: those
+   * were created when the app had one currency, so they are all in the user's
+   * own money. `accountCurrency` resolves null to the home currency rather than
+   * this defaulting to a literal, so changing the app's currency does not leave
+   * old rows asserting the wrong one.
+   *
+   * This is what lets a bank's LKR savings and its USD FCBU account be two rows
+   * that state what they are — and, where a bank puts both currencies behind
+   * ONE number, two rows sharing a `last4`. The app deliberately does not model
+   * the link between them: nothing it does needs to know, and a grouping the
+   * user has to maintain is a setting that will go stale.
+   *
+   * Bills and categories still fund in the HOME currency. An account names one
+   * currency and everything drawn from it uses that.
+   */
+  currency: text('currency'),
   /** Optional target for savings/goal cards. */
   targetMinor: integer('target_minor'),
   /** Balance present before the app started tracking. */

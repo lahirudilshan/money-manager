@@ -47,6 +47,7 @@ import {
   type Ratios,
   type SubcategoryStatus,
 } from '~/features/budget/logic/planning';
+import { accountCurrency, fromHomeMinor, isForeignAccount } from '~/features/accounts/logic/accountCurrency';
 import { stateRepo, transactionRepo } from '~/db/repositories';
 import { isOngoing } from '~/db/schema';
 import type { Subcategory, Transaction, Card, Category, Loan, SubcategoryState } from '~/db/schema';
@@ -468,8 +469,17 @@ export function selectCardViews(state: AppState): CardView[] {
  */
 export interface AccountTransferView {
   card: Card;
-  /** Still to move onto this card. */
+  /** Still to move onto this card, in the card's OWN currency. */
   toTransferMinor: Minor;
+  /**
+   * The same figure in the HOME currency, for sums across accounts.
+   *
+   * Both are needed and neither can serve twice. `toTransferMinor` is what to
+   * type into a transfer for this one account, so it must be in that account's
+   * unit — but adding those across accounts would add dollars to rupees and
+   * produce a number that is not money at all. Totals use this one.
+   */
+  toTransferHomeMinor: Minor;
   /** Everything planned against this card this month, moved or not. */
   plannedMinor: Minor;
   /** Already moved (transferred or completed). */
@@ -478,6 +488,25 @@ export interface AccountTransferView {
   pendingCount: number;
   /** Category names drawing from this card, for the row's subtitle. */
   categoryNames: string[];
+  /**
+   * The currency the figures above are IN.
+   *
+   * Bills are planned in the home currency, so a foreign account's totals are
+   * converted into the currency it actually holds — asking someone to move
+   * "578,214" onto a USD account is a number 323× too large, and rendering it
+   * without a unit is how that goes unnoticed. Every row now states its own
+   * unit rather than the screen assuming one.
+   */
+  currency: string;
+  /**
+   * True when this account holds something other than the home currency AND
+   * the app has no rate to convert by.
+   *
+   * The figures then pass through UNCONVERTED, which is wrong but visible: the
+   * UI can say "no rate" rather than presenting a confidently mistaken number.
+   * Only USD has a stored rate — see `toHomeMinor`.
+   */
+  needsRate: boolean;
   /**
    * True when nothing at all is planned against this account this month.
    *
@@ -557,13 +586,41 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
         }
       }
 
+      /*
+       * Into the currency this account actually HOLDS.
+       *
+       * Everything summed above is in the home currency, because that is what
+       * bills are planned in. For a local account that is already right and
+       * `fromHomeMinor` is the identity. For a USD account it is not: telling
+       * someone to move "578,214" onto an account denominated in dollars is a
+       * figure 323× too large, and it was previously rendered with no unit at
+       * all, so nothing on screen would have given it away.
+       *
+       * Converted at the very end rather than per line, so one rounding
+       * happens to each total instead of one per bill.
+       */
+      const held = accountCurrency(card, state.currency);
+      // Via the shared helper rather than comparing against `state.currency`
+      // directly: it applies the same default for a home currency that is
+      // absent (a partial state, a fixture), so the two cannot disagree about
+      // what "foreign" means.
+      const foreign = isForeignAccount(card, state.currency);
+      const convert = (minor: Minor) => fromHomeMinor(minor, card, state.currency, state.usdRate);
+
       return {
         card,
-        toTransferMinor: toTransfer,
-        plannedMinor: planned,
-        movedMinor: moved,
+        toTransferMinor: convert(toTransfer),
+        toTransferHomeMinor: toTransfer,
+        plannedMinor: convert(planned),
+        movedMinor: convert(moved),
         pendingCount,
         categoryNames: [...categoryNames],
+        currency: held,
+        // Foreign, but not USD — the app stores exactly one rate, so there is
+        // nothing to convert by and the figures above are still in home units.
+        needsRate: foreign && held !== 'USD',
+        // Emptiness is a fact about the PLAN, so it is judged before any
+        // conversion: a rate of zero must not make a funded account look empty.
         empty: planned === 0,
       };
     })
