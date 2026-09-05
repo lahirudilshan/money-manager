@@ -257,7 +257,21 @@ const DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS transaction_splits_txn_idx ON transaction_splits(transaction_id)`,
   `CREATE INDEX IF NOT EXISTS transaction_splits_sub_idx ON transaction_splits(subcategory_id)`,
-  `CREATE TABLE IF NOT EXISTS category_states (
+  `
+  CREATE TABLE IF NOT EXISTS account_transfers (
+    id TEXT PRIMARY KEY NOT NULL,
+    card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    -- "YYYY-MM".
+    period TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    transferred_at INTEGER,
+    -- What a bank message confirmed, when the tick was automatic. Null for a
+    -- manual one. See the accountTransfers table in schema.ts.
+    matched_amount_minor INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  );
+CREATE TABLE IF NOT EXISTS category_states (
     id TEXT PRIMARY KEY NOT NULL,
     category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
     period TEXT NOT NULL,
@@ -518,6 +532,17 @@ const DDL = [
   `CREATE INDEX IF NOT EXISTS subcategory_states_period_idx ON subcategory_states(period)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS subcategory_states_lookup_idx
      ON subcategory_states(subcategory_id, period)`,
+  /*
+   * UNIQUE, not a plain index.
+   *
+   * `accountTransferRepo.setStatus` upserts with ON CONFLICT (card_id,
+   * period), and SQLite rejects that clause outright unless a UNIQUE
+   * constraint matches it — "ON CONFLICT clause does not match any PRIMARY KEY
+   * or UNIQUE constraint". A plain index compiles and then fails at runtime on
+   * the first write, which is exactly how this was found.
+   */
+  `CREATE UNIQUE INDEX IF NOT EXISTS account_transfers_lookup_idx
+     ON account_transfers(card_id, period)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS category_states_lookup_idx
      ON category_states(category_id, period)`,
   `CREATE INDEX IF NOT EXISTS fundings_lookup_idx ON fundings(category_id, period)`,

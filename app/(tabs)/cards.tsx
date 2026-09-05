@@ -27,15 +27,15 @@ import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, 
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { formatMoney, parseAmount, toMajor } from '~/shared/lib/money';
 import { accountCurrency, sumInHome } from '~/features/accounts/logic/accountCurrency';
-import { validateAccountNumber } from '~/features/accounts/logic/dualCurrency';
-import { resolveCardId } from '~/features/budget/logic/planning';
+import { accountTailSeen, validateAccountNumber } from '~/features/accounts/logic/dualCurrency';
+import { effectiveAmount, resolveCardId } from '~/features/budget/logic/planning';
 import { groupAccounts, isPaired } from '~/features/accounts/logic/accountGroups';
 import { accountLabel, accountName, BANKS, resolveBrand } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore, type CardView } from '../../src/store/useAppStore';
 import type { Card } from '../../src/db/schema';
+import { smsLogRepo } from '../../src/db/repositories';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 
 /**
  * Accounts & Cards.
@@ -49,9 +49,6 @@ import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 export default function CardsScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  // Every visit starts at the top — a tab screen stays mounted, so its scroll
-  // offset otherwise survives being left and returned to. See the hook.
-  const scrollRef = useScrollToTopOnFocus();
   const router = useRouter();
   const state = useAppStore();
 
@@ -141,7 +138,6 @@ export default function CardsScreen() {
       />
 
       <ScrollView
-        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -415,18 +411,49 @@ function DetailModal({
    * Resolving the categories properly gives the icon, colour and total that make
    * the section answer "how much of this account is already spoken for".
    */
+  /*
+   * Resolved per LINE, not per category.
+   *
+   * Filtering on `category.cardId` was wrong in both directions, because a bill
+   * can override the account its category names:
+   *
+   *   - it MISSED a category reached only by an override. Observed on the
+   *     user's board: a LKR 50,000 grocery budget inside "Living" points at
+   *     Household, so Household funded it — but this listed only "Pet" and the
+   *     grocery money appeared to belong to no account at all.
+   *   - it INVENTED categories for the account named at category level even
+   *     when every line inside had been pointed somewhere else.
+   *
+   * So each category is reduced to the lines that actually resolve here, and
+   * dropped when none do. The total and the count follow those lines rather
+   * than the category's whole summary, which would otherwise report money
+   * belonging to a different account.
+   *
+   * This is the same rule `selectAccountTransfers` and the account detail page
+   * use — three places had to agree and only two did.
+   */
+  // The account's own currency labels the number rows below.
+  const homeCurrency = state.currency;
+
   const funded = useMemo(
     () =>
       selectCategoryViews(state)
-        .filter((cv) => cv.category.cardId === card.id)
-        .map((cv) => ({
-          id: cv.category.id,
-          name: cv.category.name,
-          color: cv.category.color,
-          icon: cv.category.icon,
-          totalMinor: cv.summary.totalMinor,
-          count: cv.subcategories.length,
-        })),
+        .map((cv) => {
+          const lines = cv.subcategories.filter((sub) => {
+            const raw = cv.rawSubcategories.find((r) => r.id === sub.id);
+            return resolveCardId(raw?.cardId, cv.category.cardId) === card.id;
+          });
+
+          return {
+            id: cv.category.id,
+            name: cv.category.name,
+            color: cv.category.color,
+            icon: cv.category.icon,
+            totalMinor: lines.reduce((sum, line) => sum + effectiveAmount(line), 0),
+            count: lines.length,
+          };
+        })
+        .filter((cat) => cat.count > 0),
     [state, card.id],
   );
 
@@ -500,11 +527,53 @@ function DetailModal({
               </>
             ) : (
               <>
-                <DetailRow
-                  label="Account number"
-                  value={card.accountNumber || 'Not set'}
-                  muted={!card.accountNumber}
-                />
+                {/*
+                  A dual-currency relationship names BOTH numbers, each with its
+                  currency.
+
+                  One row labelled "Account number" is right for the ordinary
+                  account and actively misleading for a relationship holding
+                  two: it shows one of the numbers with nothing to say which
+                  currency it is, while the other — the one a foreign salary
+                  lands in — is invisible.
+
+                  A bank that puts both currencies behind ONE number leaves the
+                  second blank and correctly falls back to the single row:
+                  labelling it by currency would imply a second exists.
+                */}
+                {card.foreignCurrency && card.foreignAccountNumber ? (
+                  <>
+                    <DetailRow
+                      label={`${accountCurrency(card, homeCurrency)} account`}
+                      value={card.accountNumber || 'Not set'}
+                      muted={!card.accountNumber}
+                    />
+                    <Divider style={{ marginHorizontal: space.lg }} />
+                    <DetailRow
+                      label={`${card.foreignCurrency.toUpperCase()} account`}
+                      value={card.foreignAccountNumber}
+                    />
+                  </>
+                ) : card.foreignCurrency ? (
+                  <>
+                    <DetailRow
+                      label="Account number"
+                      value={card.accountNumber || 'Not set'}
+                      muted={!card.accountNumber}
+                    />
+                    <Divider style={{ marginHorizontal: space.lg }} />
+                    <DetailRow
+                      label="Also holds"
+                      value={`${card.foreignCurrency.toUpperCase()} under the same number`}
+                    />
+                  </>
+                ) : (
+                  <DetailRow
+                    label="Account number"
+                    value={card.accountNumber || 'Not set'}
+                    muted={!card.accountNumber}
+                  />
+                )}
                 <Divider style={{ marginHorizontal: space.lg }} />
                 <DetailRow label="Bank" value={card.bankName ?? brand.name} />
                 <Divider style={{ marginHorizontal: space.lg }} />
@@ -658,6 +727,26 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
    */
   const [showErrors, setShowErrors] = useState(false);
   const accountNumberError = validateAccountNumber(accountNumber);
+  /*
+   * Every account fragment the app has seen in a real bank message.
+   *
+   * Read once per form open. It is a small distinct-select over a table that
+   * only grows when messages arrive, and re-running it per keystroke would
+   * query on every digit typed.
+   */
+  const seenAccounts = useMemo(() => smsLogRepo.seenAccounts(), []);
+  /*
+   * A number that matches nothing the bank has ever sent.
+   *
+   * A WARNING, never an error: the number may be perfectly correct and simply
+   * not have appeared in a message yet, and blocking a save on that would be
+   * wrong. But it is worth saying, because the failure is otherwise silent —
+   * the account just never matches, with nothing connecting that to this field.
+   */
+  const accountUnseen =
+    !accountNumberError && accountNumber.trim().length > 0
+      ? !accountTailSeen(accountNumber, seenAccounts)
+      : false;
   const foreignAccountNumberError = showForeignAccount
     ? validateAccountNumber(foreignAccountNumber)
     : null;
@@ -748,14 +837,28 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
       setShowErrors(true);
       return;
     }
-    // Last-4 is what matches an incoming SMS to this entry, so it is preserved
-    // rather than re-derived from whichever number field the current type shows:
-    // switching Account <-> Card clears the other type's number, which would
-    // otherwise silently blank the digits and break SMS matching. An explicit
-    // value wins, then the visible number, then whatever was already stored.
+    /*
+     * Last-4 is what matches an incoming SMS to this entry.
+     *
+     * The VISIBLE number wins, and the stored value is only a fallback. It used
+     * to be the other way round — the stored `last4` was preferred so that
+     * switching Account <-> Card, which clears the other type's number field,
+     * could not silently blank the digits and break matching.
+     *
+     * That protected the wrong case. Editing an account number is a deliberate
+     * act and must take effect: observed on the user's own device, changing a
+     * DFCC number from ...7427 to ...5584 kept the stale 7427, so the new
+     * number matched nothing and every message from that account went
+     * unrecognised — with nothing on screen to say why.
+     *
+     * The Account<->Card concern is still handled, by falling back to the
+     * stored value only when the visible field is EMPTY, which is exactly the
+     * state a type switch produces.
+     */
+    const visibleNumber = isCard ? cardNumber : accountNumber;
     const derivedLast4 =
+      visibleNumber.replace(/\D/g, '').slice(-4) ||
       last4.replace(/\D/g, '').slice(-4) ||
-      (isCard ? cardNumber.replace(/\D/g, '').slice(-4) : accountNumber.replace(/\D/g, '').slice(-4)) ||
       existing?.last4 ||
       null;
 
@@ -989,6 +1092,25 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
                     style={{ flex: 1 }}
                   />
                 </Row>
+
+                {/*
+                  The number is valid but has never appeared in a message.
+
+                  Amber, inset to the field, and never blocking: banks mask
+                  account numbers to their own taste, so the tail on a statement
+                  is often not the tail in the SMS. Getting this wrong fails
+                  silently — the account simply never matches — which is exactly
+                  why it is worth saying out loud here.
+                */}
+                {accountUnseen ? (
+                  <Row gap={6} align="flex-start" style={{ marginLeft: 96 }}>
+                    <Ionicons name="alert-circle-outline" size={14} color={colors.pending} />
+                    <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
+                      No message from this account yet — check the digits your bank actually
+                      shows in its texts.
+                    </Text>
+                  </Row>
+                ) : null}
 
                 {showForeignAccount ? (
                   <>

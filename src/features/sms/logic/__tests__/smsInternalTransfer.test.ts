@@ -203,3 +203,54 @@ describe('cancelInternalTransfers safety rules', () => {
     expect(survivors[0].direction).toBe('credit');
   });
 });
+
+/**
+ * Banks that print a DATE but no CLOCK.
+ *
+ * DFCC sends "on 02 SEP 2026" with no time, so a real LKR 282,534 transfer to
+ * the user's own NDB account could never pair under the strict
+ * both-sides-need-a-timestamp rule, and both halves surfaced as separate
+ * spends. The relaxation rests on what pairing already requires: both accounts
+ * the user's, and different from each other.
+ */
+describe('pairing when one side prints no time', () => {
+  const pair = [
+    {
+      direction: 'credit' as const,
+      kind: 'transfer_in' as const,
+      amountMinor: 28_253_400,
+      account: '6796',
+      date: '2026-09-02',
+      time: '15:41',
+    },
+    {
+      direction: 'debit' as const,
+      kind: 'transfer_out' as const,
+      amountMinor: 28_253_400,
+      account: '5584',
+      date: '2026-09-02',
+      time: null,
+    },
+  ];
+
+  it('pairs a clockless message with one from the same day', () => {
+    expect(cancelInternalTransfers(pair, ['6796', '5584'])).toHaveLength(0);
+  });
+
+  /** A different day is a different transfer, whatever the amount. */
+  it('does not pair across days', () => {
+    const nextDay = [pair[0], { ...pair[1], date: '2026-09-03' }];
+    expect(cancelInternalTransfers(nextDay, ['6796', '5584'])).toHaveLength(2);
+  });
+
+  /** With no date at all there is nothing to place it against. */
+  it('does not pair when the date is unknown too', () => {
+    const undated = [pair[0], { ...pair[1], date: null }];
+    expect(cancelInternalTransfers(undated, ['6796', '5584'])).toHaveLength(2);
+  });
+
+  /** Both ends must still be the user's — a stranger is a real expense. */
+  it('does not pair when one account is not the user’s', () => {
+    expect(cancelInternalTransfers(pair, ['6796'])).toHaveLength(2);
+  });
+});

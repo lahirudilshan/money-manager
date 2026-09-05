@@ -141,6 +141,41 @@ export function isPaid(status: SubcategoryStatus): boolean {
   return status === 'paid';
 }
 
+/**
+ * Whether a line's obligation for the month is met.
+ *
+ * Two different things count as met, because the board holds two kinds of line:
+ *
+ *   - A DATED bill is met when it is ticked paid. It is a single obligation
+ *     with a moment of settlement, and the tick is that moment.
+ *   - An ONGOING line with a monthly budget is met when spending REACHES that
+ *     budget. It has no tick — there is no one payment to settle — but a
+ *     LKR 10,000 monthly transfer that has had LKR 10,000 logged against it is
+ *     as done as a bill can be, and showing it as outstanding beside genuinely
+ *     unpaid bills is simply wrong.
+ *
+ * Spending beyond the budget still counts as met. Going over is a real state
+ * and worth flagging separately (see `overspent` on the board), but it is not
+ * "unfinished" — the money has left.
+ *
+ * An ongoing line with NO budget is never met. There is no figure to reach, so
+ * "done" has no meaning for it and claiming otherwise would mark every
+ * open-ended budget complete the moment a single receipt landed.
+ */
+export function isObligationMet(line: {
+  // The same inline union `PlannedCategory` uses — this module deliberately
+  // imports no DB types, so the shape stays independent of the schema.
+  frequency?: 'monthly' | 'one_time' | 'yearly' | 'ongoing' | null;
+  status: SubcategoryStatus;
+  plannedMinor: Minor;
+  actualMinor?: Minor | null;
+}): boolean {
+  if (line.frequency !== 'ongoing') return isPaid(line.status);
+  if (line.plannedMinor <= 0) return false;
+
+  return (line.actualMinor ?? 0) >= line.plannedMinor;
+}
+
 export interface CategorySummary {
   /** Sum of every subcategory's effective amount. */
   totalMinor: Minor;
@@ -201,10 +236,26 @@ export function summariseCategory(
 
   const counts: Record<SubcategoryStatus, number> = { pending: 0, paid: 0 };
 
+  /*
+   * An ongoing line counts as done once its BUDGET is met.
+   *
+   * `status` is the only signal a dated bill has, and the only one it needs.
+   * An ongoing line never carries `paid` — there is no single payment to tick —
+   * so counting on status alone left a LKR 10,000 monthly transfer with
+   * LKR 10,000 logged against it sitting in the "still to pay" column forever,
+   * and its category could never read as settled. See `isObligationMet`.
+   */
   let paid = 0;
   for (const subcategory of spend) {
-    counts[subcategory.status] += 1;
-    if (subcategory.status === 'paid') paid += monthlyAmount(subcategory);
+    const met = isObligationMet({
+      frequency: subcategory.frequency,
+      status: subcategory.status,
+      plannedMinor: subcategory.plannedMinor,
+      actualMinor: subcategory.actualMinor,
+    });
+
+    counts[met ? 'paid' : 'pending'] += 1;
+    if (met) paid += monthlyAmount(subcategory);
   }
 
   const difference = fundedMinor - total;

@@ -39,6 +39,7 @@ export default function SmsAutomationGuide() {
   const waiting = useAppStore((s) => s.smsInboxWaiting);
   const drainSmsInbox = useAppStore((s) => s.drainSmsInbox);
   const refreshInboxCount = useAppStore((s) => s.refreshInboxCount);
+  const recheckQueue = useAppStore((s) => s.recheckQueueAfterAccountChange);
 
   /*
    * Read from settings, NOT from whether the file exists.
@@ -51,6 +52,10 @@ export default function SmsAutomationGuide() {
     () => settingsRepo.get(SETTINGS_KEYS.smsInboxEnabled) === 'true',
   );
   const [copied, setCopied] = React.useState(false);
+  // Opt-in: see `hideForeignAccounts` for why the default is off.
+  const [hideForeign, setHideForeign] = React.useState(
+    () => settingsRepo.get(SETTINGS_KEYS.hideForeignAccounts) === 'true',
+  );
 
   React.useEffect(() => {
     refreshInboxCount();
@@ -493,6 +498,49 @@ export default function SmsAutomationGuide() {
               lines around them are fine. If your Shortcut already ends messages with three
               dashes, that still works too.
             </Step>
+          </Surface>
+
+          {/*
+            Hide messages about accounts that are not the user's.
+
+            Carriers reassign phone numbers, and the new owner stays on the old
+            one's bank alert list — so credits for a stranger's account arrive
+            forever with no way to stop them at the source.
+
+            OFF by default and stated plainly, because it DISCARDS messages: on
+            a board where not every account number has been entered, a real
+            transaction would be hidden with nothing to explain the gap. The
+            caption names that precondition rather than burying it.
+          */}
+          <Surface padded={false} style={{ overflow: 'hidden' }}>
+            <Row
+              gap={space.md}
+              style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
+            >
+              <Ionicons name="person-remove-outline" size={19} color={colors.accent} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="bodyStrong">Ignore other people's accounts</Text>
+                <Text variant="caption" tone="muted">
+                  Hides alerts for accounts you have not added — for a number the network
+                  reassigned. Add every account number first, or your own messages will be
+                  hidden too.
+                </Text>
+              </View>
+              <Switch
+                value={hideForeign}
+                onValueChange={(next) => {
+                  setHideForeign(next);
+                  settingsRepo.set(SETTINGS_KEYS.hideForeignAccounts, next ? 'true' : 'false');
+                  /*
+                    Applies to the BACKLOG, not just future messages.
+                    Turning this on and seeing the stray credits still sitting
+                    there would read as the switch doing nothing — they were
+                    queued before it existed.
+                  */
+                  if (next) recheckQueue();
+                }}
+              />
+            </Row>
           </Surface>
 
           {/*

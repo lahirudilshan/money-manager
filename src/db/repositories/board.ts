@@ -3,11 +3,12 @@
  * per-period state, funding moves and income.
  */
 
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { db } from '~/db/client';
 import {
   cards,
   categories,
+  accountTransfers,
   categoryStates,
   fundings,
   houses,
@@ -18,6 +19,7 @@ import {
   transactionSplits,
   type Card,
   type Category,
+  type AccountTransfer,
   type CategoryFundingStatus,
   type CategoryState,
   type Funding,
@@ -268,6 +270,41 @@ export const transactionRepo = {
       .select()
       .from(transactions)
       .where(and(eq(transactions.subcategoryId, subcategoryId), eq(transactions.period, period)))
+      .orderBy(desc(transactions.date))
+      .all();
+  },
+
+  /**
+   * Payments that live on ANOTHER line but were split onto this one.
+   *
+   * A split does not move the parent transaction — it stays on the line it was
+   * first recorded against and its parts say where the money actually went. So
+   * a line that received part of someone else's payment has no row of its own
+   * to show, and the entry list would omit money the board already counts
+   * against it. This finds those payments; the caller charges each one only its
+   * matching part (see `selectTransactionEntries`).
+   */
+  splitOntoSubcategoryPeriod(subcategoryId: string, period: string): Transaction[] {
+    return db
+      .select()
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.period, period),
+          ne(transactions.subcategoryId, subcategoryId),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(transactionSplits)
+              .where(
+                and(
+                  eq(transactionSplits.transactionId, transactions.id),
+                  eq(transactionSplits.subcategoryId, subcategoryId),
+                ),
+              ),
+          ),
+        ),
+      )
       .orderBy(desc(transactions.date))
       .all();
   },
@@ -561,6 +598,66 @@ export const categoryStateRepo = {
       .onConflictDoUpdate({
         target: [categoryStates.categoryId, categoryStates.period],
         set: { status, transferredAt, updatedAt: now() },
+      })
+      .run();
+  },
+};
+
+/**
+ * Whether each ACCOUNT's money has been moved this month.
+ *
+ * Separate from `categoryStateRepo` because a category can be funded by several
+ * accounts at once, so its flag cannot say which of them was paid — see the
+ * `accountTransfers` table in schema.ts.
+ */
+export const accountTransferRepo = {
+  /** Every account's transfer state for a period, keyed by cardId. */
+  byPeriod(period: string): Map<string, AccountTransfer> {
+    try {
+      const rows = db
+        .select()
+        .from(accountTransfers)
+        .where(eq(accountTransfers.period, period))
+        .all();
+      return new Map(rows.map((row) => [row.cardId, row]));
+    } catch {
+      // The table is added by a migration; a launch that predates it must not
+      // take the board down over a display flag.
+      return new Map();
+    }
+  },
+
+  /**
+   * Mark an account moved, or back to pending.
+   *
+   * `matchedAmountMinor` records what a bank message confirmed, and is cleared
+   * when the row goes back to pending — a stale figure on an untick would claim
+   * evidence for a state that no longer holds.
+   */
+  setStatus(
+    cardId: string,
+    period: string,
+    status: CategoryFundingStatus,
+    matchedAmountMinor: number | null = null,
+  ): void {
+    const transferredAt = status === 'transferred' ? now() : null;
+    db.insert(accountTransfers)
+      .values({
+        id: createId(),
+        cardId,
+        period,
+        status,
+        transferredAt,
+        matchedAmountMinor: status === 'transferred' ? matchedAmountMinor : null,
+      })
+      .onConflictDoUpdate({
+        target: [accountTransfers.cardId, accountTransfers.period],
+        set: {
+          status,
+          transferredAt,
+          matchedAmountMinor: status === 'transferred' ? matchedAmountMinor : null,
+          updatedAt: now(),
+        },
       })
       .run();
   },

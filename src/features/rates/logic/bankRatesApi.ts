@@ -138,15 +138,29 @@ export async function refreshBankRates(options: {
   set: (key: string, value: string) => void;
   keyRates: string;
   keyFetchedAt: string;
+  /**
+   * Which currency to fetch. Defaults to USD, which is what almost every
+   * foreign account here holds — but a EUR or GBP account needs its own rates,
+   * and the source carries all of them.
+   */
+  currency?: string;
   /** Skip the daily guard — the user explicitly asked for fresh figures. */
   force?: boolean;
   now?: Date;
 }): Promise<BankRate[] | null> {
-  const { get, set, keyRates, keyFetchedAt, force = false, now = new Date() } = options;
+  const {
+    get,
+    set,
+    keyRates,
+    keyFetchedAt,
+    currency = 'USD',
+    force = false,
+    now = new Date(),
+  } = options;
 
   if (!force && !isBankFetchDue(get(keyFetchedAt), now)) return null;
 
-  const fetched = await fetchBankRates('USD');
+  const fetched = await fetchBankRates(currency);
   if (!fetched) return null;
 
   set(keyRates, JSON.stringify(fetched));

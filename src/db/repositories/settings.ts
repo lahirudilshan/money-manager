@@ -85,6 +85,21 @@ export const SETTINGS_KEYS = {
    * than passed off as current.
    */
   bankRates: 'bank_rates',
+  /**
+   * Per-currency cache keys, for a board holding more than one foreign
+   * currency.
+   *
+   * `bankRates` alone was a single slot, so viewing EUR rates overwrote the USD
+   * ones the board converts with. Namespacing by currency lets each stand on
+   * its own — and USD keeps the unsuffixed key, so an existing cache survives
+   * the change rather than being refetched on first launch.
+   */
+  bankRatesFor: (currency: string) =>
+    currency.toUpperCase() === 'USD' ? 'bank_rates' : `bank_rates_${currency.toLowerCase()}`,
+  bankRatesFetchedAtFor: (currency: string) =>
+    currency.toUpperCase() === 'USD'
+      ? 'bank_rates_fetched_at'
+      : `bank_rates_fetched_at_${currency.toLowerCase()}`,
   /** ISO timestamp of the last successful per-bank fetch. */
   bankRatesFetchedAt: 'bank_rates_fetched_at',
   /**
@@ -105,4 +120,14 @@ export const SETTINGS_KEYS = {
    * users never see this and the rest can correct it.
    */
   salaryCardId: 'salary_card_id',
+  /**
+   * Whether to hide messages about accounts the user does not hold.
+   *
+   * For a phone number the carrier reassigned: the new owner stays on some
+   * bank's alert list and receives a stranger's credits forever. OFF by
+   * default — the feature discards messages, and defaulting to discard would
+   * hide a real transaction from anyone whose accounts are not all entered
+   * yet, with nothing on screen to explain the gap.
+   */
+  hideForeignAccounts: 'hide_foreign_accounts',
 } as const;

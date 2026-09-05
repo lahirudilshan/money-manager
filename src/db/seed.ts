@@ -2,10 +2,14 @@ import { toMinor } from '~/shared/lib/money';
 import { cardRepo, categoryRepo, incomeRepo, subcategoryRepo } from './repositories';
 
 /**
- * A small genericized starter plan — used both by the onboarding wizard's
- * "use a sample template" shortcut and by Settings' dev-only "Seed demo data"
- * button. Deliberately generic placeholder names/round numbers, never a real
- * person's actual financial figures.
+ * A small genericized starter plan. Deliberately generic placeholder
+ * names/round numbers, never a real person's actual financial figures.
+ *
+ * Currently UNREFERENCED: it backed the onboarding wizard's "use a sample
+ * template" shortcut and Settings' dev-only "Seed demo data" button, and both
+ * have been removed. Kept because it is the one place a realistic starter
+ * board is described, which a future template feature would want — delete it
+ * rather than let it drift if that never arrives.
  *
  * Reuses `existingCardId` when given (e.g. the account the user already
  * created in onboarding's step 1) instead of always creating a second

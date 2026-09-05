@@ -909,13 +909,24 @@ function extractAccount(text: string): string {
   const labelled = text.match(
     /(?:A\/C|Ac(?:count)?)(?:\s*No)?\s*[:.]?\s*([X*\d]{3,})/i,
   );
-  if (labelled) {
-    // Everything after the last run of mask characters is the visible tail.
-    const value = labelled[1];
-    const tail = value.split(/[X*]+/).filter(Boolean).pop() ?? value;
-    return tail.replace(/[^\d]/g, '');
-  }
-  return '';
+  if (!labelled) return '';
+
+  // Everything after the last run of mask characters is the visible tail.
+  //
+  // The TRAILING run specifically, never the longest. A middle-masked number
+  // like HNB's "Ac No:13802XXXXX50" tempts you to prefer "13802" because it is
+  // longer and `isMatchableAccount` refuses "50" — but "13802" is the branch
+  // and product prefix, SHARED by every HNB account (the user holds
+  // 138020174150 and 1380***6626, both starting with it). Keying on it would
+  // match two different accounts to each other, which is far worse than
+  // matching neither: it would pair unrelated messages as one transfer.
+  //
+  // The short tail is kept precisely because it still distinguishes two HNB
+  // accounts from one another when pairing, even though it cannot identify a
+  // card. See MIN_MATCHABLE_ACCOUNT_DIGITS.
+  const value = labelled[1];
+  const tail = value.split(/[X*]+/).filter(Boolean).pop() ?? value;
+  return tail.replace(/[^\d]/g, '');
 }
 
 /**

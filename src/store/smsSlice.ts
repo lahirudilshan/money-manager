@@ -25,6 +25,7 @@ import { orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsRecon
 import { payeeAccountKey, planRuleUpsert } from '~/features/sms/logic/merchantRules';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { matchTransferToAccount } from '~/features/budget/logic/autoTransfer';
+import { isForeignAccountMessage } from '~/features/sms/logic/accountMasks';
 import { selectAccountTransfers } from '~/store/selectors';
 import {
   cancelInternalTransfers,
@@ -403,7 +404,18 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      */
     const ownAccounts = inferOwnAccounts(
       parsed.map((entry) => entry.sms?.account ?? ''),
-      get().cards.map((card) => card.last4 ?? ''),
+      /*
+         Both tails AND both full numbers, exactly as the drain does.
+         A stored tail can be stale (see the drain's note), and this pass is
+         the one that re-evaluates an already-queued message after the user
+         corrects an account number — so it must be at least as capable.
+       */
+      get().cards.flatMap((card) => [
+        card.last4 ?? '',
+        card.foreignLast4 ?? '',
+        card.accountNumber ?? '',
+        card.foreignAccountNumber ?? '',
+      ]),
     );
 
     /*
@@ -425,6 +437,77 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const survivors = new Set(cancelInternalTransfers(ordered.map((entry) => entry.sms), ownAccounts));
     for (const entry of ordered) {
       if (!survivors.has(entry.sms)) doomed.add(entry.row.id);
+    }
+
+    /*
+     * Auto-mark before retiring, exactly as the drain does.
+     *
+     * This pass runs after the user edits an account number, so it is where a
+     * transfer that was ALREADY queued — invisible to pairing because the
+     * number was wrong at the time — finally gets recognised. Doing the
+     * matching only on arrival would mean a correction never reached the
+     * messages it was meant to fix.
+     */
+    const pendingAccounts = selectAccountTransfers(get()).map((view) => ({
+      cardId: view.card.id,
+      toTransferMinor: view.toTransferHomeMinor,
+      last4: view.card.last4,
+      foreignLast4: view.card.foreignLast4,
+      accountNumber: view.card.accountNumber,
+      foreignAccountNumber: view.card.foreignAccountNumber,
+    }));
+
+    for (const entry of ordered) {
+      if (survivors.has(entry.sms)) continue;
+      if (entry.sms.direction !== 'credit') continue;
+
+      const match = matchTransferToAccount(
+        {
+          account: entry.sms.account,
+          amountMinor: entry.sms.amountMinor,
+          isCredit: true,
+        },
+        pendingAccounts,
+      );
+      if (match) get().markAccountTransferred(match.cardId, entry.sms.amountMinor);
+    }
+
+    /*
+     * Messages about accounts the user does not hold — applied HERE too.
+     *
+     * The drain filters these on arrival, but a message already in the queue
+     * was let through before the setting was turned on, or before the account
+     * numbers that prove it foreign were entered. Re-checking here is what
+     * makes turning the toggle on clear the backlog rather than only affecting
+     * the future.
+     */
+    if (settingsRepo.get(SETTINGS_KEYS.hideForeignAccounts) === 'true') {
+      const ownedAccounts = get().cards.map((card) => ({
+        id: card.id,
+        accountNumber: card.accountNumber,
+        last4: card.last4,
+        foreignAccountNumber: card.foreignAccountNumber,
+        foreignLast4: card.foreignLast4,
+      }));
+
+      for (const entry of ordered) {
+        if (doomed.has(entry.row.id)) continue;
+        if (!isForeignAccountMessage({ accounts: ownedAccounts, fragment: entry.sms.account })) {
+          continue;
+        }
+
+        doomed.add(entry.row.id);
+        smsLogRepo.record({
+          raw: entry.row.raw,
+          fingerprint: fingerprintMessage(entry.row.raw),
+          outcome: 'skipped',
+          reason: 'Not one of your accounts',
+          amountMinor: entry.sms.amountMinor,
+          merchant: entry.sms.merchant,
+          kind: entry.sms.kind,
+          occurredOn: entry.sms.date,
+        });
+      }
     }
 
     for (const id of doomed) smsInboxRepo.resolve(id, 'dismissed');
@@ -722,7 +805,25 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
              halves never paired and both surfaced as spending. Feeding the
              foreign tail in as well is what lets that pair form.
            */
-          get().cards.flatMap((card) => [card.last4 ?? '', card.foreignLast4 ?? '']),
+          /*
+             Every fragment that could identify one of the user's accounts:
+             both stored tails AND both full numbers.
+
+             The tails alone were not enough. A card saved before `last4` was
+             derived from the visible field carries a stale tail — a real NDB
+             account numbered ...6796 still held "3824" — so its messages
+             matched nothing and a DFCC-to-NDB transfer of LKR 282,534 surfaced
+             as two separate spends instead of one internal move.
+
+             `inferOwnAccounts` compares fragments in both directions, so
+             handing it the full number lets a masked "...6796" match it.
+           */
+          get().cards.flatMap((card) => [
+            card.last4 ?? '',
+            card.foreignLast4 ?? '',
+            card.accountNumber ?? '',
+            card.foreignAccountNumber ?? '',
+          ]),
         );
 
         const afterReversals = cancelReversals(movements.map((entry) => entry.sms));
@@ -754,6 +855,11 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
           toTransferMinor: view.toTransferHomeMinor,
           last4: view.card.last4,
           foreignLast4: view.card.foreignLast4,
+          // The full numbers too: a card saved before `last4` was derived from
+          // the visible field carries a stale tail, and the number is then the
+          // only thing that still matches its own messages.
+          accountNumber: view.card.accountNumber,
+          foreignAccountNumber: view.card.foreignAccountNumber,
         }));
 
         const autoMarked = new Map<ParsedSms, string>();
@@ -769,7 +875,7 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
             },
             pendingAccounts,
           );
-          if (match && get().markAccountTransferred(match.cardId)) {
+          if (match && get().markAccountTransferred(match.cardId, entry.sms.amountMinor)) {
             autoMarked.set(entry.sms, match.cardId);
           }
         }
@@ -798,10 +904,47 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
           });
         }
 
+        /*
+         * Messages about accounts the user does not hold.
+         *
+         * A phone number the carrier reassigned leaves the new owner on some
+         * bank's alert list, so a stranger's credits arrive forever. Opt-in
+         * (see `hideForeignAccounts`) because this DISCARDS messages, and
+         * defaulting to discard would hide a real transaction from anyone whose
+         * accounts are not all entered yet.
+         */
+        const hideForeign = settingsRepo.get(SETTINGS_KEYS.hideForeignAccounts) === 'true';
+        const ownedAccounts = get().cards.map((card) => ({
+          id: card.id,
+          accountNumber: card.accountNumber,
+          last4: card.last4,
+          foreignAccountNumber: card.foreignAccountNumber,
+          foreignLast4: card.foreignLast4,
+        }));
+
         for (const entry of movements) {
           // A charge cancelled by its reversal — and the reversal itself — are
           // both dropped: no row, no draft, nothing for the user to dismiss.
           if (!keep.has(entry.sms)) continue;
+
+          if (
+            hideForeign &&
+            isForeignAccountMessage({ accounts: ownedAccounts, fragment: entry.sms.account })
+          ) {
+            // Logged, never silently vanished: "why did this not appear?" has
+            // an answer, and the log is where a wrong call gets noticed.
+            smsLogRepo.record({
+              raw: entry.raw,
+              fingerprint: fingerprintMessage(entry.raw),
+              outcome: 'skipped',
+              reason: 'Not one of your accounts',
+              amountMinor: entry.sms.amountMinor,
+              merchant: entry.sms.merchant,
+              kind: entry.sms.kind,
+              occurredOn: entry.sms.date,
+            });
+            continue;
+          }
 
           const result = get().ingestSmsText(entry.raw);
 

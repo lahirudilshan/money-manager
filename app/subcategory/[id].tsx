@@ -12,6 +12,10 @@ import { DayPicker } from '~/features/budget/components/DayPicker';
 import { DueDateCalendar } from '~/features/budget/components/DueDateCalendar';
 import { ImageUploader } from '~/shared/components/ImageUploader';
 import { formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
+import { SplitEditor } from '~/features/budget/components/SplitEditor';
+import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
+import { validateSplit, type SplitPart } from '~/features/budget/logic/splits';
+import { transactionSplitRepo } from '~/db/repositories';
 import {
   dueDateFor,
   formatPeriod,
@@ -35,7 +39,12 @@ import {
   toSavingPlanPatch,
   type SavingPlanDraft,
 } from '~/features/budget/components/SavingPlanFields';
-import { selectSavingPlans, selectTransactions, useAppStore } from '../../src/store/useAppStore';
+import {
+  selectSavingPlans,
+  selectTransactionEntries,
+  useAppStore,
+  type TransactionEntry,
+} from '../../src/store/useAppStore';
 import { statusStyle } from '~/shared/theme';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
@@ -208,7 +217,7 @@ export default function SubcategoryScreen() {
   // many entries; a dated bill holds exactly one — the payment itself — and
   // recording it is what marks the bill paid.
   const transactions = useMemo(
-    () => (id ? selectTransactions(state, id) : []),
+    () => (id ? selectTransactionEntries(state, id) : []),
     [state, id],
   );
 
@@ -232,7 +241,9 @@ export default function SubcategoryScreen() {
   // The repo already collapses legacy values, so this is pending/paid.
   const savedStatus: SubcategoryStatus = (stateRow?.status as SubcategoryStatus) ?? 'pending';
 
-  const ongoingTotal = transactions.reduce((sum, t) => sum + t.amountMinor, 0);
+  // Each entry is charged this line's SHARE, not the payment's full amount, so
+  // a split payment counts here exactly as it counts on the board.
+  const ongoingTotal = transactions.reduce((sum, entry) => sum + entry.shareMinor, 0);
   // The budget these entries draw against, read from the field being edited so
   // the bar responds as the user types a new figure rather than after saving.
   const plannedMinor = parseAmount(planned) ?? 0;
@@ -607,15 +618,24 @@ export default function SubcategoryScreen() {
           plannedMinor={plannedMinor}
           onAdd={() => router.push(`/transaction/ongoing?subcategoryId=${subcategory.id}`)}
           onEdit={(txn) => setEditingTxn(txn)}
-          onRemove={(txnId, txnName) =>
-            Alert.alert(`Delete “${txnName}”?`, 'This entry is removed from the month.', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Delete',
-                style: 'destructive',
-                onPress: () => state.deleteTransaction(txnId),
-              },
-            ])
+          onRemove={(txnId, txnName, splitWays) =>
+            Alert.alert(
+              `Delete “${txnName}”?`,
+              /* Deleting a split row takes the WHOLE payment, including the
+                 parts on other lines — the row shows this line's share, so
+                 without saying so the confirmation understates what it does. */
+              splitWays > 1
+                ? `This payment is split across ${splitWays} lines. Deleting it removes all ${splitWays} parts, not just this one.`
+                : 'This entry is removed from the month.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: () => state.deleteTransaction(txnId),
+                },
+              ],
+            )
           }
         />
         ) : null}
@@ -879,8 +899,12 @@ export default function SubcategoryScreen() {
       <EditTransactionSheet
         txn={editingTxn}
         onClose={() => setEditingTxn(null)}
-        onSave={(patch) => {
+        onSave={({ splits, ...patch }) => {
           state.updateTransaction(editingTxn.id, patch);
+          // Splits are a separate table, so they are written separately —
+          // `undefined` means the editor was never opened and the stored split
+          // (if any) stands.
+          if (splits) state.setTransactionSplits(editingTxn.id, splits);
           setEditingTxn(null);
         }}
         onDelete={() => {
@@ -1012,13 +1036,13 @@ function OngoingTransactions({
   onEdit,
   onRemove,
 }: {
-  transactions: Transaction[];
+  transactions: TransactionEntry[];
   total: number;
   /** The monthly amount, when set — drives the header's remaining figure. */
   plannedMinor: number;
   onAdd: () => void;
   onEdit: (txn: Transaction) => void;
-  onRemove: (id: string, name: string) => void;
+  onRemove: (id: string, name: string, splitWays: number) => void;
 }) {
   const { colors, space } = useTheme();
   const overBudget = plannedMinor > 0 && total > plannedMinor;
@@ -1059,7 +1083,7 @@ function OngoingTransactions({
           this line.
         </Text>
       ) : (
-        transactions.map((txn, index) => (
+        transactions.map(({ txn, shareMinor, splits }, index) => (
           <View key={txn.id}>
             {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
             {/* The whole row opens the editor — a bigger, more obvious target
@@ -1068,7 +1092,7 @@ function OngoingTransactions({
             <Pressable
               onPress={() => onEdit(txn)}
               accessibilityRole="button"
-              accessibilityLabel={`Edit ${txn.name}, ${formatMoney(txn.amountMinor)}`}
+              accessibilityLabel={`Edit ${txn.name}, ${formatMoney(shareMinor)}`}
               style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -1096,11 +1120,21 @@ function OngoingTransactions({
                   })}
                   {txn.note ? ` · ${txn.note}` : ''}
                 </Text>
+                {/* Its OWN line, not appended to the note above. An SMS-derived
+                    note ("Your A/C No: ****...") already fills that row, and
+                    `numberOfLines={1}` then truncated this away on exactly the
+                    rows that need it — leaving a figure smaller than the bank's
+                    with nothing to say why. */}
+                {splits.length > 0 ? (
+                  <Text variant="caption" color={colors.accent} numberOfLines={1}>
+                    Part of {formatMoney(txn.amountMinor)}
+                  </Text>
+                ) : null}
               </View>
-              <Text variant="figure">{formatMoney(txn.amountMinor)}</Text>
+              <Text variant="figure">{formatMoney(shareMinor)}</Text>
               <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
               <Pressable
-                onPress={() => onRemove(txn.id, txn.name)}
+                onPress={() => onRemove(txn.id, txn.name, splits.length)}
                 hitSlop={10}
                 accessibilityRole="button"
                 accessibilityLabel={`Delete ${txn.name}`}
@@ -1137,6 +1171,13 @@ function EditTransactionSheet({
     date: Date;
     note: string | null;
     imageUri: string | null;
+    /**
+     * The entry's splits, when it has any — an empty array removes them.
+     *
+     * Undefined means "untouched", so an edit that never opened the split
+     * editor cannot silently clear an existing split.
+     */
+    splits?: { subcategoryId: string; amountMinor: number; note: string | null }[];
   }) => void;
   onDelete: () => void;
 }) {
@@ -1150,8 +1191,97 @@ function EditTransactionSheet({
   const [note, setNote] = useState(txn.note ?? '');
   const [imageUri, setImageUri] = useState<string | null>(txn.imageUri ?? null);
 
+  /*
+   * The optional split — see the disclosure below.
+   *
+   * Seeded from the stored splits when the entry already has them, so opening
+   * an already-split entry shows what it is rather than starting over.
+   */
+  const state = useAppStore();
+  const storedSplits = useMemo(
+    () => transactionSplitRepo.byTransaction(txn.id),
+    [txn.id],
+  );
+  const [splitting, setSplitting] = useState(storedSplits.length > 0);
+  /** Which part's line picker is open — see the sheet at the end of this file. */
+  const [pickingPartKey, setPickingPartKey] = useState<string | null>(null);
+  const [splitParts, setSplitParts] = useState<SplitPart[]>(() =>
+    storedSplits.map((split, index) => ({
+      key: `stored-${index}`,
+      subcategoryId: split.subcategoryId,
+      amountMinor: split.amountMinor,
+      amountText: formatAmountInput(String(split.amountMinor / 100)),
+      note: split.note ?? null,
+    })),
+  );
+
+  /** Every line the split can point at, with the labels the editor renders. */
+  /*
+   * The grid's two inputs, shaped exactly as the review screen shapes them.
+   *
+   * `splitDestinations` above is the flat list the SplitEditor renders inside
+   * each part row (its name and colour); these are what the picker sheet needs.
+   * Both derive from the same lines, so they cannot disagree about what is
+   * selectable.
+   */
+  const splitGridDestinations = useMemo(
+    () =>
+      state.subcategories
+        .filter((sub) => sub.type === 'expense')
+        .map((sub) => ({
+          id: sub.id,
+          name: sub.name,
+          categoryId: sub.categoryId,
+          plannedMinor: sub.plannedMinor,
+          icon: sub.icon,
+        })),
+    [state.subcategories],
+  );
+
+  // Only categories that actually hold an eligible bill — the grid hides
+  // empties itself, but this keeps the array it diffs against small.
+  const splitGridCategories = useMemo(() => {
+    const ids = new Set(splitGridDestinations.map((d) => d.categoryId));
+    return state.categories
+      .filter((category) => ids.has(category.id))
+      .map((category) => ({
+        id: category.id,
+        name: category.name,
+        color: category.color,
+        icon: category.icon,
+      }));
+  }, [splitGridDestinations, state.categories]);
+
+  const splitDestinations = useMemo(
+    () =>
+      state.subcategories
+        .filter((sub) => sub.type === 'expense')
+        .map((sub) => {
+          const parent = state.categories.find((c) => c.id === sub.categoryId);
+          return {
+            id: sub.id,
+            name: sub.name,
+            categoryName: parent?.name ?? '',
+            categoryColor: parent?.color ?? colors.accent,
+            icon: sub.icon,
+          };
+        }),
+    [state.subcategories, state.categories, colors.accent],
+  );
+  const splitCurrency = state.currency;
+
   const amountMinor = parseAmount(amount) ?? 0;
-  const canSave = name.trim().length > 0 && amountMinor > 0;
+  const splitValidation = validateSplit(splitParts, amountMinor);
+  /*
+   * A half-finished split blocks saving.
+   *
+   * The alternative — saving it as one line — is exactly the silent discard
+   * that made a LKR 73,000 split vanish on the review screen. Better to hold
+   * Save until the parts add up, with the editor's own remainder line saying
+   * what is missing.
+   */
+  const canSave =
+    name.trim().length > 0 && amountMinor > 0 && (!splitting || splitValidation.valid);
 
   return (
     <BottomSheet
@@ -1174,6 +1304,17 @@ function EditTransactionSheet({
               date,
               note: note.trim() || null,
               imageUri,
+              // Only when the editor was actually used: `undefined` leaves any
+              // stored split alone, `[]` deliberately removes it.
+              splits: splitting
+                ? splitParts.map((part) => ({
+                    subcategoryId: part.subcategoryId!,
+                    amountMinor: part.amountMinor!,
+                    note: part.note ?? null,
+                  }))
+                : storedSplits.length > 0
+                  ? []
+                  : undefined,
             })
           }
         />
@@ -1207,6 +1348,71 @@ function EditTransactionSheet({
         size={140}
       />
 
+      {/*
+        Splitting an entry AFTER the fact — optional, and folded away.
+
+        A split is normally decided when a bank message is confirmed, which is
+        the worst moment to know: the receipt is in the other hand and the
+        categories only become obvious later. Offering it here means the
+        decision can be made, or corrected, once the answer is actually known.
+
+        Behind a disclosure because most entries are one thing. An open editor
+        on every entry would make a simple edit look like a form.
+      */}
+      {splitting ? (
+        <View style={{ gap: space.sm }}>
+          <Row justify="space-between" align="center">
+            <Label>SPLIT ACROSS CATEGORIES</Label>
+            <Pressable
+              onPress={() => {
+                setSplitting(false);
+                setSplitParts([]);
+              }}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel the split and keep this as one entry"
+              accessible
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                It was just one
+              </Text>
+            </Pressable>
+          </Row>
+
+          <SplitEditor
+            totalMinor={amountMinor}
+            parts={splitParts}
+            onChange={setSplitParts}
+            currency={splitCurrency}
+            destinations={splitDestinations}
+            onPickLine={setPickingPartKey}
+          />
+        </View>
+      ) : (
+        <Button
+          label="Split across categories"
+          icon="git-branch-outline"
+          variant="ghost"
+          size="sm"
+          onPress={() => {
+            // Seeded with this entry's own line carrying the whole amount, and
+            // an empty second part — the shape of the correction being made.
+            setSplitParts([
+              {
+                key: 'part-1',
+                subcategoryId: txn.subcategoryId,
+                amountMinor,
+                amountText: formatAmountInput(String(amountMinor / 100)),
+                note: null,
+              },
+              { key: 'part-2', subcategoryId: null, amountMinor: null, amountText: '', note: null },
+            ]);
+            setSplitting(true);
+          }}
+        />
+      )}
+
       <Pressable
         onPress={onDelete}
         accessibilityRole="button"
@@ -1224,6 +1430,47 @@ function EditTransactionSheet({
           Delete this entry
         </Text>
       </Pressable>
+      {/*
+        Choosing the line for ONE part — the SAME grid the review screen uses.
+
+        A flat list of every bill was unusable at real length: a category near
+        the bottom sat a thousand points down, so picking one meant scrolling
+        through everything. The grid collapses that to a screen of categories
+        that open into their bills, and — more to the point — it is the control
+        the user already knows from confirming a message. Two different pickers
+        for one decision is one too many.
+      */}
+      <BottomSheet
+        visible={pickingPartKey !== null}
+        /*
+          NOT `asRoute`. That flag renders the chrome bare, for a sheet that IS
+          already the native modal (an expo-router 'modal' screen). This one is
+          nested inside Edit entry, so without its own `<Modal>` it laid out
+          inline at the bottom of the page — the grid appeared a thousand points
+          down the scroll rather than over it.
+        */
+        onClose={() => setPickingPartKey(null)}
+        title="Which line?"
+        icon="git-branch-outline"
+        iconColor={colors.accent}
+        scroll
+      >
+        <CategoryGridPicker
+          categories={splitGridCategories}
+          destinations={splitGridDestinations}
+          selectedId={
+            splitParts.find((part) => part.key === pickingPartKey)?.subcategoryId ?? null
+          }
+          onSelect={(destinationId) => {
+            setSplitParts((current) =>
+              current.map((part) =>
+                part.key === pickingPartKey ? { ...part, subcategoryId: destinationId } : part,
+              ),
+            );
+            setPickingPartKey(null);
+          }}
+        />
+      </BottomSheet>
     </BottomSheet>
   );
 }

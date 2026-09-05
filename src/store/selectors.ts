@@ -37,6 +37,7 @@ import {
   type SavingPlanProgress,
   periodKey,
   resolveCardId,
+  isObligationMet,
   summariseBoard,
   summariseCategory,
   urgencyFor,
@@ -48,9 +49,17 @@ import {
   type SubcategoryStatus,
 } from '~/features/budget/logic/planning';
 import { accountCurrency, fromHomeMinor, isForeignAccount } from '~/features/accounts/logic/accountCurrency';
-import { stateRepo, transactionRepo } from '~/db/repositories';
+import { stateRepo, transactionRepo, transactionSplitRepo } from '~/db/repositories';
 import { isOngoing } from '~/db/schema';
-import type { Subcategory, Transaction, Card, Category, Loan, SubcategoryState } from '~/db/schema';
+import type {
+  Subcategory,
+  Transaction,
+  TransactionSplit,
+  Card,
+  Category,
+  Loan,
+  SubcategoryState,
+} from '~/db/schema';
 import type { CategoryFundingStatus } from '~/db/schema';
 import type { AppState } from '~/store/useAppStore';
 
@@ -250,6 +259,72 @@ function buildCategoryViews(state: AppState): CategoryView[] {
  * DB directly (not the totals map) since the UI needs each row, not just a sum. */
 export function selectTransactions(state: AppState, subcategoryId: string): Transaction[] {
   return transactionRepo.bySubcategoryPeriod(subcategoryId, state.period);
+}
+
+/**
+ * One row of a budget line's entry list, carrying what the LINE is charged
+ * rather than what the payment cost.
+ *
+ * The two differ precisely when the payment was split. A 73,000 transfer split
+ * 53,000 groceries / 20,000 to Samadhi is still one 73,000 payment — `txn` is
+ * that payment, untouched, because the editor has to reopen the split against
+ * the real total or the parts would no longer balance. But this line is only
+ * charged its own part, and `shareMinor` is that part.
+ *
+ * They are kept as separate fields rather than overwriting `txn.amountMinor`
+ * so nothing downstream can silently mistake a share for the payment.
+ */
+export interface TransactionEntry {
+  /** The payment itself, exactly as stored. */
+  txn: Transaction;
+  /** What THIS line is charged: the line's split part, or the whole payment. */
+  shareMinor: number;
+  /** The payment's parts, when it was split — empty when it was not. */
+  splits: TransactionSplit[];
+}
+
+/**
+ * The entry list for an ongoing line, with each row charged to this line only.
+ *
+ * A split payment is stored whole against its ORIGINAL line, with its parts in
+ * `transaction_splits` — so the raw rows overstate that line (it keeps the full
+ * amount) and omit every other line the payment was split onto. Summing the raw
+ * rows is what made a 73,000 transfer split 53,000/20,000 still read as 73,000
+ * spent on groceries, disagreeing with the board, which has always counted
+ * splits properly (see `transactionRepo.totalsByPeriod`).
+ *
+ * So this mirrors that same union, per row:
+ *   - a payment split onto this line contributes its PART, and
+ *   - a payment split away from this line entirely drops out, even though its
+ *     `subcategory_id` still points here.
+ */
+export function selectTransactionEntries(
+  state: AppState,
+  subcategoryId: string,
+): TransactionEntry[] {
+  const owned = transactionRepo.bySubcategoryPeriod(subcategoryId, state.period);
+  const foreign = transactionRepo.splitOntoSubcategoryPeriod(subcategoryId, state.period);
+  const splitsBy = transactionSplitRepo.byTransactions(
+    [...owned, ...foreign].map((txn) => txn.id),
+  );
+
+  const entries: TransactionEntry[] = [];
+  for (const txn of [...owned, ...foreign]) {
+    const splits = splitsBy.get(txn.id) ?? [];
+    if (splits.length === 0) {
+      // Not split: this line owns the payment whole.
+      entries.push({ txn, shareMinor: txn.amountMinor, splits });
+      continue;
+    }
+    // Split: charge only the parts allocated to this line. A payment split
+    // entirely away contributes nothing and is left out of the list.
+    const share = splits
+      .filter((part) => part.subcategoryId === subcategoryId)
+      .reduce((sum, part) => sum + part.amountMinor, 0);
+    if (share > 0) entries.push({ txn, shareMinor: share, splits });
+  }
+
+  return entries.sort((a, b) => new Date(b.txn.date).getTime() - new Date(a.txn.date).getTime());
 }
 
 export function selectCategoryView(state: AppState, categoryId: string): CategoryView | undefined {
@@ -482,6 +557,14 @@ export interface AccountTransferView {
   toTransferHomeMinor: Minor;
   /** Everything planned against this card this month, moved or not. */
   plannedMinor: Minor;
+  /**
+   * The same figure in the HOME currency, for sums across accounts.
+   *
+   * `plannedMinor` is in the account's own currency, which is right for its own
+   * row and wrong to add up — dollars and rupees together are not money in any
+   * unit. Totals use this one, exactly as they do for `toTransferHomeMinor`.
+   */
+  plannedHomeMinor: Minor;
   /** Already moved (transferred or completed). */
   movedMinor: Minor;
   /** Number of lines still awaiting a transfer. */
@@ -574,8 +657,19 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
            * money was moved there; the user might have paid it from whatever
            * balance was already sitting on the card.
            */
+          /*
+           * Read from the ACCOUNT's own state, not its categories'.
+           *
+           * A category funded by three accounts has one flag between them, so
+           * using it here meant money arriving at one account marked the other
+           * two moved as well. `account_transfers` is per account, which is
+           * what this figure has always been about.
+           */
+          // `?.` on the map itself: it is populated by a migration-backed
+          // repo, and a partial state (a fixture, a store mid-hydration) must
+          // not take the board down over a display flag.
           const transferred =
-            (state.categoryStates.get(view.category.id)?.status ?? 'pending') === 'transferred';
+            (state.accountTransferStates?.get(card.id)?.status ?? 'pending') === 'transferred';
 
           if (transferred) {
             moved += amount;
@@ -612,6 +706,7 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
         toTransferMinor: convert(toTransfer),
         toTransferHomeMinor: toTransfer,
         plannedMinor: convert(planned),
+        plannedHomeMinor: planned,
         movedMinor: convert(moved),
         pendingCount,
         categoryNames: [...categoryNames],
@@ -722,15 +817,40 @@ export function selectReminders(state: AppState, today = new Date()): ReminderVi
        * dashboard reading "2 days overdue" permanently, which is both wrong and
        * the kind of false alarm that teaches people to ignore the section.
        *
-       * Its money is handled by the account transfer, and its spending shows on
-       * the plan as a running total against the budget. Neither is a deadline.
+       * That reasoning holds only for a budget with NO monthly figure. One that
+       * has a figure — a LKR 15,000 transfer to Weligama every month — does
+       * have a completion state now: it is done when its spending reaches the
+       * budget (see `isObligationMet`). So it can leave this list, which is the
+       * whole thing that made it unsafe to show, and excluding it meant a real
+       * monthly obligation with a real due day never appeared in "Coming up"
+       * at all.
+       *
+       * A budget-less ongoing line is still skipped, for exactly the original
+       * reason: nothing it can reach makes it finished.
        */
-      if (isOngoing(sub.frequency)) continue;
+      if (isOngoing(sub.frequency) && sub.plannedMinor <= 0) continue;
 
       const status: SubcategoryStatus =
         (state.states.get(sub.id)?.status as SubcategoryStatus) ?? 'pending';
-      // Paid means done — nothing left to remind about.
-      if (status === 'paid') continue;
+      /*
+       * Done means done — by whichever rule this line's kind uses.
+       *
+       * A dated bill is done when ticked; a budgeted ongoing line is done when
+       * its spending reaches the budget. Testing `status` alone would leave a
+       * fully-spent Weligama transfer sitting in "Coming up" for the rest of
+       * the month, which is the permanent-overdue problem the old exclusion
+       * existed to prevent.
+       */
+      if (
+        isObligationMet({
+          frequency: sub.frequency,
+          status,
+          plannedMinor: sub.plannedMinor,
+          actualMinor: state.transactionTotals.get(sub.id) ?? null,
+        })
+      ) {
+        continue;
+      }
 
       // A flexible bill has no fixed date, so it can never be "overdue" and
       // must not appear in the due-date reminder list.

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountFragmentMatches,
+  foreignCurrencyOf,
+  accountTailSeen,
   cardOwnsAccount,
   isDualCurrency,
   isSelfConversion,
@@ -167,5 +170,98 @@ describe('validateAccountNumber', () => {
 
   it('rejects punctuation with no digits at all', () => {
     expect(validateAccountNumber('---')).toBe('Enter the account number');
+  });
+});
+
+describe('accountTailSeen', () => {
+  /** Tails captured from the user's real device. */
+  const seen = ['5584', '6796', '7427', '4150', '5891'];
+
+  it('recognises a number whose tail has arrived in a message', () => {
+    expect(accountTailSeen('102060635584', seen)).toBe(true);
+  });
+
+  /**
+   * The real failure: a number typed correctly from a statement whose printed
+   * tail differs from the one the bank puts in its SMS. Nothing else on screen
+   * would ever connect the silence back to this field.
+   */
+  it('flags a number no message has ever mentioned', () => {
+    expect(accountTailSeen('102000000001', seen)).toBe(false);
+  });
+
+  /**
+   * With no messages seen — a fresh install, or SMS automation not set up —
+   * every number is unverifiable, and warning would be noise on a setup that
+   * is working fine.
+   */
+  it('does not warn when there is no evidence either way', () => {
+    expect(accountTailSeen('102060635584', [])).toBe(true);
+  });
+
+  it('does not warn about a fragment too short to check', () => {
+    expect(accountTailSeen('123', seen)).toBe(true);
+    expect(accountTailSeen('', seen)).toBe(true);
+  });
+
+  it('matches when the message fragment is shorter than four digits of the number', () => {
+    expect(accountTailSeen('138020174150', ['4150'])).toBe(true);
+  });
+});
+
+describe('accountFragmentMatches', () => {
+  /** Front-masked, the common shape: the fragment is a suffix. */
+  it('matches a suffix fragment', () => {
+    expect(accountFragmentMatches('5584', '102060635584')).toBe(true);
+    expect(accountFragmentMatches('7427', '102007417427')).toBe(true);
+  });
+
+  /**
+   * Middle-masked HNB, "Ac No:13802XXXXX50". The longest visible run is a
+   * PREFIX — testing only suffixes matched nothing, which is why three real
+   * HNB debits went unrecognised on the user's device.
+   */
+  it('matches a prefix fragment', () => {
+    expect(accountFragmentMatches('13802', '138020174150')).toBe(true);
+  });
+
+  it('does not match an unrelated account', () => {
+    expect(accountFragmentMatches('5584', '138020174150')).toBe(false);
+    expect(accountFragmentMatches('13802', '102060635584')).toBe(false);
+  });
+
+  /** Below four digits nothing is identifying — "50" matches half the world. */
+  it('refuses a fragment too short to identify anything', () => {
+    expect(accountFragmentMatches('50', '138020174150')).toBe(false);
+    expect(accountFragmentMatches('', '138020174150')).toBe(false);
+  });
+
+  it('ignores masking characters and separators', () => {
+    expect(accountFragmentMatches('XXXXXXXX5584', '1020-6063-5584')).toBe(true);
+  });
+});
+
+describe('foreignCurrencyOf', () => {
+  it('reads the foreign leg of a dual-currency account', () => {
+    expect(foreignCurrencyOf({ currency: null, foreignCurrency: 'USD' }, 'LKR')).toBe('USD');
+  });
+
+  it('reads a wholly foreign account', () => {
+    expect(foreignCurrencyOf({ currency: 'EUR' }, 'LKR')).toBe('EUR');
+  });
+
+  /** The foreign leg wins: it is the side money actually arrives in. */
+  it('prefers the foreign leg over the primary currency', () => {
+    expect(foreignCurrencyOf({ currency: 'LKR', foreignCurrency: 'GBP' }, 'LKR')).toBe('GBP');
+  });
+
+  /** Nothing to convert into the currency it is already in. */
+  it('is null for a home-currency account', () => {
+    expect(foreignCurrencyOf({ currency: 'LKR' }, 'LKR')).toBeNull();
+    expect(foreignCurrencyOf({ currency: null }, 'LKR')).toBeNull();
+  });
+
+  it('is null when there is no account at all', () => {
+    expect(foreignCurrencyOf(null, 'LKR')).toBeNull();
   });
 });

@@ -153,3 +153,83 @@ export function validateAccountNumber(input: string): string | null {
 
   return null;
 }
+
+/**
+ * Whether an account number's tail has ever appeared in a bank message.
+ *
+ * The silent failure this catches: banks mask account numbers to their own
+ * taste, and the tail they print is often NOT the last four of the number on
+ * the statement. Observed on a real device — one DFCC account prints as
+ * "...5584" while another prints "...6796" — so a number typed correctly from a
+ * statement can still match nothing, and the only symptom is messages from that
+ * account never being recognised, with nothing on screen connecting the two.
+ *
+ * Returns false only when there IS evidence to judge against: with no messages
+ * seen yet (a fresh install, SMS automation not set up) every number is
+ * unverifiable, and warning then would be noise on a setup that is working
+ * fine.
+ */
+export function accountTailSeen(
+  accountNumber: string,
+  seenAccounts: readonly string[],
+): boolean {
+  const digits = accountNumber.replace(/\D/g, '');
+  if (digits.length < MIN_MATCHABLE) return true; // Nothing to check yet.
+  if (seenAccounts.length === 0) return true; // No evidence either way.
+
+  const tail = digits.slice(-MIN_MATCHABLE);
+  return seenAccounts.some((seen) => {
+    const s = seen.replace(/\D/g, '');
+    if (s.length < MIN_MATCHABLE) return false;
+    // Either direction: the message's fragment may be shorter or longer than
+    // the four digits being checked.
+    return s.endsWith(tail) || digits.endsWith(s);
+  });
+}
+
+/**
+ * Whether an account fragment from a message identifies a given full number.
+ *
+ * Masking runs both ways, so a suffix test alone is not enough:
+ *
+ *   - "XXXXXXXX5584" hides the front — the fragment is a SUFFIX of the number.
+ *   - "13802XXXXX50" hides the middle — the longest visible run, "13802", is a
+ *     PREFIX. Testing only suffixes matched nothing here, which is why three
+ *     real HNB debits went unrecognised.
+ *
+ * Both directions are checked, and the fragment must still be long enough to
+ * mean something: four digits, matching what a card's `last4` holds.
+ */
+export function accountFragmentMatches(fragment: string, fullNumber: string): boolean {
+  const f = fragment.replace(/\D/g, '');
+  const n = fullNumber.replace(/\D/g, '');
+  if (f.length < MIN_MATCHABLE || n.length < MIN_MATCHABLE) return false;
+
+  return n.endsWith(f) || n.startsWith(f) || f.endsWith(n) || f.startsWith(n);
+}
+
+/**
+ * The foreign currency a specific account holds.
+ *
+ * A dual-currency relationship names its foreign side in `foreignCurrency`
+ * while its primary side stays the home currency; a wholly foreign account
+ * names it in `currency`. Either way this is the currency the salary actually
+ * arrives in, which is the only one the rate screens need.
+ *
+ * Null when the account is entirely in the home currency — there is no rate to
+ * fetch for converting money into the currency it is already in.
+ */
+export function foreignCurrencyOf(
+  account: { currency?: string | null; foreignCurrency?: string | null } | null | undefined,
+  homeCurrency: string,
+): string | null {
+  if (!account) return null;
+  const home = (homeCurrency || 'LKR').trim().toUpperCase();
+
+  for (const code of [account.foreignCurrency, account.currency]) {
+    const upper = code?.trim().toUpperCase();
+    if (upper && upper.length > 0 && upper !== home) return upper;
+  }
+  return null;
+}
+

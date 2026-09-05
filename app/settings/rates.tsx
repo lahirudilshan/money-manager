@@ -9,11 +9,14 @@ import {
   type ResolvedBankRate,
 } from '~/features/rates/logic/bankRates';
 import { readCachedRates, refreshBankRates } from '~/features/rates/logic/bankRatesApi';
-import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
+import { salaryRateCurrency, useSalaryRate } from '~/features/rates/logic/useSalaryRate';
+
 import {
   BottomSheet,
+  Button,
   Divider,
   Empty,
+  GradientButton,
   GradientCard,
   Label,
   Row,
@@ -21,6 +24,7 @@ import {
   Text,
 } from '~/shared/components/ui';
 import { resolveBrand } from '~/shared/data/banks';
+import { Field } from '~/shared/components/forms';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { formatMoney, toMajor } from '~/shared/lib/money';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
@@ -65,13 +69,33 @@ export default function RatesScreen() {
    * own timestamps and the header says how old they are, so stale figures are
    * presented as stale rather than passed off as current.
    */
+  /*
+   * The currency the SALARY arrives in — the only one this screen shows.
+   *
+   * There is no picker. A board may hold several foreign currencies, but the
+   * rate that matters is the one the income is paid in: that is what the board
+   * converts with and what the user actually has to move. Offering the others
+   * would be a choice with no consequence, and the screen would have to explain
+   * which of them was the real answer.
+   *
+   * Falls back to USD before any account declares one, so a fresh board still
+   * opens on something real rather than an empty list.
+   */
+  const currency = useMemo(
+    () => salaryRateCurrency(state),
+    [state.cards, state.incomes, state.currency],
+  );
+
   const [rates, setRates] = useState<BankRate[]>(() =>
-    readCachedRates(settingsRepo.get(SETTINGS_KEYS.bankRates)),
+    readCachedRates(settingsRepo.get(SETTINGS_KEYS.bankRatesFor(currency))),
   );
   const [fetchedAt, setFetchedAt] = useState<string | null>(
-    () => settingsRepo.get(SETTINGS_KEYS.bankRatesFetchedAt) ?? null,
+    () => settingsRepo.get(SETTINGS_KEYS.bankRatesFetchedAtFor(currency)) ?? null,
   );
   const [loading, setLoading] = useState(false);
+  // The manual override stays folded away — see the disclosure below.
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualRate, setManualRate] = useState('');
   const [failed, setFailed] = useState(false);
 
   /*
@@ -111,13 +135,14 @@ export default function RatesScreen() {
       const fetched = await refreshBankRates({
         get: (key) => settingsRepo.get(key),
         set: (key, value) => settingsRepo.set(key, value),
-        keyRates: SETTINGS_KEYS.bankRates,
-        keyFetchedAt: SETTINGS_KEYS.bankRatesFetchedAt,
+        keyRates: SETTINGS_KEYS.bankRatesFor(currency),
+        keyFetchedAt: SETTINGS_KEYS.bankRatesFetchedAtFor(currency),
+        currency,
         force: true,
       });
       if (fetched) {
         setRates(fetched);
-        setFetchedAt(settingsRepo.get(SETTINGS_KEYS.bankRatesFetchedAt) ?? null);
+        setFetchedAt(settingsRepo.get(SETTINGS_KEYS.bankRatesFetchedAtFor(currency)) ?? null);
         // Push into the store too, so the dashboard's dollar figure follows a
         // refresh made here rather than waiting for the next launch.
         state.refreshSettings();
@@ -132,10 +157,18 @@ export default function RatesScreen() {
     [rates.length],
   );
 
+  /*
+   * Reload when the chosen currency changes, and adopt its cache first.
+   *
+   * Reading the cache synchronously means switching to EUR shows yesterday's
+   * EUR rates immediately rather than an empty list while the network answers.
+   */
   useEffect(() => {
-    void load(state.currency);
+    setRates(readCachedRates(settingsRepo.get(SETTINGS_KEYS.bankRatesFor(currency))));
+    setFetchedAt(settingsRepo.get(SETTINGS_KEYS.bankRatesFetchedAtFor(currency)) ?? null);
+    void load(currency);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currency]);
 
   return (
     <BottomSheet
@@ -143,10 +176,38 @@ export default function RatesScreen() {
       asRoute
       onClose={closeModal}
       title="Bank rates"
-      eyebrow="USD → LKR"
+      eyebrow={`${currency} → ${state.currency}`}
       icon="swap-horizontal-outline"
       iconColor={colors.accent}
       scroll
+      /*
+        Pinned, so Save is reachable without scrolling past fourteen bank rows —
+        and only while the override is open, since there is nothing to save
+        otherwise. `footer` keeps it above the keyboard, which matters when the
+        field it commits is the thing being typed into.
+      */
+      footer={
+        manualOpen ? (
+          <Row gap={space.sm}>
+            <Button
+              label="Cancel"
+              variant="ghost"
+              style={{ flex: 1 }}
+              onPress={() => setManualOpen(false)}
+            />
+            <GradientButton
+              label="Save rate"
+              icon="checkmark"
+              style={{ flex: 1 }}
+              onPress={() => {
+                const parsed = Number.parseFloat(manualRate);
+                if (Number.isFinite(parsed) && parsed > 0) state.setUsdRate(parsed);
+                setManualOpen(false);
+              }}
+            />
+          </Row>
+        ) : undefined
+      }
     >
       {/*
         The salary bank and what it pays today — the whole point of the screen.
@@ -193,7 +254,7 @@ export default function RatesScreen() {
                 {myRate.bankName}
               </Text>
               <Text variant="caption" color="rgba(255,255,255,0.8)" numberOfLines={1}>
-                per US dollar today
+                per {currency} today
               </Text>
             </View>
 
@@ -234,7 +295,7 @@ export default function RatesScreen() {
                 <Text variant="caption" color="#FFFFFF" style={{ fontWeight: '800' }}>
                   {gap.gap.toFixed(2)}
                 </Text>{' '}
-                more per dollar
+                more per {currency}
                 {usdNeeded !== null
                   ? ` — about ${formatMoney(Math.round(toMajor(usdNeeded) * gap.gap * 100))} on this month's transfer.`
                   : '.'}
@@ -259,13 +320,53 @@ export default function RatesScreen() {
         </Row>
       ) : null}
 
+      {/*
+        The manual override, folded away.
+
+        The salary bank's rate at the top is right for almost everyone and is
+        adopted automatically, so a rate box sitting open invited typing over a
+        correct answer. Behind a disclosure it stays available for the cases
+        that need it — a bank this source does not carry, or a rate the user
+        negotiated — without being the first thing they meet.
+
+        It sits ABOVE the full bank list because it is an action and the list is
+        reference: the things a user might DO are grouped near the answer they
+        act on, and fourteen rows of comparison are what you scroll to when you
+        want them.
+      */}
+      {manualOpen ? (
+        <View style={{ gap: space.sm }}>
+          <Label>SET IT YOURSELF</Label>
+          <Field
+            label=""
+            value={manualRate}
+            onChangeText={setManualRate}
+            keyboardType="decimal-pad"
+            placeholder={String(state.usdRate)}
+          />
+          <Text variant="caption" tone="muted">
+            Overrides the bank rate until the next automatic update.
+          </Text>
+        </View>
+      ) : (
+        <Button
+          label="Set the rate myself"
+          icon="create-outline"
+          variant="ghost"
+          size="sm"
+          onPress={() => {
+            setManualRate(String(state.usdRate));
+            setManualOpen(true);
+          }}
+        />
+      )}
       <Row justify="space-between" align="center">
-        <Label>ALL BANKS · TT BUYING</Label>
+        <Label>ALL BANKS · {currency} TT BUYING</Label>
         {loading ? (
           <ActivityIndicator size="small" color={colors.inkMuted} />
         ) : (
           <Pressable
-            onPress={() => void load(state.currency)}
+            onPress={() => void load(currency)}
             accessibilityRole="button"
             accessibilityLabel="Refresh rates"
             hitSlop={10}
@@ -283,7 +384,7 @@ export default function RatesScreen() {
             title="Could not load rates"
             message="Check your connection and try again."
             actionLabel="Retry"
-            onAction={() => void load(state.currency)}
+            onAction={() => void load(currency)}
           />
         ) : (
           <Empty icon="hourglass-outline" title="Loading rates" message="Fetching today’s figures." />
@@ -311,9 +412,10 @@ export default function RatesScreen() {
         a user who doubts one go and look.
       */}
       <Text variant="caption" tone="muted">
-        Telegraphic transfer buying — what a bank pays on an inward USD transfer. Rates via
+        Telegraphic transfer buying — what a bank pays on an inward {currency} transfer. Rates via
         ratesdigest.com{fetchedAt ? `, updated ${formatWhen(fetchedAt)}` : ''}.
       </Text>
+
     </BottomSheet>
   );
 }

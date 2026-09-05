@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
-import { Alert, Pressable, ScrollView, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Pressable as GHPressable } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DragReorderList } from '~/shared/components/DragReorderList';
@@ -98,18 +98,29 @@ export default function CategoryDetailScreen() {
   }
 
   return (
-    <>
-      <ScrollView
-        style={{ flex: 1, backgroundColor: colors.canvas }}
-        contentContainerStyle={{
-          paddingTop: insets.top + space.md,
-          paddingBottom: space.xxxl,
+    <View style={{ flex: 1, backgroundColor: colors.canvas }}>
+      {/*
+        The nav row is PINNED, outside the ScrollView.
+
+        Back and Edit scrolled away with the content, so on a category with a
+        dozen bills the way out was wherever the user happened not to be — they
+        had to scroll back up to leave. Both are navigation, not content, and
+        navigation that moves is navigation you have to go looking for.
+
+        A hairline under it rather than a shadow: the row sits on the same
+        canvas colour as the body, so without an edge the pinned strip and the
+        scrolling content read as one surface and the first row of content
+        appears to be cut off mid-scroll.
+      */}
+      <View
+        style={{
+          paddingTop: insets.top + space.sm,
+          paddingBottom: space.sm,
           paddingHorizontal: space.lg,
-          gap: space.lg,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomColor: colors.hairline,
         }}
-        showsVerticalScrollIndicator={false}
       >
-        {/* Nav row. */}
         <Row justify="space-between">
           <Pressable
             onPress={() => router.back()}
@@ -129,7 +140,19 @@ export default function CategoryDetailScreen() {
             <Ionicons name="create-outline" size={22} color={colors.inkSecondary} />
           </Pressable>
         </Row>
+      </View>
 
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          // No safe-area inset here any more — the pinned header above owns it.
+          paddingTop: space.md,
+          paddingBottom: space.xxxl,
+          paddingHorizontal: space.lg,
+          gap: space.lg,
+        }}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Identity. */}
         <Row>
           <Glyph icon={category.icon as never} color={category.color} size={48} />
@@ -414,8 +437,7 @@ export default function CategoryDetailScreen() {
           onPress={confirmDelete}
         />
       </ScrollView>
-
-    </>
+    </View>
   );
 }
 

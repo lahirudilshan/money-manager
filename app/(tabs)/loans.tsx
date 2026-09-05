@@ -23,14 +23,10 @@ import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { selectLoanViews, useAppStore, type LoanView } from '../../src/store/useAppStore';
 import { readableOn, shadeHex } from '~/shared/theme';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 
 export default function LoansScreen() {
   const { colors, radius, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  // Every visit starts at the top — a tab screen stays mounted, so its scroll
-  // offset otherwise survives being left and returned to. See the hook.
-  const scrollRef = useScrollToTopOnFocus();
   const insets = useSafeAreaInsets();
   const state = useAppStore();
 
@@ -196,7 +192,6 @@ export default function LoansScreen() {
       </View>
 
       <ScrollView
-        ref={scrollRef}
         style={{ flex: 1, backgroundColor: colors.canvas }}
         contentContainerStyle={{
           paddingTop: space.md,

@@ -22,8 +22,15 @@ import {
   type ResolvedBankRate,
 } from './bankRates';
 import { resolveSalaryCardId, salaryBankId, type IncomeLineLike, type SalaryCardLike } from './salaryAccount';
+import { foreignCurrencyOf } from '~/features/accounts/logic/dualCurrency';
 
 export interface SalaryRate {
+  /**
+   * The currency the salary arrives in — the only one whose rates matter.
+   *
+   * Null for a purely local board, where there is nothing to convert.
+   */
+  currency: string | null;
   /** The salary bank's row, or null when it is unknown or unpublished. */
   rate: ResolvedBankRate | null;
   /** Every bank's rate, best-paying first. */
@@ -57,7 +64,14 @@ export function useSalaryRate(options: {
     });
     const bankId = salaryBankId(cards, cardId);
 
-    return { rate: rateForBank(all, bankId), all, bankId };
+    const card = cards.find((c) => c.id === cardId) ?? null;
+
+    return {
+      rate: rateForBank(all, bankId),
+      all,
+      bankId,
+      currency: foreignCurrencyOf(card, homeCurrency),
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cards, incomes, homeCurrency, rates]);
 }
@@ -86,4 +100,31 @@ export function salaryBankRate(state: {
   });
 
   return rateForBank(all, salaryBankId(state.cards, cardId))?.ttBuying ?? null;
+}
+
+/**
+ * The currency the salary arrives in, from a plain store snapshot.
+ *
+ * The non-hook twin of `useSalaryRate().currency`, for the places that resolve
+ * it outside React — the store's own hydration and the launch refresh. Keeping
+ * one implementation means the cache written at launch is the cache the board
+ * reads back.
+ *
+ * Defaults to USD so a board with no foreign income still names a real
+ * currency rather than an empty key.
+ */
+export function salaryRateCurrency(state: {
+  cards: readonly (SalaryCardLike & { currency?: string | null; foreignCurrency?: string | null })[];
+  incomes: readonly IncomeLineLike[];
+  currency: string;
+}): string {
+  const cardId = resolveSalaryCardId({
+    cards: state.cards,
+    incomeLines: state.incomes,
+    chosenCardId: settingsRepo.get(SETTINGS_KEYS.salaryCardId),
+    homeCurrency: state.currency,
+  });
+
+  const card = state.cards.find((c) => c.id === cardId) ?? null;
+  return foreignCurrencyOf(card, state.currency) ?? 'USD';
 }

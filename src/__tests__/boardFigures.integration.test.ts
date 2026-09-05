@@ -280,13 +280,39 @@ describe('board figures reconcile across screens', () => {
     }
   });
 
-  /** A budget never appears as a bill to tick off, whatever its amount. */
-  it('keeps ongoing budgets out of the reminder list', () => {
+  /**
+   * A BUDGETLESS ongoing line never appears as a bill to tick off.
+   *
+   * It has nothing it can reach that makes it finished, so it could never
+   * leave the list once its due day passed — a permanent "2 days overdue" that
+   * teaches people to ignore the section.
+   *
+   * A budgeted one is different and DOES belong here: a LKR 15,000 monthly
+   * transfer with a due day is a real obligation, and it clears itself when
+   * spending reaches the budget (see `isObligationMet`). Excluding those meant
+   * a real monthly payment never showed in "Coming up" at all.
+   */
+  it('keeps budgetless ongoing lines out of the reminder list', () => {
     const reminders = selectReminders(state);
-    const ongoingIds = LINES.filter((l) => l.frequency === 'ongoing').map((l) => l.id);
+    const budgetless = LINES.filter(
+      (l) => l.frequency === 'ongoing' && (l.plannedMinor ?? 0) <= 0,
+    ).map((l) => l.id);
 
     for (const reminder of reminders) {
-      expect(ongoingIds).not.toContain(reminder.subcategory.id);
+      expect(budgetless).not.toContain(reminder.subcategory.id);
+    }
+  });
+
+  /** The other half of that rule: a budgeted ongoing line is eligible. */
+  it('allows a budgeted ongoing line into the reminder list', () => {
+    const reminders = selectReminders(state);
+    const budgeted = LINES.filter(
+      (l) => l.frequency === 'ongoing' && (l.plannedMinor ?? 0) > 0,
+    ).map((l) => l.id);
+
+    // Only meaningful when the fixture actually has one.
+    if (budgeted.length > 0) {
+      expect(reminders.some((r) => budgeted.includes(r.subcategory.id))).toBe(true);
     }
   });
 

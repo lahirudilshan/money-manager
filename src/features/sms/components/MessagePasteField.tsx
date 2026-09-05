@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { parseSms, type ParsedSms } from '~/features/sms/logic/smsParser';
 import { readClipboard } from '~/shared/lib/clipboard';
@@ -84,21 +84,41 @@ export function MessagePasteField({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoFillFromClipboard]);
 
-  const preview = value.trim() ? parseSms(value) : null;
+  /*
+   * Memoised on the TEXT, not recomputed every render.
+   *
+   * `parseSms` is pure and cheap, so calling it per render was harmless in
+   * itself — but it returns a fresh object each time, and that object was an
+   * effect dependency below. Reporting it called back into the host, the host
+   * set state, the re-render produced another new object, and the effect fired
+   * again: "Maximum update depth exceeded" on the paste screen, forever.
+   *
+   * Keying the memo on `value` means the identity changes only when the text
+   * does, which is the thing the effect is actually about.
+   */
+  const preview = useMemo(() => (value.trim() ? parseSms(value) : null), [value]);
 
   /*
    * Reported to the host on every change of RESULT, not on every keystroke.
    *
-   * `parseSms` runs each render anyway (it is cheap and pure), but firing the
-   * callback per character would re-render the host on text that has not
-   * changed the outcome — which is most of them.
+   * Guarded on the parsed OUTCOME rather than object identity: two different
+   * keystrokes ("LKR 100 " and "LKR 100") routinely parse to the same
+   * transaction, and re-reporting it would re-render the host for nothing.
+   * A cheap signature compares what the host actually consumes.
    */
-  const lastReported = useRef<ParsedSms | null | undefined>(undefined);
+  const signature = preview
+    ? `${preview.direction}|${preview.kind}|${preview.amountMinor}|${preview.currency ?? ''}|${preview.merchant}|${preview.account}|${preview.date ?? ''}`
+    : null;
+
+  const lastReported = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (lastReported.current === preview) return;
-    lastReported.current = preview;
+    if (lastReported.current === signature) return;
+    lastReported.current = signature;
     onParsed?.(preview);
-  }, [preview, onParsed]);
+    // `preview` is derived from `signature`; depending on it as well would
+    // re-introduce the identity churn this exists to avoid.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, onParsed]);
 
   return (
     <View style={{ gap: space.md }}>

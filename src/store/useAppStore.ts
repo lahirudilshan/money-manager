@@ -3,6 +3,7 @@ import { createSmsSlice } from '~/store/smsSlice';
 import { createActionsSelector, type ActionsOf } from '~/store/selectActions';
 import { buildSchedule, paymentsElapsed, remainingBalance } from '~/features/loans/logic/amortization';
 import { setDisplayCurrency, sumMinor, type Minor } from '~/shared/lib/money';
+import type { AccountTransfer } from '~/db/schema';
 import type { PlanId } from '~/features/budget/logic/plans';
 import {
   hasSiblingTie,
@@ -95,6 +96,7 @@ import {
   cardRepo,
   categoryRepo,
   houseRepo,
+  accountTransferRepo,
   categoryStateRepo,
   fundingRepo,
   incomeRepo,
@@ -109,9 +111,9 @@ import {
   vehicleRepo,
   healthPersonRepo,
   transactionRepo,
+  transactionSplitRepo,
   SETTINGS_KEYS,
 } from '../db/repositories';
-import { seedSampleTemplate } from '../db/seed';
 import { seedFuelSample } from '~/features/fuel/logic/seedFuel';
 import { seedHealthSample } from '~/features/health/logic/seedHealth';
 import {
@@ -134,6 +136,7 @@ import {
 import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '~/features/budget/logic/houses';
 import { toggleMiniApp, type MiniAppId } from '~/shared/lib/miniApps';
 import { readCachedRates } from '~/features/rates/logic/bankRatesApi';
+import { salaryRateCurrency } from '~/features/rates/logic/useSalaryRate';
 import type { BankRate } from '~/features/rates/logic/bankRates';
 import type {
   Card,
@@ -334,7 +337,6 @@ export interface AppState {
     overrides?: { amountMinor?: Minor },
   ) => string | null;
   resetAllData: () => Promise<void>;
-  seedDemoData: () => void;
   completeOnboarding: () => void;
 
   /** Toggle a bill between pending and paid. */
@@ -371,7 +373,9 @@ export interface AppState {
    * automatic confirmation from a matching bank credit. Returns whether
    * anything actually changed.
    */
-  markAccountTransferred: (cardId: string) => boolean;
+  markAccountTransferred: (cardId: string, matchedAmountMinor?: number | null) => boolean;
+  /** Per-account transfer state for the viewed period, keyed by cardId. */
+  accountTransferStates: Map<string, AccountTransfer>;
 
   fundCategory: (categoryId: string, amountMinor: Minor, note?: string) => void;
   unfundCategory: (categoryId: string) => void;
@@ -447,10 +451,23 @@ export interface AppState {
     houseId?: string | null;
   }) => void;
   updateTransaction: (id: string, patch: Partial<NewTransaction>) => void;
+  /**
+   * Replace an existing transaction's splits — an empty list removes them and
+   * returns the entry to a single line.
+   */
+  setTransactionSplits: (
+    transactionId: string,
+    parts: readonly { subcategoryId: string; amountMinor: number; note?: string | null }[],
+  ) => void;
   deleteTransaction: (id: string) => void;
 
   addCard: (input: Omit<NewCard, 'id' | 'color'>) => Card;
   updateCard: (id: string, patch: Partial<NewCard>) => void;
+  /**
+   * Re-pair and re-match every queued message after an account's identifying
+   * numbers change, so a correction reaches messages that already arrived.
+   */
+  recheckQueueAfterAccountChange: () => void;
   deleteCard: (id: string) => void;
 
   addIncome: (input: Omit<NewIncome, 'id'>) => void;
@@ -710,6 +727,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   subcategories: [],
   states: new Map(),
   categoryStates: new Map(),
+  accountTransferStates: new Map(),
   fundingTotals: new Map(),
   transactionTotals: new Map(),
   incomes: [],
@@ -845,6 +863,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       subcategories: subcategoryRepo.all(),
       states: stateRepo.byPeriod(period),
       categoryStates: categoryStateRepo.byPeriod(period),
+      accountTransferStates: accountTransferRepo.byPeriod(period),
       fundingTotals: fundingRepo.totalsByPeriod(period),
       transactionTotals: transactionRepo.totalsByPeriod(period),
       incomes: incomeRepo.all(),
@@ -863,7 +882,17 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     set({
       currency,
       usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
-      bankRates: readCachedRates(settingsRepo.get(SETTINGS_KEYS.bankRates)),
+      /*
+       * The SALARY currency's cache, not always USD's.
+       *
+       * Namespacing the caches per currency left this reading the unsuffixed
+       * (USD) key, so a GBP-paid board loaded no rates at all and the
+       * dashboard's foreign figure silently vanished. `salaryRateCurrency`
+       * resolves the same currency the screens and the launch refresh use.
+       */
+      bankRates: readCachedRates(
+        settingsRepo.get(SETTINGS_KEYS.bankRatesFor(salaryRateCurrency(get()))),
+      ),
       themeMode:
         (settingsRepo.get(SETTINGS_KEYS.themeMode) as 'system' | 'light' | 'dark') ?? 'system',
       hapticsEnabled: settingsRepo.get(SETTINGS_KEYS.haptics) !== 'false',
@@ -1339,12 +1368,6 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     get().refresh();
   },
 
-  /** Dev-only convenience: reloads the genericized sample template. */
-  seedDemoData() {
-    seedSampleTemplate();
-    get().refresh();
-  },
-
   completeOnboarding() {
     settingsRepo.set(SETTINGS_KEYS.onboarded, 'true');
     set({ needsOnboarding: false });
@@ -1424,70 +1447,49 @@ export const useAppStore = create<AppState>((set, get, api) => ({
    * Returns whether anything changed, so the caller can log an auto-mark
    * distinctly from a message that merely happened to be internal.
    */
-  markAccountTransferred(cardId) {
-    const { period, categories, subcategories, categoryStates } = get();
+  markAccountTransferred(cardId, matchedAmountMinor = null) {
+    const { period, accountTransferStates } = get();
 
-    const fundedCategoryIds = categories
-      .filter((category) =>
-        subcategories.some(
-          (sub) =>
-            sub.categoryId === category.id &&
-            sub.type === 'expense' &&
-            resolveCardId(sub.cardId, category.cardId) === cardId,
-        ),
-      )
-      .map((category) => category.id)
-      // Already transferred categories are skipped rather than rewritten, so
-      // the return value reports a real change.
-      .filter((id) => (categoryStates.get(id)?.status ?? 'pending') !== 'transferred');
-
-    if (fundedCategoryIds.length === 0) return false;
-
-    for (const id of fundedCategoryIds) {
-      categoryStateRepo.setStatus(id, period, 'transferred');
+    /*
+     * ONE row, for this account only.
+     *
+     * This used to mark every CATEGORY the account funds, which was wrong the
+     * moment a category is funded by more than one account — and a real board
+     * has several. Marking "Living" transferred because money arrived at the
+     * NDB account also settled the DFCC and HNB shares of Living, so an
+     * account the user had not touched read as moved. `account_transfers`
+     * exists precisely so this is a statement about one account.
+     */
+    if ((accountTransferStates.get(cardId)?.status ?? 'pending') === 'transferred') {
+      return false;
     }
 
+    accountTransferRepo.setStatus(cardId, period, 'transferred', matchedAmountMinor);
     get().refreshBoard();
     return true;
   },
 
   toggleAccountTransfer(cardId) {
-    const { period, categories, subcategories, categoryStates } = get();
-
-    const fundedCategoryIds = new Set(
-      categories
-        .filter((category) =>
-          subcategories.some(
-            (sub) =>
-              sub.categoryId === category.id &&
-              sub.type === 'expense' &&
-              resolveCardId(sub.cardId, category.cardId) === cardId,
-          ),
-        )
-        .map((category) => category.id),
-    );
-
-    if (fundedCategoryIds.size === 0) return;
+    const { period, accountTransferStates } = get();
 
     /*
-     * One tap sets them all the same way, rather than flipping each in place.
+     * One row per account, flipped in place.
      *
-     * The account reads as done only when everything it funds is transferred,
-     * so a half-transferred account must resolve to "mark the rest" — toggling
-     * each category independently would leave it in the same mixed state and
-     * the tap would appear to do nothing.
+     * This used to write through to every CATEGORY the account funds, which
+     * settled other accounts' shares of any shared category — see
+     * `markAccountTransferred` and the `accountTransfers` table.
      */
-    const allTransferred = [...fundedCategoryIds].every(
-      (id) => (categoryStates.get(id)?.status ?? 'pending') === 'transferred',
+    const current = accountTransferStates.get(cardId)?.status ?? 'pending';
+    accountTransferRepo.setStatus(
+      cardId,
+      period,
+      current === 'transferred' ? 'pending' : 'transferred',
     );
-    const next = allTransferred ? 'pending' : 'transferred';
-
-    for (const id of fundedCategoryIds) {
-      categoryStateRepo.setStatus(id, period, next);
-    }
 
     get().refreshBoard();
   },
+
+
 
   fundCategory(categoryId, amountMinor, note) {
     if (amountMinor <= 0) return;
@@ -1820,6 +1822,42 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     });
     get().refreshBoard();
   },
+  /**
+   * Re-split an existing transaction, or collapse it back to one line.
+   *
+   * A split is normally decided when a bank message is confirmed, but that is
+   * the worst moment to know: the receipt is in the other hand, and the
+   * categories only become obvious later. This lets the decision be made — or
+   * corrected — from the entry itself.
+   *
+   * An empty `parts` list REMOVES the split rather than leaving one behind.
+   * The transaction stays whole either way; splits are how its amount is
+   * attributed, never a second copy of the money (see `transactionSplits`).
+   */
+  setTransactionSplits(transactionId, parts) {
+    transactionSplitRepo.replace(
+      transactionId,
+      parts.map((part) => ({
+        subcategoryId: part.subcategoryId,
+        amountMinor: part.amountMinor,
+        note: part.note ?? null,
+      })),
+    );
+
+    /*
+     * The transaction's OWN line follows the first part.
+     *
+     * Its `subcategoryId` is what the board reads when nothing is split, and
+     * leaving it on the old category would make an entry that reads as
+     * belonging somewhere none of its parts do.
+     */
+    if (parts.length > 0) {
+      transactionRepo.update(transactionId, { subcategoryId: parts[0].subcategoryId });
+    }
+
+    get().refreshBoard();
+  },
+
   updateTransaction(id, patch) {
     // Keep the period in sync if the date moved to another month.
     const next = patch.date ? { ...patch, period: periodKey(patch.date) } : patch;
@@ -1834,11 +1872,61 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   addCard(input) {
     const created = cardRepo.create({ ...input, color: nextColor(get().cards.length) });
     get().refreshBoard();
+    // A new account can be the missing half of a transfer already sitting in
+    // the queue — see `recheckQueueAfterAccountChange`.
+    get().recheckQueueAfterAccountChange();
     return created;
   },
   updateCard(id, patch) {
+    const before = get().cards.find((card) => card.id === id);
     cardRepo.update(id, patch);
     get().refreshBoard();
+
+    /*
+     * Re-evaluate the queue when the numbers that IDENTIFY this account change.
+     *
+     * Matching happens on arrival, so a message that arrived while an account
+     * number was wrong stays mis-classified forever — the correction never
+     * reaches it. Observed on a real device: an NDB account carried a stale
+     * last-4, so a LKR 282,534 transfer from DFCC sat in the queue as two
+     * separate spends, and fixing the number changed nothing.
+     *
+     * Only when an identifying field actually moved. A rename or a colour
+     * change cannot alter what matches, and re-pruning on every keystroke of a
+     * nickname would be wasted work on the whole inbox.
+     */
+    const identityChanged = (
+      ['accountNumber', 'last4', 'foreignAccountNumber', 'foreignLast4'] as const
+    ).some((key) => key in patch && patch[key] !== before?.[key]);
+
+    /*
+     * Deferred a tick, so the recheck sees the SAVED card.
+     *
+     * `refreshBoard` above republishes the store, but the recheck reads
+     * `selectAccountTransfers`, which is derived from that state — running it
+     * synchronously in the same call read the pre-save snapshot, so a corrected
+     * account number was still the old one at the moment it mattered and
+     * nothing matched. Observed on a real device: the transfer paired and was
+     * hidden, but the account it funded was never marked moved.
+     */
+    if (identityChanged) {
+      setTimeout(() => get().recheckQueueAfterAccountChange(), 0);
+    }
+  },
+  /**
+   * Re-run pairing and auto-marking over everything already queued.
+   *
+   * `pruneSmsQueue` is the pass that does the work: it re-pairs internal
+   * transfers, retires both halves, and marks a matching account moved. This
+   * only wraps it so callers say WHY rather than how, and so a failure to
+   * re-check can never break saving an account.
+   */
+  recheckQueueAfterAccountChange() {
+    try {
+      get().pruneSmsQueue();
+    } catch (error) {
+      console.warn('Queue recheck skipped:', error);
+    }
   },
   deleteCard(id) {
     cardRepo.remove(id);

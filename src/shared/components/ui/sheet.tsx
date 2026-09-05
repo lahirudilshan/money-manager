@@ -217,7 +217,14 @@ function SheetChrome({
 }: SheetProps) {
   const { colors, radius, space } = useTheme();
   const insets = useSafeAreaInsets();
-  const keyboardHeight = useKeyboardHeight(Boolean(footer));
+  /*
+   * Tracked whenever the sheet SCROLLS, not only when it has a footer.
+   *
+   * The footer uses it to lift itself; the scroll content uses it to add room
+   * beneath the last field. A scrolling sheet with no footer still needs the
+   * second.
+   */
+  const keyboardHeight = useKeyboardHeight(Boolean(footer) || Boolean(scroll));
 
   return (
     <View
@@ -382,7 +389,20 @@ function SheetChrome({
              *
              * `space.lg` alone is right when there is no footer to clear.
              */
-            paddingBottom: footer ? FOOTER_CLEARANCE : space.lg,
+            /*
+             * Plus the KEYBOARD's height while it is up.
+             *
+             * Without it the content ends where it always did, so a field near
+             * the bottom sits under the keyboard with nothing below it to
+             * scroll into view. `decimal-pad` has no return key, so on a form
+             * with two amounts — the split editor — typing into the first left
+             * the second unreachable and the keyboard undismissable.
+             *
+             * Added to the existing clearance rather than replacing it: the
+             * footer is still pinned above the keyboard and still needs its
+             * own room.
+             */
+            paddingBottom: (footer ? FOOTER_CLEARANCE : space.lg) + keyboardHeight,
           }}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"

@@ -16,13 +16,25 @@
  * an account with a non-zero outstanding balance, is what makes the inference
  * safe enough to act on without asking.
  *
- * ## Why exact, not approximate
+ * ## Why ROUNDED, not exact to the cent
  *
- * No tolerance at all. A near-match is a different transfer that happens to be
- * close, and marking a month funded on "close enough" hides a shortfall the
- * user would never think to look for. Exact means the figure the app told them
- * to move is the figure that arrived.
+ * Almost exact. The board's total carries cents — a real one came to
+ * LKR 282,533.59 — and nobody types that into a transfer form: they send
+ * 282,534. Requiring the cent to agree would reject the very transfer the
+ * feature exists to recognise, on every account whose bills do not happen to
+ * sum to a whole rupee.
+ *
+ * So the match allows the gap between the figure and its rounding up to the
+ * next whole unit, and no more. That is under one currency unit — far too
+ * tight for a different payment to slip through, and exactly wide enough for
+ * the rounding a human does when reading the number off the screen.
+ *
+ * Anything looser would be guessing. A tolerance of even a few rupees would
+ * let a genuinely different transfer mark a month funded, hiding a shortfall
+ * the user has no reason to go looking for.
  */
+
+import { ownerOfAccount } from '~/features/sms/logic/accountMasks';
 
 /** An account awaiting a transfer, as this module needs to see it. */
 export interface PendingAccount {
@@ -32,6 +44,17 @@ export interface PendingAccount {
   /** Last 4 of the account's number(s), for matching the message. */
   last4: string | null;
   foreignLast4?: string | null;
+  /*
+   * The FULL numbers as well as the tails.
+   *
+   * The two can disagree — a card saved before `last4` was derived from the
+   * visible field carries a stale tail — and the full number is then the more
+   * trustworthy of the two. Observed on a real device: an NDB account numbered
+   * ...6796 still held last4 "3824" from an earlier edit, so it matched none of
+   * its own messages.
+   */
+  accountNumber?: string | null;
+  foreignAccountNumber?: string | null;
 }
 
 /** A credit the app has just seen, reduced to what identifies it. */
@@ -44,12 +67,48 @@ export interface InboundCredit {
   isCredit: boolean;
 }
 
-const MIN_MATCHABLE = 4;
+/**
+ * The bank fees a CEFTS/SLIPS transfer commonly adds, in minor units.
+ *
+ * A transfer of 282,533.59 arrives as 282,534 — or as 282,559 when the bank
+ * bundles its LKR 25 fee into the same movement. Those few fixed charges are
+ * the difference between recognising the user's transfer and rejecting it, and
+ * they are FIXED amounts rather than a percentage, which is what makes
+ * allowing them safe: the window stays a few rupees wide however large the
+ * transfer is.
+ *
+ * Listed explicitly rather than as a tolerance range. A range of "up to 30"
+ * would also swallow a genuinely different payment that happens to fall inside
+ * it; matching only the real fee amounts keeps the accident surface tiny.
+ */
+const BANK_FEES_MINOR = [0, 5_00, 25_00, 30_00, 50_00] as const;
 
-function tailMatches(tail: string | null | undefined, account: string): boolean {
-  const t = (tail ?? '').replace(/\D/g, '');
-  const a = account.replace(/\D/g, '');
-  return t.length >= MIN_MATCHABLE && a.length >= MIN_MATCHABLE && a.endsWith(t);
+/**
+ * Whether a credit settles an outstanding balance.
+ *
+ * Three things are allowed, and nothing else:
+ *
+ *   - the exact figure;
+ *   - it rounded UP to the next whole unit, because the board asks for
+ *     282,533.59 and nobody types the cents;
+ *   - either of those plus one of the fixed bank fees above, since the charge
+ *     rides along with the transfer.
+ *
+ * Never LESS than what is owed. A short transfer has not settled the account,
+ * and saying it has would hide a shortfall the user has no reason to look for
+ * — which is the one failure this whole feature must not produce.
+ */
+function amountSettles(owedMinor: number, paidMinor: number): boolean {
+  const roundedUp = Math.ceil(owedMinor / 100) * 100;
+
+  return BANK_FEES_MINOR.some(
+    (fee) => paidMinor === owedMinor + fee || paidMinor === roundedUp + fee,
+  );
+}
+
+/** Whether the message's account fragment is one of this account's numbers. */
+function accountMatches(account: PendingAccount, fragment: string): boolean {
+  return ownerOfAccount([{ id: account.cardId, ...account }], fragment) !== null;
 }
 
 /**
@@ -75,9 +134,8 @@ export function matchTransferToAccount(
       // An account with nothing outstanding has no transfer to confirm, and
       // matching one would mark a settled month "moved" a second time.
       account.toTransferMinor > 0 &&
-      account.toTransferMinor === credit.amountMinor &&
-      (tailMatches(account.last4, credit.account!) ||
-        tailMatches(account.foreignLast4, credit.account!)),
+      amountSettles(account.toTransferMinor, credit.amountMinor) &&
+      accountMatches(account, credit.account!),
   );
 
   /*

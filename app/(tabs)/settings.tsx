@@ -24,21 +24,7 @@ import {
   useAppStore,
 } from '../../src/store/useAppStore';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
-import {
-  averageRate,
-  driftPercent,
-  isFetchDue,
-  latestRate,
-  parseHistory,
-  recordRate,
-  serialiseHistory,
-  type RateMode,
-} from '~/shared/lib/exchangeRate';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
-import { BankLogo } from '~/features/accounts/components/BankLogo';
-import { resolveBrand } from '~/shared/data/banks';
-import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
 
 
 /** Currencies offered, with a symbol and full name for the richer picker. */
@@ -68,44 +54,21 @@ const CURRENCIES: { code: string; symbol: string; name: string; flag: string }[]
  * dollar income at the spot rate: that over-commits the budget the moment the
  * rupee strengthens, whereas a conservative figure merely under-promises.
  */
-const RATE_MODES: { key: RateMode; label: string; hint: string }[] = [
-  {
-    key: 'safe',
-    label: 'Safe',
-    hint: 'Your own conservative figure — best for planning future income.',
-  },
-  {
-    key: 'average',
-    label: 'Average',
-    hint: 'The mean of recent readings — smooths out one unusual day.',
-  },
-  {
-    key: 'live',
-    label: 'Live',
-    hint: 'The latest fetched rate — best for money that already arrived.',
-  },
-];
 
 export default function SettingsScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  // Every visit starts at the top — a tab screen stays mounted, so its scroll
-  // offset otherwise survives being left and returned to. See the hook.
-  const scrollRef = useScrollToTopOnFocus();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
   const state = useAppStore();
   const enabled = parseEnabled(state.miniApps);
   const resetAllData = useAppStore((s) => s.resetAllData);
-  const seedDemoData = useAppStore((s) => s.seedDemoData);
 
   const views = useMemo(() => selectCategoryViews(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
 
   const [clearing, setClearing] = useState(false);
-  const [seeding, setSeeding] = useState(false);
-  const [rateOpen, setRateOpen] = useState(false);
   const [rateText, setRateText] = useState(String(state.usdRate));
   const [syncing, setSyncing] = useState(false);
   const [currencyOpen, setCurrencyOpen] = useState(false);
@@ -147,86 +110,9 @@ export default function SettingsScreen() {
     void canUseBiometrics().then(setBiometricsAvailable);
   }, []);
   const [themeOpen, setThemeOpen] = useState(false);
-  const [fetchingRate, setFetchingRate] = useState(false);
-  const [autoFetch, setAutoFetch] = useState(
-    () => settingsRepo.get(SETTINGS_KEYS.rateAutoFetch) === 'true',
-  );
-  const [rateMode, setRateMode] = useState<RateMode>(
-    () => (settingsRepo.get(SETTINGS_KEYS.rateMode) as RateMode) ?? 'safe',
-  );
-  const [rateHistory, setRateHistory] = useState(() =>
-    parseHistory(settingsRepo.get(SETTINGS_KEYS.rateHistory)),
-  );
-  const lastFetched = settingsRepo.get(SETTINGS_KEYS.rateFetchedAt) ?? null;
 
-  /*
-   * The user's own bank's rate, read from the per-bank cache.
-   *
-   * Read-only here — the rates screen owns fetching and adopting. This sheet
-   * only needs enough to show what their bank actually pays beside the figure
-   * the board is using, because that comparison is the reason to open the
-   * fuller screen at all.
-   */
-  const { rate: myBankRate } = useSalaryRate({
-    cards: state.cards,
-    incomes: state.incomes,
-    homeCurrency: state.currency,
-    rates: state.bankRates,
-  });
-  const drift = driftPercent(latestRate(rateHistory), parseFloat(rateText) || 0);
 
-  /** Fetch the live USD→currency rate. Uses a free, key-less endpoint; on any
-   * failure the user can still type the rate by hand. */
-  /**
-   * Fetch and RECORD the live rate.
-   *
-   * The reading is appended to the stored history rather than only filling the
-   * input, which is what makes the average mode possible and lets the user see
-   * whether their safe rate has drifted out of touch. `quiet` suppresses the
-   * alerts for the automatic daily fetch — a background refresh that fails
-   * should not interrupt someone who came to Settings for something else.
-   */
-  async function fetchRate(quiet = false) {
-    setFetchingRate(true);
-    try {
-      const res = await fetch(`https://open.er-api.com/v6/latest/USD`);
-      const data = await res.json();
-      const rate = data?.rates?.[state.currency];
 
-      if (typeof rate === 'number' && rate > 0) {
-        const rounded = Math.round(rate * 100) / 100;
-        if (!quiet) setRateText(String(rounded));
-
-        const next = recordRate(rateHistory, rounded);
-        setRateHistory(next);
-        settingsRepo.set(SETTINGS_KEYS.rateHistory, serialiseHistory(next));
-        settingsRepo.set(SETTINGS_KEYS.rateFetchedAt, new Date().toISOString());
-      } else if (!quiet) {
-        Alert.alert('Could not fetch', `No rate available for ${state.currency}. Enter it manually.`);
-      }
-    } catch {
-      if (!quiet) {
-        Alert.alert('Could not fetch', 'Check your connection, or enter the rate manually.');
-      }
-    } finally {
-      setFetchingRate(false);
-    }
-  }
-
-  /*
-   * The automatic daily refresh.
-   *
-   * Guarded by `isFetchDue` so opening Settings repeatedly costs nothing —
-   * published rates move on a daily cycle, and refetching per visit would spend
-   * the user's data to redraw the same number.
-   */
-  useEffect(() => {
-    if (!autoFetch) return;
-    if (!isFetchDue(settingsRepo.get(SETTINGS_KEYS.rateFetchedAt))) return;
-
-    void fetchRate(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoFetch]);
 
   async function handleSyncReminders() {
     const blocked = unavailableReason();
@@ -258,32 +144,7 @@ export default function SettingsScreen() {
     }
   }
 
-  function handleSaveRate() {
-    const parsed = Number.parseFloat(rateText);
-    if (Number.isFinite(parsed) && parsed > 0) state.setUsdRate(parsed);
-    setRateOpen(false);
-  }
 
-  function handleSeedDemo() {
-    Alert.alert(
-      'Load demo data?',
-      'This adds the sample cards, categories, income and loans on top of whatever is already here.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Load',
-          onPress: () => {
-            setSeeding(true);
-            try {
-              seedDemoData();
-            } finally {
-              setSeeding(false);
-            }
-          },
-        },
-      ],
-    );
-  }
 
   /**
    * Turn App Lock on or off.
@@ -433,7 +294,6 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView
-        ref={scrollRef}
         style={{ flex: 1, backgroundColor: colors.canvas }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -585,10 +445,9 @@ export default function SettingsScreen() {
             title="USD exchange rate"
             subtitle="Bank rates, and what to plan at"
             valueLabel={`${state.currency} ${state.usdRate}`}
-            onPress={() => {
-              setRateText(String(state.usdRate));
-              setRateOpen(true);
-            }}
+            // Straight to the rates screen. The intermediate sheet restated
+            // what that screen already shows, so it was one tap of nothing.
+            onPress={() => router.push('/settings/rates')}
           />
           <Divider />
           <SettingRow
@@ -694,19 +553,6 @@ export default function SettingsScreen() {
           />
         </Section>
 
-        {__DEV__ ? (
-          <Section title="DEVELOPER" note="Only visible in dev builds.">
-            <SettingRow
-              icon="flask-outline"
-              color={colors.accent}
-              title="Seed demo data"
-              subtitle="Loads the sample plan used for development"
-              onPress={handleSeedDemo}
-              disabled={seeding}
-            />
-          </Section>
-        ) : null}
-
         <Section
           title="DANGER ZONE"
           note="Everything below acts on the data stored on this device only. There is no cloud backup, so a clear cannot be recovered."
@@ -750,257 +596,6 @@ export default function SettingsScreen() {
 
       {/* USD exchange-rate editor — a bottom sheet with a live rate display, a
           one-tap fetch, and a conversion preview. */}
-      <BottomSheet visible={rateOpen} onClose={() => setRateOpen(false)} title="USD exchange rate">
-        <ScrollView
-          contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.md, gap: space.md }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <Text variant="caption" tone="muted">
-            How many {state.currency} one US dollar is worth — used to convert foreign-currency
-            income.
-          </Text>
-
-          {/* Big live rate. */}
-          <Surface style={{ alignItems: 'center', gap: 2, backgroundColor: colors.accentSoft }}>
-            <Label color={colors.accent}>1 USD =</Label>
-            <Text variant="display" color={colors.accent}>
-              {state.currency} {parseFloat(rateText) || 0}
-            </Text>
-          </Surface>
-
-          {/*
-            What the user's OWN bank pays, next to the figure above.
-
-            The rate in this sheet has always been a mid-market number, which
-            is not one anybody is paid at — a bank credits its own telegraphic
-            transfer buying rate, several rupees lower. Putting the two side by
-            side is the whole argument: the difference is money the plan is
-            counting on and will not receive.
-
-            Only shown once the per-bank rates have been fetched at least once,
-            since a row reading "—" would raise the question without answering
-            it. The link below is offered either way.
-          */}
-          {myBankRate?.ttBuying ? (
-            <Pressable
-              onPress={() => {
-                setRateOpen(false);
-                router.push('/settings/rates');
-              }}
-              accessibilityRole="button"
-              accessibilityLabel={`Your bank pays ${myBankRate.ttBuying.toFixed(2)}. See all bank rates.`}
-              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
-            >
-              <Surface padded={false}>
-                <Row gap={space.md} style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
-                  <BankLogo brand={resolveBrand({ bankName: myBankRate.bankName })} size={32} />
-                  <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-                    <Text variant="bodyStrong" numberOfLines={1}>
-                      {myBankRate.bankName}
-                    </Text>
-                    <Text variant="caption" tone="muted" numberOfLines={1}>
-                      What your salary bank actually pays
-                    </Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text variant="figure" color={colors.accent}>
-                      {myBankRate.ttBuying.toFixed(2)}
-                    </Text>
-                    {/*
-                      The shortfall against the figure in use, only when the
-                      board is set ABOVE what the bank pays — that is the
-                      direction that leaves a plan short, and the only one
-                      worth interrupting the user about.
-                    */}
-                    {(parseFloat(rateText) || 0) > myBankRate.ttBuying ? (
-                      <Text variant="caption" color={colors.pending}>
-                        {((parseFloat(rateText) || 0) - myBankRate.ttBuying).toFixed(2)} below yours
-                      </Text>
-                    ) : null}
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-                </Row>
-              </Surface>
-            </Pressable>
-          ) : null}
-
-          {/*
-            The route to the full board of banks.
-
-            Kept as a plain secondary action rather than a card: the list is
-            reference, consulted when setting the rate or shopping for a better
-            bank, not something to act on every time this sheet opens.
-          */}
-          <Button
-            label={myBankRate ? 'See all bank rates' : 'Compare all bank rates'}
-            icon="list-outline"
-            variant="ghost"
-            onPress={() => {
-              setRateOpen(false);
-              router.push('/settings/rates');
-            }}
-          />
-
-          <View style={{ gap: space.sm }}>
-            <Label>SET RATE</Label>
-            <TextInput
-              value={rateText}
-              onChangeText={setRateText}
-              keyboardType="decimal-pad"
-              placeholder="300"
-              placeholderTextColor={colors.inkMuted}
-              style={{
-                borderWidth: 1,
-                borderColor: colors.hairlineStrong,
-                borderRadius: 12,
-                paddingHorizontal: space.md,
-                paddingVertical: 13,
-                color: colors.ink,
-                fontSize: 20,
-                fontWeight: '700',
-                textAlign: 'center',
-              }}
-            />
-          </View>
-
-          <Button
-            label={fetchingRate ? 'Fetching today’s rate…' : `Fetch live USD → ${state.currency}`}
-            icon="cloud-download-outline"
-            variant="secondary"
-            loading={fetchingRate}
-            onPress={() => void fetchRate()}
-          />
-
-          {/*
-            Keep it current on its own. Guarded to once a day (see
-            `isFetchDue`), because published rates move on a daily cycle and
-            refetching per launch spends data to redraw the same number.
-          */}
-          <Surface padded={false} style={{ overflow: 'hidden' }}>
-            <Row
-              gap={space.md}
-              style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
-            >
-              <Ionicons name="sync-outline" size={19} color={colors.accent} />
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text variant="bodyStrong">Update daily</Text>
-                <Text variant="caption" tone="muted">
-                  {lastFetched
-                    ? `Last checked ${new Date(lastFetched).toLocaleDateString()}`
-                    : 'Fetches once a day while the app is open'}
-                </Text>
-              </View>
-              <Switch
-                value={autoFetch}
-                onValueChange={(next) => {
-                  setAutoFetch(next);
-                  settingsRepo.set(SETTINGS_KEYS.rateAutoFetch, next ? 'true' : 'false');
-                }}
-              />
-            </Row>
-          </Surface>
-
-          {/*
-            WHICH figure the board converts with.
-
-            The distinction matters most for planning: someone paid in USD who
-            budgets at the spot rate is over-committed the moment the rupee
-            strengthens, so "Safe" — their own conservative number — is the
-            default rather than the live one.
-          */}
-          <View style={{ gap: space.sm }}>
-            <Label>USE FOR CONVERSIONS</Label>
-            <Row gap={6}>
-              {RATE_MODES.map((mode) => {
-                const active = rateMode === mode.key;
-                const value =
-                  mode.key === 'live'
-                    ? latestRate(rateHistory)
-                    : mode.key === 'average'
-                      ? averageRate(rateHistory)
-                      : parseFloat(rateText) || 0;
-
-                return (
-                  <Pressable
-                    key={mode.key}
-                    onPress={() => {
-                      setRateMode(mode.key);
-                      settingsRepo.set(SETTINGS_KEYS.rateMode, mode.key);
-                    }}
-                    accessibilityRole="radio"
-                    accessibilityState={{ selected: active }}
-                    style={({ pressed }) => ({
-                      opacity: pressed ? 0.7 : 1,
-                      flex: 1,
-                      minWidth: 0,
-                      alignItems: 'center',
-                      gap: 1,
-                      paddingVertical: 9,
-                      borderRadius: 12,
-                      backgroundColor: active ? colors.accent : colors.surface,
-                      borderWidth: 1,
-                      borderColor: active ? colors.accent : colors.hairline,
-                    })}
-                  >
-                    <Text
-                      variant="bodyStrong"
-                      color={active ? colors.inkInverse : colors.ink}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.8}
-                    >
-                      {value ? Math.round(value) : '—'}
-                    </Text>
-                    <Text
-                      variant="caption"
-                      color={active ? colors.inkInverse : colors.inkMuted}
-                      numberOfLines={1}
-                    >
-                      {mode.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </Row>
-            <Text variant="caption" tone="muted">
-              {RATE_MODES.find((mode) => mode.key === rateMode)?.hint}
-            </Text>
-          </View>
-
-          {/*
-            Drift, shown only when it is worth acting on.
-
-            A "safe" rate set months ago and left 20% below spot is not
-            conservative — it is out of date, and nothing else on this screen
-            would say so.
-          */}
-          {drift !== null && Math.abs(drift) >= 5 ? (
-            <Row gap={space.sm}>
-              <Ionicons
-                name="trending-up-outline"
-                size={16}
-                color={drift > 0 ? colors.pending : colors.completed}
-              />
-              <Text variant="caption" tone="secondary" style={{ flex: 1 }}>
-                The live rate is {Math.abs(drift)}% {drift > 0 ? 'above' : 'below'} your saved
-                rate.
-              </Text>
-            </Row>
-          ) : null}
-
-          {/* Conversion preview: what $100 becomes. */}
-          <Row justify="space-between" style={{ paddingHorizontal: space.xs }}>
-            <Text variant="small" tone="muted">
-              $100 becomes
-            </Text>
-            <Text variant="figure">
-              {state.currency} {((parseFloat(rateText) || 0) * 100).toLocaleString()}
-            </Text>
-          </Row>
-
-          <Button label="Save rate" icon="checkmark" onPress={handleSaveRate} />
-        </ScrollView>
-      </BottomSheet>
 
       {/* Currency picker — a bottom sheet listing each currency with its symbol,
           flag and full name. */}

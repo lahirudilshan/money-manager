@@ -382,6 +382,31 @@ export const smsLogRepo = {
     }
   },
 
+  /**
+   * Every distinct account fragment the app has ever seen in a bank message.
+   *
+   * Used to tell the user, at the moment they type an account number, that it
+   * matches nothing their bank has actually sent. Banks mask account numbers to
+   * their own taste — one DFCC account prints as "...5584" while another prints
+   * "...6796" — so the number on a statement is often NOT the tail that arrives
+   * in an SMS, and a mismatch fails silently: the account simply never matches
+   * a message and nothing on screen says why.
+   *
+   * Returns an empty list on any failure, so a form can only ever fail to warn
+   * rather than block on a query.
+   */
+  seenAccounts(): string[] {
+    try {
+      const rows = expoDb.getAllSync(
+        `SELECT DISTINCT account FROM sms_inbox WHERE account IS NOT NULL AND account <> ''`,
+      ) as { account: string }[];
+
+      return rows.map((row) => row.account);
+    } catch {
+      return [];
+    }
+  },
+
   clear(): void {
     try {
       expoDb.execSync('DELETE FROM sms_log;');

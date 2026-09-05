@@ -269,7 +269,20 @@ export default function SmsDraftModal() {
   const houseScoped = targetLine?.houseScoped ?? false;
   const effectiveHouseId =
     houseChoice ?? defaultHouseId(state.houses, targetLine?.houseId ?? null);
-  const showConfirmCard = !picking && suggested !== null;
+  /*
+   * The one-tap confirm card, and its footer.
+   *
+   * `!splitting` matters as much as the other two. The split editor renders
+   * BELOW the confirm card, so opening it left the footer still offering "Yes,
+   * that's right" — which calls `acceptSuggestion` and passes no splits at all.
+   * Observed on the user's board: a LKR 73,000 payment split 53,000/2,000 saved
+   * whole into the suggested line, with the parts silently discarded and no
+   * error to explain it.
+   *
+   * Splitting means the suggestion is no longer the answer, so the footer must
+   * become "Log it" — the action that actually carries the parts.
+   */
+  const showConfirmCard = !picking && !splitting && suggested !== null;
 
   // Arrow consts (not hoisted declarations) so TS keeps the non-null narrowing
   // of `draft` from the early return above.

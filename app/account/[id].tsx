@@ -159,7 +159,42 @@ export default function AccountDetailScreen() {
       add('Expiry', card.expiry);
       add('CVV', card.cvv ? (revealed ? card.cvv : '•••') : null);
     } else {
-      add('Account number', card.accountNumber);
+      /*
+       * A dual-currency relationship names BOTH numbers, each with its currency.
+       *
+       * One row saying "Account number" is right for the ordinary account, and
+       * actively misleading for a relationship holding two: it shows one of the
+       * two numbers with nothing to say which currency it is, while the other —
+       * the one a foreign salary actually lands in — is invisible. The labels
+       * carry the currency so the pair reads as an answer to "which number is
+       * my USD one", which is the question this page exists to settle.
+       *
+       * A bank that puts both currencies behind ONE number leaves the second
+       * blank, and that case correctly falls back to the single unlabelled row:
+       * there is only one number, and labelling it by currency would imply a
+       * second exists.
+       */
+      const foreignCurrencyCode = card.foreignCurrency?.trim();
+      const hasSeparateForeignNumber = Boolean(card.foreignAccountNumber?.trim());
+
+      if (foreignCurrencyCode && hasSeparateForeignNumber) {
+        add(
+          `${accountCurrency(card, homeCurrency)} account`,
+          card.accountNumber,
+        );
+        add(`${foreignCurrencyCode.toUpperCase()} account`, card.foreignAccountNumber);
+      } else if (foreignCurrencyCode) {
+        // One number, two currencies — said explicitly, because a lone
+        // "Account number" row would hide that the USD side lives here too.
+        add('Account number', card.accountNumber);
+        add(
+          'Also holds',
+          `${foreignCurrencyCode.toUpperCase()} under the same number`,
+        );
+      } else {
+        add('Account number', card.accountNumber);
+      }
+
       add('Bank', card.bankName ?? brand.name);
       add('Branch', card.branch);
       add('Bank code', card.bankCode);
@@ -173,16 +208,37 @@ export default function AccountDetailScreen() {
      * noise that says nothing. It appears precisely when it carries
      * information: this account holds something different.
      */
-    if (isForeignAccount(card, homeCurrency)) {
+    if (isForeignAccount(card, homeCurrency) && !card.foreignCurrency) {
+      // Suppressed on a dual-currency account: the number rows above already
+      // name a currency each, and a lone "Currency" row beside them reads as a
+      // third, contradictory answer.
       add('Currency', accountCurrency(card, homeCurrency));
     }
 
-    // The digits bank SMS quote — the field that makes auto-detection match
-    // this account, so its absence is worth surfacing rather than hiding.
-    add('Last 4 digits', card.last4 ? `••${card.last4}` : null);
+    /*
+     * The digits bank SMS quote — the field that makes auto-detection match
+     * this account, so its absence is worth surfacing rather than hiding.
+     *
+     * Both tails when the account has two: they are what a message is matched
+     * against, and a mismatch fails SILENTLY — the account simply never
+     * recognises its own messages. Showing the digits the app is actually
+     * looking for is what makes that checkable against a real text.
+     */
+    if (card.foreignLast4 && card.foreignLast4 !== card.last4) {
+      add(
+        `${accountCurrency(card, homeCurrency)} last 4`,
+        card.last4 ? `••${card.last4}` : null,
+      );
+      add(
+        `${(card.foreignCurrency ?? '').toUpperCase()} last 4`,
+        `••${card.foreignLast4}`,
+      );
+    } else {
+      add('Last 4 digits', card.last4 ? `••${card.last4}` : null);
+    }
 
     return rows;
-  }, [card, brand.name, revealed]);
+  }, [card, brand.name, revealed, homeCurrency]);
 
   function confirmDelete() {
     Alert.alert(`Delete ${label.primary}?`, 'Categories pointing at it will need a new account.', [

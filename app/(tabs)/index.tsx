@@ -30,7 +30,6 @@ import {
   type ReminderView,
 } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
 import { usdNeededFor } from '~/features/rates/logic/bankRates';
 
@@ -57,9 +56,6 @@ const DETECT_WASH_DARK = -0.86;
 export default function DashboardScreen() {
   const { colors, mode, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  // Every visit starts at the top — a tab screen stays mounted, so its scroll
-  // offset otherwise survives being left and returned to. See the hook.
-  const scrollRef = useScrollToTopOnFocus();
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -173,7 +169,22 @@ export default function DashboardScreen() {
    * money in any unit. `toTransferHomeMinor` is the same amount before
    * conversion, which is what a cross-account total needs.
    */
-  const totalToTransfer = accounts.reduce((sum, a) => sum + a.toTransferHomeMinor, 0);
+  /*
+   * The month's WHOLE commitment, not what is left of it.
+   *
+   * This used to sum `toTransferHomeMinor`, which falls to zero as each account
+   * is ticked — so the header counted down and read "All moved" while the rows
+   * beneath it still listed the amounts. It is a total, and a total does not
+   * change because part of it has been paid: the per-account rows already say
+   * what is outstanding, and that is the right place for that.
+   *
+   * Summed in the HOME currency (`plannedHomeMinor`), since adding a USD
+   * account's dollars to the others' rupees produces a number that is not money
+   * in any unit.
+   */
+  const totalToTransfer = accounts.reduce((sum, a) => sum + a.plannedHomeMinor, 0);
+  /** How much of it is still outstanding — for the caption, not the figure. */
+  const stillToTransfer = accounts.reduce((sum, a) => sum + a.toTransferHomeMinor, 0);
 
   /*
    * The same total in DOLLARS, for anyone paid in them.
@@ -272,7 +283,6 @@ export default function DashboardScreen() {
       </View>
 
       <ScrollView
-        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -682,10 +692,22 @@ export default function DashboardScreen() {
                 the `pending` -> `completed` half of the status progression,
                 matching how every other unsettled figure on the board reads.
               */}
-              <Text variant="figure" color={totalToTransfer > 0 ? colors.pending : colors.completed}>
-                {totalToTransfer > 0 ? formatMoney(totalToTransfer) : 'All moved'}
+              {/*
+                Always the figure, never the words.
+
+                "All moved" replaced the total the moment the last account was
+                ticked, which threw away the one number this header exists to
+                state. Completion is carried by COLOUR — green once nothing is
+                outstanding — so the amount can stay put and still say the month
+                is done.
+              */}
+              <Text
+                variant="figure"
+                color={stillToTransfer > 0 ? colors.pending : colors.completed}
+              >
+                {formatMoney(totalToTransfer)}
               </Text>
-              {totalToTransfer > 0 && usdToConvert !== null ? (
+              {usdToConvert !== null ? (
                 /*
                   Blue against the rupee figure's amber — two CURRENCIES, told
                   apart by colour.
@@ -699,7 +721,17 @@ export default function DashboardScreen() {
                   Whole dollars — see `usdNeededFor`.
                 */
                 <Text variant="figure" color={colors.transferred}>
-                  (${toMajor(usdToConvert).toLocaleString(undefined, {
+                  {/*
+                    The SALARY currency's code, not a hardcoded "$".
+
+                    A GBP-paid salary showed its figure with a dollar sign — the
+                    amount was right and the unit was a lie. A code rather than
+                    a symbol because the app already labels money that way
+                    everywhere else, and not every currency has a glyph people
+                    read unambiguously.
+                  */}
+                  ({salaryRate.currency ?? 'USD'}{' '}
+                  {toMajor(usdToConvert).toLocaleString(undefined, {
                     maximumFractionDigits: 0,
                   })})
                 </Text>

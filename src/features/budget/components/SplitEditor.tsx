@@ -11,7 +11,7 @@ import {
   withAmount,
   type SplitPart,
 } from '~/features/budget/logic/splits';
-import { AmountField } from '~/shared/components/forms';
+import { AmountField, Field } from '~/shared/components/forms';
 import { Divider, Label, Row, Text } from '~/shared/components/ui';
 import { formatMoney } from '~/shared/lib/money';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -80,6 +80,14 @@ export function SplitEditor({
    * already have one — with their own search, their own "create a line" path
    * and their own idea of which lines are eligible — and a second one inside
    * this component would be a different control for the same job.
+   */
+  /**
+   * Open the caller's line picker for this part.
+   *
+   * The editor deliberately owns no picker of its own. It briefly rendered an
+   * inline list, which meant a screen that already had a modal showed BOTH —
+   * two competing choosers for one decision. One picker per screen, supplied
+   * by whoever is hosting the editor.
    */
   onPickLine: (partKey: string) => void;
   /** The user's currency — the amount fields format against it. */
@@ -276,6 +284,25 @@ export function SplitEditor({
               }
               currency={currency}
               placeholder="0.00"
+            />
+
+            {/*
+              An optional note per part.
+
+              A split's parts land as separate transactions, and they all
+              inherit the bank's own wording — "Outward CEFT Transfer" three
+              times over, which says nothing about what each part actually was.
+              A word here is what makes the entry readable a month later.
+
+              Optional and unlabelled beyond its placeholder: most splits need
+              no note, and a required-looking field on every part would make a
+              two-line split feel like a form.
+            */}
+            <Field
+              label=""
+              value={part.note ?? ''}
+              onChangeText={(text) => update(part.key, { note: text.trim() ? text : null })}
+              placeholder="What was this part? (optional)"
             />
           </View>
         );

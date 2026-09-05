@@ -664,15 +664,35 @@ export function cancelInternalTransfers<T extends PairableEntry>(
       if (!amountsPairable(entry.amountMinor, other.amountMinor)) continue;
 
       /*
-       * Both messages must be placeable in time.
+       * Placeable in time — by the clock when both sides print one, and
+       * otherwise by the DAY they share.
        *
-       * An undated message cannot be shown to belong to this transfer rather
-       * than any other, and pairing on amount alone is exactly the failure that
-       * would delete a real payment. So an unknown timestamp does NOT pair.
+       * The strict rule was: no timestamp, no pairing. It exists to stop a real
+       * payment being deleted by an amount coincidence, which is the right
+       * instinct — but it was too strict for banks that print no time at all.
+       * DFCC sends "on 02 SEP 2026" with no clock, so a genuine LKR 282,534
+       * transfer to the user's own NDB account could never pair, and both
+       * halves surfaced as separate spends.
+       *
+       * The relaxation is narrow and rests on what is already required above:
+       * BOTH accounts must be the user's, and they must be DIFFERENT accounts.
+       * Money moving between two accounts one person owns, in opposite
+       * directions, for the same amount, on the same calendar day is a transfer
+       * — the coincidence this guards against would require the user to also
+       * pay a stranger the identical sum from the identical account that day.
+       *
+       * A shared clock still wins where both sides have one: the 15-minute
+       * window is tighter than a day and rules out two genuinely separate
+       * same-day transfers of equal size.
        */
       const otherWhen = minutesOf(other);
-      if (when === null || otherWhen === null) continue;
-      if (Math.abs(when - otherWhen) > INTERNAL_TRANSFER_WINDOW_MINUTES) continue;
+      if (when !== null && otherWhen !== null) {
+        if (Math.abs(when - otherWhen) > INTERNAL_TRANSFER_WINDOW_MINUTES) continue;
+      } else if (!entry.date || !other.date || entry.date !== other.date) {
+        // No usable clock on one side: fall back to the calendar day, and
+        // refuse when even that is unknown.
+        continue;
+      }
 
       dropped.add(index);
       dropped.add(i);

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * Money is stored as INTEGER minor units (cents) — never floats, which lose
@@ -413,6 +413,53 @@ export const subcategoryStates = sqliteTable(
  * does not pay any bill, and it can be toggled back if it was a mis-tap.
  * Keyed by (categoryId, period).
  */
+/**
+ * Whether an ACCOUNT's money has been moved this month.
+ *
+ * Kept apart from `category_states` because the two answer different questions
+ * and one cannot stand in for the other.
+ *
+ * A category can be funded by several accounts at once — a real board has
+ * "Living" drawing on three — so marking the category transferred is far too
+ * coarse for "did I move money to this account". It settles every OTHER
+ * account's share of that category too. Observed exactly that: a credit
+ * matching the NDB account marked Living, Houses and Debt transferred, and
+ * the DFCC account's LKR 158,347 read as moved when nothing had been sent.
+ *
+ * The dashboard's "money to move" is per account, so its state is per account.
+ */
+export const accountTransfers = sqliteTable(
+  'account_transfers',
+  {
+    id: text('id').primaryKey(),
+    cardId: text('card_id')
+      .notNull()
+      .references(() => cards.id, { onDelete: 'cascade' }),
+    /** "YYYY-MM". */
+    period: text('period').notNull(),
+    status: text('status', { enum: ['pending', 'transferred'] })
+      .notNull()
+      .default('pending'),
+    transferredAt: integer('transferred_at', { mode: 'timestamp_ms' }),
+    /**
+     * The amount that was moved, when a bank message confirmed it.
+     *
+     * Null for a manual tick. Stored so a row marked automatically can say what
+     * it matched — the difference between "I ticked this" and "the bank said
+     * so" is exactly what a user wants when a row ticks itself.
+     */
+    matchedAmountMinor: integer('matched_amount_minor'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  },
+  // UNIQUE: the repo upserts with ON CONFLICT (cardId, period), which SQLite
+  // refuses unless a matching UNIQUE constraint exists.
+  (t) => [uniqueIndex('account_transfers_lookup_idx').on(t.cardId, t.period)],
+);
+
+export type AccountTransfer = typeof accountTransfers.$inferSelect;
+export type NewAccountTransfer = typeof accountTransfers.$inferInsert;
+
 export const categoryStates = sqliteTable(
   'category_states',
   {

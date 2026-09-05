@@ -14,6 +14,7 @@ import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/stor
 import { syncCategoryReminders } from '~/shared/lib/notifications';
 import { refreshBankRates } from '~/features/rates/logic/bankRatesApi';
 import { resolveUsdRate } from '~/features/rates/logic/bankRates';
+import { salaryRateCurrency } from '~/features/rates/logic/useSalaryRate';
 import { salaryBankRate } from '~/features/rates/logic/useSalaryRate';
 import { settingsRepo, SETTINGS_KEYS } from '../src/db/repositories';
 import { Text } from '~/shared/components/ui';
@@ -241,11 +242,41 @@ function RootNavigator() {
          * move on a daily cycle and refetching per launch would spend the
          * user's data redrawing the same number.
          */
+        /*
+         * The SALARY currency only.
+         *
+         * A board may hold several foreign currencies, but the one that matters
+         * is what the income arrives in — that is what the board converts with.
+         * Fetching the rest would spend the user's data on rates nothing reads.
+         */
+        /*
+         * Re-check everything already queued, against the board as it is NOW.
+         *
+         * A draft is classified when the message arrives, and the board moves
+         * underneath it: an account number gets corrected, a bill is created,
+         * a merchant rule is learned. `loadSmsDrafts` already re-parses each
+         * row's raw text, but nothing re-ran the pairing and account matching
+         * that decides whether a message is even a spend — so a transfer that
+         * was unrecognisable last week stayed unrecognised forever.
+         *
+         * `pruneSmsQueue` is that pass, and it is safe to repeat: it only ever
+         * retires messages it can now explain, and swallows its own failures
+         * (see `recheckQueueAfterAccountChange`).
+         *
+         * Deferred a tick so it reads the hydrated store rather than the
+         * snapshot this callback opened with — the same ordering trap that
+         * silently skipped the auto-mark once already.
+         */
+        setTimeout(() => useAppStore.getState().recheckQueueAfterAccountChange(), 0);
+
+        const primary = salaryRateCurrency(useAppStore.getState());
+
         void refreshBankRates({
           get: (key) => settingsRepo.get(key),
           set: (key, value) => settingsRepo.set(key, value),
-          keyRates: SETTINGS_KEYS.bankRates,
-          keyFetchedAt: SETTINGS_KEYS.bankRatesFetchedAt,
+          keyRates: SETTINGS_KEYS.bankRatesFor(primary),
+          keyFetchedAt: SETTINGS_KEYS.bankRatesFetchedAtFor(primary),
+          currency: primary,
         }).then((fetched) => {
           // Only when something actually arrived. `refreshBankRates` returns
           // null both for a failure and for a refresh the daily guard skipped,

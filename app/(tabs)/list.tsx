@@ -25,6 +25,7 @@ import {
   effectiveAmount,
   formatPeriod,
   isFlexibleDueDay,
+  isObligationMet,
   isSpend,
   monthlyAmount,
   planHealth,
@@ -43,7 +44,6 @@ import {
 } from '../../src/store/useAppStore';
 import { HEALTH_VISUALS, shadeHex, statusStyle, washFor } from '~/shared/theme';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import { useScrollToTopOnFocus } from '~/shared/hooks/useScrollToTopOnFocus';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -75,9 +75,14 @@ const animate = () =>
 export default function ListScreen() {
   const { colors, space } = useTheme();
   const tabClearance = useTabBarClearance();
-  // Every visit starts at the top — a tab screen stays mounted, so its scroll
-  // offset otherwise survives being left and returned to. See the hook.
-  const scrollRef = useScrollToTopOnFocus();
+  /*
+   * NO scroll-to-top on this tab, deliberately.
+   *
+   * Every other tab is a summary read from the top, so returning to it should
+   * start there. The plan is the one screen the user WORKS DOWN — opening a
+   * bill, coming back, opening the next — and resetting to the top each time
+   * threw away their place in a list of two dozen lines.
+   */
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -226,7 +231,6 @@ export default function ListScreen() {
       </View>
 
       <ScrollView
-        ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingTop: space.md,
@@ -1277,7 +1281,20 @@ function CategoryCard({
             onReorder={onReorderBills}
             renderItem={(line, index, draggingLine) => {
             const raw = view.rawSubcategories.find((s) => s.id === line.id);
-            const paid = line.status === 'paid';
+            /*
+             * Done, by whichever rule this line's kind uses.
+             *
+             * A dated bill is done when ticked; an ongoing line is done when
+             * its spending reaches its monthly budget. Reading `status` alone
+             * left a fully-spent LKR 10,000 budget looking identical to one
+             * with nothing against it. See `isObligationMet`.
+             */
+            const paid = isObligationMet({
+              frequency: raw?.frequency,
+              status: line.status,
+              plannedMinor: line.plannedMinor,
+              actualMinor: line.actualMinor,
+            });
             // A spending budget is never "paid" as a whole — its spend is a
             // running total of entries — so it gets an indicator rather than a
             // tap-to-pay checkbox, and reads differently in several places below.
@@ -1341,7 +1358,9 @@ function CategoryCard({
                   onPress={() => onOpenBill(line.id)}
                   accessibilityRole="button"
                   accessibilityLabel={`${line.name}, ${formatMoney(amount)}, ${
-                    ongoing ? 'ongoing' : paid ? 'paid' : 'not paid'
+                    // A met ongoing line reads as paid: its budget is spent,
+                    // which is the same answer a ticked bill gives.
+                    paid ? 'paid' : ongoing ? 'ongoing' : 'not paid'
                   }. Open detail.`}
                   style={({ pressed }) => ({
                     flex: 1,
@@ -1358,7 +1377,7 @@ function CategoryCard({
                     // calm next to the red an overrun ongoing line needs to own.
                     backgroundColor: pressed
                       ? colors.surfaceSunken
-                      : paid && !ongoing
+                      : paid
                         ? `${category.color}0D`
                         : 'transparent',
                   })}
@@ -1398,7 +1417,7 @@ function CategoryCard({
                          * behind it is a wash of that same hue — at full
                          * strength the outline would barely separate from it.
                          */
-                        borderWidth: overspent || (paid && !ongoing) ? 1 : 0,
+                        borderWidth: overspent || paid ? 1 : 0,
                         borderColor: overspent
                           ? colors.danger
                           : markColor,
@@ -1423,10 +1442,16 @@ function CategoryCard({
                      * the eye reads one position down the card and always finds
                      * an answer there.
                      *
-                     * Ongoing lines get neither — they accumulate rather than
-                     * settle, so paid/pending is not a state they can be in.
+                     * An ongoing line shows the badge only once its budget is
+                     * MET, and then in green rather than the category colour.
+                     * It has no pending state to show — an open budget is
+                     * simply being spent into, not waiting on anything — so the
+                     * two-badge rule above does not apply to it. Green because
+                     * reaching a budget is a different fact from paying a bill:
+                     * one is a target hit, the other an obligation settled, and
+                     * the colour keeps them tellable apart on a mixed card.
                      */}
-                    {!ongoing ? (
+                    {!ongoing || paid ? (
                       <View
                         style={{
                           position: 'absolute',
@@ -1444,9 +1469,11 @@ function CategoryCard({
                           // Same darkened category colour as the border, so
                           // the badge and the outline read as one mark rather
                           // than two unrelated ones.
-                          backgroundColor: paid
-                            ? markColor
-                            : colors.inkMuted,
+                          backgroundColor: ongoing
+                            ? colors.completed
+                            : paid
+                              ? markColor
+                              : colors.inkMuted,
                           borderWidth: 2,
                           // The row's paid tint is only ~5% alpha over this
                           // same surface, so one ring colour reads correctly on
