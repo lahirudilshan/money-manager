@@ -28,6 +28,17 @@ export const settingsRepo = {
 export const SETTINGS_KEYS = {
   currency: 'currency',
   usdRate: 'usd_rate',
+  /**
+   * Rates for every currency the user actually holds, as JSON.
+   *
+   * Supersedes `usdRate`, which could only ever express ONE pair and so left a
+   * non-USD foreign account unconvertible. That key is still read, and folded
+   * in as the home currency's rate, so an existing board keeps its exact
+   * figures across the upgrade — see `withLegacyUsdRate`.
+   */
+  rateTable: 'rate_table',
+  /** When the mid-market table was last fetched — see core/fxApi.ts. */
+  rateTableFetchedAt: 'rate_table_fetched_at',
   onboarded: 'onboarded',
   /**
    * An in-progress onboarding plan, so closing the app mid-setup does not lose

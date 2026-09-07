@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { accountCurrency, fromHomeMinor } from '~/features/accounts/logic/accountCurrency';
+import type { RateTable } from '~/features/rates/logic/rateTable';
 
 /**
  * A USD salary account beside an LKR spending account, at the same bank.
@@ -16,7 +17,8 @@ import { accountCurrency, fromHomeMinor } from '~/features/accounts/logic/accoun
  * give it away.
  */
 
-const RATE = 323.25;
+/** LKR at 323.25 per USD, expressed as a pivot table (see core/rateTable.ts). */
+const RATE: RateTable = { LKR: 1 / 323.25 };
 const USD_ACCOUNT = { currency: 'USD' };
 const LKR_ACCOUNT = { currency: 'LKR' };
 /** Every row that predates the currency column — implicitly the home currency. */

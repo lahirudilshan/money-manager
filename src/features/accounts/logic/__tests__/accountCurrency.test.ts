@@ -7,6 +7,7 @@ import {
   sumInHome,
   toHomeMinor,
 } from '../accountCurrency';
+import type { RateTable } from '~/features/rates/logic/rateTable';
 
 /**
  * The three real setups this exists for:
@@ -51,7 +52,8 @@ describe('isForeignAccount', () => {
 });
 
 describe('toHomeMinor', () => {
-  const RATE = 300;
+  /** 1 LKR = 1/300 USD, i.e. the old `usd_rate` of 300 expressed as a table. */
+  const RATE: RateTable = { LKR: 1 / 300 };
 
   it('leaves a home-currency amount untouched', () => {
     expect(toHomeMinor(500_000, { currency: 'LKR' }, 'LKR', RATE)).toBe(500_000);
@@ -59,13 +61,24 @@ describe('toHomeMinor', () => {
   });
 
   it('converts USD into the home currency', () => {
-    // USD 1,200 at 300 = LKR 360,000.
+    // USD 1,200 at 300 = LKR 360,000. Unchanged from the single-rate era.
     expect(toHomeMinor(120_000, { currency: 'USD' }, 'LKR', RATE)).toBe(36_000_000);
   });
 
-  it('does NOT convert a currency the app holds no rate for', () => {
+  it('now converts a THIRD currency, given its rate', () => {
     /*
-     * The app stores exactly one rate. Inventing one for EUR would produce a
+     * This is the behaviour change. It used to be impossible: with one scalar
+     * rate the app could only ever do USD, so a EUR balance was returned
+     * unconverted. With EUR in the table the pair resolves through the pivot.
+     */
+    const table: RateTable = { LKR: 1 / 300, EUR: 1.08 };
+    // EUR 1,000 -> USD 1,080 -> LKR 324,000.
+    expect(toHomeMinor(100_000, { currency: 'EUR' }, 'LKR', table)).toBe(32_400_000);
+  });
+
+  it('still does NOT convert a currency with no rate', () => {
+    /*
+     * The refusal survives the generalisation. Inventing a rate would produce a
      * confident wrong number — worse than leaving the figure alone, because
      * nothing on screen would reveal the guess.
      */
@@ -74,23 +87,36 @@ describe('toHomeMinor', () => {
 
   it('refuses a nonsense rate rather than zeroing the amount', () => {
     // A rate of 0 would silently wipe a real balance to nothing.
-    expect(toHomeMinor(120_000, { currency: 'USD' }, 'LKR', 0)).toBe(120_000);
-    expect(toHomeMinor(120_000, { currency: 'USD' }, 'LKR', -5)).toBe(120_000);
-    expect(toHomeMinor(120_000, { currency: 'USD' }, 'LKR', Number.NaN)).toBe(120_000);
+    for (const bad of [0, -5, Number.NaN]) {
+      expect(toHomeMinor(120_000, { currency: 'USD' }, 'LKR', { LKR: bad })).toBe(120_000);
+    }
   });
 
   it('works when the home currency IS usd', () => {
     // Someone whose app currency is USD holding a USD account: no conversion.
     expect(toHomeMinor(120_000, { currency: 'USD' }, 'USD', RATE)).toBe(120_000);
   });
+
+  it('converts for a home currency that is neither LKR nor USD', () => {
+    // The Australian case: AUD home, EUR account, no USD anywhere on screen.
+    const table: RateTable = { AUD: 0.66, EUR: 1.08 };
+    const result = toHomeMinor(500_00, { currency: 'EUR' }, 'AUD', table);
+    expect(result).toBe(Math.round(500 * (1.08 / 0.66) * 100));
+  });
 });
 
 describe('needsRate', () => {
   it('flags only a foreign currency with no stored rate', () => {
-    expect(needsRate({ currency: 'EUR' }, 'LKR')).toBe(true);
-    expect(needsRate({ currency: 'USD' }, 'LKR')).toBe(false);
-    expect(needsRate({ currency: 'LKR' }, 'LKR')).toBe(false);
-    expect(needsRate({}, 'LKR')).toBe(false);
+    const table: RateTable = { LKR: 1 / 300 };
+    expect(needsRate({ currency: 'EUR' }, 'LKR', table)).toBe(true);
+    expect(needsRate({ currency: 'USD' }, 'LKR', table)).toBe(false);
+    expect(needsRate({ currency: 'LKR' }, 'LKR', table)).toBe(false);
+    expect(needsRate({}, 'LKR', table)).toBe(false);
+  });
+
+  it('stops flagging a currency once its rate arrives', () => {
+    expect(needsRate({ currency: 'EUR' }, 'LKR', { LKR: 1 / 300 })).toBe(true);
+    expect(needsRate({ currency: 'EUR' }, 'LKR', { LKR: 1 / 300, EUR: 1.08 })).toBe(false);
   });
 });
 
@@ -108,15 +134,17 @@ describe('the two-account-numbers case', () => {
     expect(accountCurrency(usdSide, 'LKR')).toBe('USD');
 
     // A combined total converts the USD side and leaves the other alone.
+    const table: RateTable = { LKR: 1 / 300 };
     const total =
-      toHomeMinor(35_000_00, lkrSide, 'LKR', 300) + toHomeMinor(1_200_00, usdSide, 'LKR', 300);
+      toHomeMinor(35_000_00, lkrSide, 'LKR', table) + toHomeMinor(1_200_00, usdSide, 'LKR', table);
     expect(total).toBe(35_000_00 + 36_000_000);
   });
 });
 
 describe('sumInHome', () => {
   const HOME = 'LKR';
-  const RATE = 300;
+  /** USD convertible, EUR deliberately absent — the "excluded" cases below. */
+  const RATE: RateTable = { LKR: 1 / 300 };
 
   it('converts USD and leaves home-currency amounts alone', () => {
     const { totalMinor, excluded } = sumInHome(
@@ -185,39 +213,47 @@ describe('fromHomeMinor', () => {
   const usd = { currency: 'USD' };
   const lkr = { currency: 'LKR' };
   const legacy = { currency: null };
+  /** LKR at 323.25 per USD, as a table. GBP deliberately absent. */
+  const RATE: RateTable = { LKR: 1 / 323.25 };
 
   it('converts a home amount into a foreign account’s own currency', () => {
     // LKR 578,214.00 at 323.25 is USD 1,788.75
-    expect(fromHomeMinor(57_821_400, usd, 'LKR', 323.25)).toBe(178_875);
+    expect(fromHomeMinor(57_821_400, usd, 'LKR', RATE)).toBe(178_875);
   });
 
   it('leaves a home-currency account untouched', () => {
-    expect(fromHomeMinor(57_821_400, lkr, 'LKR', 323.25)).toBe(57_821_400);
+    expect(fromHomeMinor(57_821_400, lkr, 'LKR', RATE)).toBe(57_821_400);
   });
 
   /** A null currency is a pre-migration row, which means the home currency. */
   it('leaves a legacy null-currency account untouched', () => {
-    expect(fromHomeMinor(1_000, legacy, 'LKR', 323.25)).toBe(1_000);
+    expect(fromHomeMinor(1_000, legacy, 'LKR', RATE)).toBe(1_000);
   });
 
   /**
-   * The app stores exactly one rate. Inventing one for a third currency would
-   * produce a confidently wrong figure, which is worse than an unconverted one
-   * the UI can flag — see `needsRate`.
+   * Inventing a rate for a currency the app has none for would produce a
+   * confidently wrong figure, which is worse than an unconverted one the UI can
+   * flag — see `needsRate`. Unchanged by the move to a rate table.
    */
   it('passes a currency it has no rate for through unconverted', () => {
-    expect(fromHomeMinor(1_000, { currency: 'GBP' }, 'LKR', 323.25)).toBe(1_000);
+    expect(fromHomeMinor(1_000, { currency: 'GBP' }, 'LKR', RATE)).toBe(1_000);
+  });
+
+  it('converts that same currency once its rate is present', () => {
+    // The generalisation: GBP is only unconvertible until a rate arrives.
+    const withGbp: RateTable = { LKR: 1 / 323.25, GBP: 1.27 };
+    expect(fromHomeMinor(1_000, { currency: 'GBP' }, 'LKR', withGbp)).not.toBe(1_000);
   });
 
   it('passes through rather than dividing by an unusable rate', () => {
-    expect(fromHomeMinor(1_000, usd, 'LKR', 0)).toBe(1_000);
-    expect(fromHomeMinor(1_000, usd, 'LKR', Number.NaN)).toBe(1_000);
+    expect(fromHomeMinor(1_000, usd, 'LKR', { LKR: 0 })).toBe(1_000);
+    expect(fromHomeMinor(1_000, usd, 'LKR', { LKR: Number.NaN })).toBe(1_000);
   });
 
   /** Round-trips within a cent, so the two directions cannot drift apart. */
   it('round-trips with toHomeMinor', () => {
     const home = 57_821_400;
-    const back = toHomeMinor(fromHomeMinor(home, usd, 'LKR', 323.25), usd, 'LKR', 323.25);
+    const back = toHomeMinor(fromHomeMinor(home, usd, 'LKR', RATE), usd, 'LKR', RATE);
     expect(Math.abs(back - home)).toBeLessThanOrEqual(100);
   });
 });

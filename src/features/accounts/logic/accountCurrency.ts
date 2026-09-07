@@ -14,7 +14,8 @@
  * number the bank itself would state that way.
  */
 
-import { convertToLocalMinor, toMajor, type Minor } from '~/shared/lib/money';
+import { type Minor } from '~/shared/lib/money';
+import { convertMinor, rateBetween, type RateTable } from '~/features/rates/logic/rateTable';
 
 /** An account as this module needs to see it. */
 export interface AccountLike {
@@ -61,35 +62,47 @@ export function isForeignAccount(account: AccountLike, homeCurrency: string): bo
  * integers by the time they reach a sum. Converting here keeps every
  * cross-account figure in one unit.
  *
- * Only USD converts. The app stores exactly one rate (`usdRate`), so any other
- * foreign currency has no rate to convert BY — inventing one would produce a
- * confident wrong number, which is worse than leaving the figure alone. Those
- * accounts pass through unconverted and are flagged by `needsRate` so the UI
- * can say so rather than quietly misreport.
+ * ANY pair converts, given a rate. This used to be USD-only, because the app
+ * stored a single `usd_rate` scalar — which meant an Australian user's EUR
+ * balance passed through untouched and landed in an AUD total as though it were
+ * already AUD. See core/rateTable.ts.
+ *
+ * An amount with no rate still passes through unconverted rather than being
+ * multiplied by a guess, and `needsRate` marks it so the UI says so instead of
+ * quietly misreporting. That guard is unchanged; only its reach is wider.
  */
 export function toHomeMinor(
   amountMinor: Minor,
   account: AccountLike,
   homeCurrency: string,
-  usdRate: number,
+  rates: RateTable,
 ): Minor {
   if (!isForeignAccount(account, homeCurrency)) return amountMinor;
-  if (accountCurrency(account, homeCurrency) !== 'USD') return amountMinor;
-  if (!Number.isFinite(usdRate) || usdRate <= 0) return amountMinor;
 
-  return convertToLocalMinor(toMajor(amountMinor), usdRate);
+  const converted = convertMinor(
+    amountMinor,
+    accountCurrency(account, homeCurrency),
+    homeCurrency || 'LKR',
+    rates,
+  );
+  return converted ?? amountMinor;
 }
 
 /**
  * Whether this account's figures cannot be converted to the home currency.
  *
- * True only for a foreign account in something other than USD — the one case
- * where the app holds no rate. The UI uses it to mark a total as excluding that
- * account rather than pretending the arithmetic worked.
+ * Now a question about the RATES HELD rather than about the code being USD: any
+ * pair converts if a rate exists, so this is true exactly when one is missing.
+ * A EUR account on a board with a EUR rate is fully supported; the same account
+ * before the first successful fetch is not, and the UI marks the total as
+ * excluding it rather than pretending the arithmetic worked.
  */
-export function needsRate(account: AccountLike, homeCurrency: string): boolean {
-  const code = accountCurrency(account, homeCurrency);
-  return code !== homeCurrency.toUpperCase() && code !== 'USD';
+export function needsRate(
+  account: AccountLike,
+  homeCurrency: string,
+  rates: RateTable,
+): boolean {
+  return rateBetween(rates, accountCurrency(account, homeCurrency), homeCurrency || 'LKR') === null;
 }
 
 /**
@@ -107,17 +120,17 @@ export function needsRate(account: AccountLike, homeCurrency: string): boolean {
 export function sumInHome<T extends AccountLike>(
   entries: readonly { account: T; amountMinor: Minor }[],
   homeCurrency: string,
-  usdRate: number,
+  rates: RateTable,
 ): { totalMinor: Minor; excluded: number } {
   let totalMinor = 0;
   let excluded = 0;
 
   for (const entry of entries) {
-    if (needsRate(entry.account, homeCurrency)) {
+    if (needsRate(entry.account, homeCurrency, rates)) {
       excluded += 1;
       continue;
     }
-    totalMinor += toHomeMinor(entry.amountMinor, entry.account, homeCurrency, usdRate);
+    totalMinor += toHomeMinor(entry.amountMinor, entry.account, homeCurrency, rates);
   }
 
   return { totalMinor, excluded };
@@ -142,13 +155,17 @@ export function fromHomeMinor(
   amountMinor: Minor,
   account: AccountLike,
   homeCurrency: string,
-  usdRate: number,
+  rates: RateTable,
 ): Minor {
   // Through `isForeignAccount` rather than comparing to `homeCurrency`
   // directly, so an absent home currency is defaulted once, in one place.
   if (!isForeignAccount(account, homeCurrency)) return amountMinor;
-  if (accountCurrency(account, homeCurrency) !== 'USD') return amountMinor;
-  if (!Number.isFinite(usdRate) || usdRate <= 0) return amountMinor;
 
-  return Math.round(amountMinor / usdRate);
+  const converted = convertMinor(
+    amountMinor,
+    homeCurrency || 'LKR',
+    accountCurrency(account, homeCurrency),
+    rates,
+  );
+  return converted ?? amountMinor;
 }

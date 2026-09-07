@@ -13,6 +13,7 @@ import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
 import { syncCategoryReminders } from '~/shared/lib/notifications';
 import { refreshBankRates } from '~/features/rates/logic/bankRatesApi';
+import { refreshFxRates } from '~/features/rates/logic/fxApi';
 import { resolveUsdRate } from '~/features/rates/logic/bankRates';
 import { salaryRateCurrency } from '~/features/rates/logic/useSalaryRate';
 import { salaryBankRate } from '~/features/rates/logic/useSalaryRate';
@@ -268,6 +269,30 @@ function RootNavigator() {
          * silently skipped the auto-mark once already.
          */
         setTimeout(() => useAppStore.getState().recheckQueueAfterAccountChange(), 0);
+
+        /*
+         * Mid-market rates for every currency, so a board outside Sri Lanka
+         * can convert at all.
+         *
+         * Runs alongside the bank fetch rather than instead of it: the bank
+         * feed is the better source for an LKR user selling dollars to a named
+         * bank, but it has nothing to say to an Australian holding euros. This
+         * is what fills `rates` (see core/rateTable.ts).
+         *
+         * Fire-and-forget and failure-tolerant by construction — a refresh
+         * that finds no network leaves the last good table in place.
+         */
+        void refreshFxRates({
+          get: (key) => settingsRepo.get(key),
+          set: (key, value) => settingsRepo.set(key, value),
+          keyRates: SETTINGS_KEYS.rateTable,
+          keyFetchedAt: SETTINGS_KEYS.rateTableFetchedAt,
+        }).then((fetched) => {
+          // Only when something actually arrived: null covers both a failure
+          // and a refresh the daily guard skipped, and neither changed the
+          // cache — so re-reading would be a pointless write and re-render.
+          if (fetched) useAppStore.getState().refreshSettings();
+        });
 
         const primary = salaryRateCurrency(useAppStore.getState());
 
@@ -545,6 +570,7 @@ function RootNavigator() {
               stays a sheet while the places around it are pushed screens. */}
           <Stack.Screen name="mini/fuel/entry" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/fuel/vehicle" />
+          <Stack.Screen name="mini/fuel/history" />
           <Stack.Screen name="mini/fuel/services" />
           {/*
             Health add-on — see core/miniApps.ts. Same reasoning as fuel above:

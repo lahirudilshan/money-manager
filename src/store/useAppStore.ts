@@ -136,6 +136,13 @@ import {
 import { isHouseScopedHint, isHouseScopedName, PLACEHOLDER_HOUSES } from '~/features/budget/logic/houses';
 import { toggleMiniApp, type MiniAppId } from '~/shared/lib/miniApps';
 import { readCachedRates } from '~/features/rates/logic/bankRatesApi';
+import {
+  parseRateTable,
+  withLegacyUsdRate,
+  type RateTable,
+} from '~/features/rates/logic/rateTable';
+import { defaultCurrencyForRegion } from '~/features/rates/logic/currencies';
+import { deviceRegion } from '~/features/rates/logic/deviceRegion';
 import { salaryRateCurrency } from '~/features/rates/logic/useSalaryRate';
 import type { BankRate } from '~/features/rates/logic/bankRates';
 import type {
@@ -189,6 +196,15 @@ export interface AppState {
   loans: Loan[];
   currency: string;
   usdRate: number;
+  /**
+   * Rates for every currency held, keyed by code (see core/rateTable.ts).
+   *
+   * Kept ALONGSIDE `usdRate` rather than replacing it outright: the rate-fetch
+   * screens and the salary conversion still speak in terms of one headline
+   * pair, while every cross-currency sum reads this. `refreshSettings` folds
+   * the scalar in, so the two can never disagree about USD.
+   */
+  rates: RateTable;
   /**
    * Per-bank USD rates, as last fetched — see features/rates.
    *
@@ -734,6 +750,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   loans: [],
   currency: 'LKR',
   usdRate: 300,
+  rates: {},
   bankRates: [],
   themeMode: 'system',
   hapticsEnabled: true,
@@ -872,16 +889,52 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   },
 
   refreshSettings() {
-    const currency = settingsRepo.get(SETTINGS_KEYS.currency) ?? 'LKR';
+    /*
+     * The home currency, defaulted from the DEVICE'S REGION on first launch.
+     *
+     * Only when nothing is stored: once a currency exists — chosen in settings,
+     * or defaulted on a previous launch and persisted below — it is never
+     * revisited. Re-deriving it every launch would silently restate an entire
+     * board the moment someone changed their phone's region.
+     *
+     * Region rather than network geolocation, deliberately: an IP lookup would
+     * switch a Sri Lankan user's board to AUD the week they are in Sydney and
+     * back again after. See core/currencies.ts.
+     *
+     * It is PERSISTED immediately rather than left implicit, so the value the
+     * user sees is the value stored — and the detection cannot change its mind
+     * later if the module or the region becomes unavailable.
+     */
+    const storedCurrency = settingsRepo.get(SETTINGS_KEYS.currency);
+    let currency = storedCurrency ?? '';
+    if (!currency) {
+      currency = defaultCurrencyForRegion(deviceRegion()) ?? 'LKR';
+      settingsRepo.set(SETTINGS_KEYS.currency, currency);
+    }
     // Publish to shared/lib/money so the ~100 `formatMoney` call sites that
     // render an amount without knowing about settings pick up the user's
     // choice. Done on every settings refresh (not just setCurrency) so a fresh
     // launch is correct too.
     setDisplayCurrency(currency);
 
+    const usdRate = settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300);
+
     set({
       currency,
-      usdRate: settingsRepo.getNumber(SETTINGS_KEYS.usdRate, 300),
+      usdRate,
+      /*
+       * Stored rates, with the legacy scalar folded in.
+       *
+       * `withLegacyUsdRate` writes the home currency's entry as the RECIPROCAL
+       * of `usd_rate` — the old number meant "home per 1 USD" — so a board that
+       * has never fetched a table still converts USD exactly as it did before.
+       * An entry that WAS fetched wins over the reconstruction.
+       */
+      rates: withLegacyUsdRate(
+        parseRateTable(settingsRepo.get(SETTINGS_KEYS.rateTable)),
+        currency,
+        usdRate,
+      ),
       /*
        * The SALARY currency's cache, not always USD's.
        *

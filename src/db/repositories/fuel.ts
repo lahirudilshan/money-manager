@@ -66,6 +66,11 @@ export const fuelEntryRepo = {
       .all();
   },
 
+  /** One fill-up, for the screen that edits it. */
+  byId(id: string): FuelEntry | null {
+    return db.select().from(fuelEntries).where(eq(fuelEntries.id, id)).get() ?? null;
+  },
+
   create(input: Omit<NewFuelEntry, 'id'> & { id?: string }): FuelEntry {
     return db
       .insert(fuelEntries)

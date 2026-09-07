@@ -49,6 +49,7 @@ import {
   type SubcategoryStatus,
 } from '~/features/budget/logic/planning';
 import { accountCurrency, fromHomeMinor, isForeignAccount } from '~/features/accounts/logic/accountCurrency';
+import { rateBetween } from '~/features/rates/logic/rateTable';
 import { stateRepo, transactionRepo, transactionSplitRepo } from '~/db/repositories';
 import { isOngoing } from '~/db/schema';
 import type {
@@ -699,7 +700,7 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
       // absent (a partial state, a fixture), so the two cannot disagree about
       // what "foreign" means.
       const foreign = isForeignAccount(card, state.currency);
-      const convert = (minor: Minor) => fromHomeMinor(minor, card, state.currency, state.usdRate);
+      const convert = (minor: Minor) => fromHomeMinor(minor, card, state.currency, state.rates);
 
       return {
         card,
@@ -711,9 +712,11 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
         pendingCount,
         categoryNames: [...categoryNames],
         currency: held,
-        // Foreign, but not USD — the app stores exactly one rate, so there is
-        // nothing to convert by and the figures above are still in home units.
-        needsRate: foreign && held !== 'USD',
+        // Foreign with NO STORED RATE — so there is nothing to convert by and
+        // the figures above are still in home units. Once this meant "not USD",
+        // because one scalar rate was all the app had; any pair converts now,
+        // so the question is whether this particular rate has been fetched.
+        needsRate: foreign && rateBetween(state.rates, held, state.currency) === null,
         // Emptiness is a fact about the PLAN, so it is judged before any
         // conversion: a rate of zero must not make a funded account look empty.
         empty: planned === 0,

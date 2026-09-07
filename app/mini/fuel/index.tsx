@@ -391,6 +391,13 @@ export default function FuelHome() {
         <Label>MANAGE</Label>
         <Surface padded={false}>
           <ManageRow
+            icon="list-outline"
+            label="Fill-up history"
+            count={fills.length}
+            onPress={() => router.push(`/mini/fuel/history?vehicle=${vehicle?.id}`)}
+          />
+          <Divider style={{ marginHorizontal: space.lg }} />
+          <ManageRow
             icon="build-outline"
             label="Service log"
             count={services.length}

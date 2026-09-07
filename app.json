@@ -62,7 +62,8 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera to photograph receipts."
         }
       ],
-      "./plugins/withJdkPin"
+      "./plugins/withJdkPin",
+      "expo-localization"
     ],
     "extra": {
       "googleClientId": "486010862889-aaps2ikec9a1aigbei98varil468mn9f.apps.googleusercontent.com"

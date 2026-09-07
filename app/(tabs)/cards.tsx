@@ -126,7 +126,7 @@ export default function CardsScreen() {
   const { totalMinor: totalHeld, excluded: unconvertible } = sumInHome(
     accountViews.map((view) => ({ account: view.card, amountMinor: view.balanceMinor })),
     state.currency,
-    state.usdRate,
+    state.rates,
   );
 
   return (

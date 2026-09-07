@@ -25,21 +25,9 @@ import {
 } from '../../src/store/useAppStore';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
 import { useTheme } from '~/shared/theme/ThemeProvider';
+import { CURRENCIES } from '~/features/rates/logic/currencies';
 
 
-/** Currencies offered, with a symbol and full name for the richer picker. */
-const CURRENCIES: { code: string; symbol: string; name: string; flag: string }[] = [
-  { code: 'LKR', symbol: 'Rs', name: 'Sri Lankan Rupee', flag: '🇱🇰' },
-  { code: 'USD', symbol: '$', name: 'US Dollar', flag: '🇺🇸' },
-  { code: 'EUR', symbol: '€', name: 'Euro', flag: '🇪🇺' },
-  { code: 'GBP', symbol: '£', name: 'British Pound', flag: '🇬🇧' },
-  { code: 'INR', symbol: '₹', name: 'Indian Rupee', flag: '🇮🇳' },
-  { code: 'AUD', symbol: 'A$', name: 'Australian Dollar', flag: '🇦🇺' },
-  { code: 'AED', symbol: 'د.إ', name: 'UAE Dirham', flag: '🇦🇪' },
-  { code: 'SGD', symbol: 'S$', name: 'Singapore Dollar', flag: '🇸🇬' },
-  { code: 'JPY', symbol: '¥', name: 'Japanese Yen', flag: '🇯🇵' },
-  { code: 'CAD', symbol: 'C$', name: 'Canadian Dollar', flag: '🇨🇦' },
-];
 
 /**
  * The one screen that isn't the plan itself: preferences, the things you
@@ -73,6 +61,22 @@ export default function SettingsScreen() {
   const [syncing, setSyncing] = useState(false);
   const [currencyOpen, setCurrencyOpen] = useState(false);
   const [currencyQuery, setCurrencyQuery] = useState('');
+
+  /*
+   * What the rates row shows on the right.
+   *
+   * The app used to hold ONE rate and could name it ("LKR 323.25"). It now
+   * holds a table, and for a board whose foreign money is not dollars the USD
+   * figure is irrelevant — so this reports coverage instead, and falls back to
+   * naming the headline pair when there is nothing else to say.
+   */
+  const rateSummary = useMemo(() => {
+    const count = Object.keys(state.rates).filter(
+      (code) => code !== state.currency.toUpperCase(),
+    ).length;
+    if (count === 0) return 'Not set';
+    return count === 1 ? '1 currency' : `${count} currencies`;
+  }, [state.rates, state.currency]);
   /** Which PIN flow is open: setting one to enable the lock, or changing it. */
   const [pinSetup, setPinSetup] = useState<PinPurpose | null>(null);
   const [plansOpen, setPlansOpen] = useState(false);
@@ -442,9 +446,11 @@ export default function SettingsScreen() {
           <SettingRow
             icon="swap-horizontal-outline"
             color={colors.transferred}
-            title="USD exchange rate"
+            title="Exchange rates"
             subtitle="Bank rates, and what to plan at"
-            valueLabel={`${state.currency} ${state.usdRate}`}
+            /* Counts what the app can actually convert, rather than naming USD
+               — a board in AUD holding euros has nothing to do with dollars. */
+            valueLabel={rateSummary}
             // Straight to the rates screen. The intermediate sheet restated
             // what that screen already shows, so it was one tap of nothing.
             onPress={() => router.push('/settings/rates')}
