@@ -28,6 +28,7 @@ import {
   supportsSavingPlan,
   isOngoing,
   type SubcategoryFrequency,
+  type House,
   type Transaction,
 } from '../../src/db/schema';
 import { accountLabel, accountName, resolveBrand } from '~/shared/data/banks';
@@ -40,11 +41,19 @@ import {
   type SavingPlanDraft,
 } from '~/features/budget/components/SavingPlanFields';
 import {
+  selectMonthlyHistory,
   selectSavingPlans,
   selectTransactionEntries,
   useAppStore,
   type TransactionEntry,
 } from '../../src/store/useAppStore';
+import { SpendHistoryChart } from '~/features/budget/components/SpendHistoryChart';
+import {
+  billAccumulatesPerHouse,
+  budgetedSpendMinor,
+  houseForLine,
+  totalsByHouse,
+} from '~/features/budget/logic/houses';
 import { statusStyle } from '~/shared/theme';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
@@ -177,6 +186,16 @@ export default function SubcategoryScreen() {
   // transactions, have no single planned/actual amount, and are never marked
   // paid as a whole — so several fields below are hidden for them.
   const ongoing = isOngoing(frequency);
+
+  /*
+   * A house-scoped bill on a multi-house board keeps ENTRIES, like an ongoing
+   * line, because the same bill is paid for more than one property in a month
+   * (see `billAccumulatesPerHouse`). Those entries existed but were invisible:
+   * the list below rendered for ongoing lines only, so four real payments sat
+   * in the database with nothing on screen showing them.
+   */
+  const accumulates =
+    ongoing || billAccumulatesPerHouse(state.houses, subcategory?.houseScoped ?? false);
   /**
    * Whether a saving plan is currently driving this line's monthly amount.
    *
@@ -221,6 +240,15 @@ export default function SubcategoryScreen() {
     [state, id],
   );
 
+  /*
+   * Month-by-month history for the chart at the bottom.
+   *
+   * Keyed on the whole store rather than just the id so it re-reads after a
+   * write — logging or deleting an entry changes this month's bar, and a stale
+   * chart beside a fresh figure is worse than no chart.
+   */
+  const history = useMemo(() => (id ? selectMonthlyHistory(id) : []), [state, id]);
+
   if (!subcategory) {
     return (
       <View
@@ -247,7 +275,39 @@ export default function SubcategoryScreen() {
   // The budget these entries draw against, read from the field being edited so
   // the bar responds as the user types a new figure rather than after saving.
   const plannedMinor = parseAmount(planned) ?? 0;
-  const overBudget = plannedMinor > 0 && ongoingTotal > plannedMinor;
+
+  /*
+   * The budget is judged against the user's OWN house, not the combined total.
+   *
+   * A budget is set for the home you live in. Once the same line also pays a
+   * parents' bill, comparing it to the total reads as overspending that is not
+   * yours — 9,100 against an 8,000 budget became "3,900 over" once a 2,800
+   * Weligama bill joined it. The total still shows; only the verdict narrows.
+   */
+  const budgetedMinor = useMemo(
+    () =>
+      budgetedSpendMinor(
+        transactions.map((entry) => ({
+          houseId: entry.txn.houseId ?? null,
+          amountMinor: entry.shareMinor,
+        })),
+        state.houses,
+        subcategory?.houseScoped ?? false,
+      ),
+    [transactions, state.houses, subcategory],
+  );
+  /** True when the budget covers only part of what this line paid out. */
+  const budgetIsPartial = budgetedMinor !== ongoingTotal;
+
+  /*
+   * No rollup here. A payment for another property is FILED under that
+   * property's own line when it is confirmed (see `confirmDraft`), so the
+   * money genuinely lives there — adding tagged bills on top of a house line
+   * would count the same payment twice.
+   */
+  const displayTotal = ongoingTotal;
+  const budgetBasis = budgetedMinor;
+  const overBudget = plannedMinor > 0 && budgetBasis > plannedMinor;
 
   function handleSave() {
     const trimmed = name.trim();
@@ -424,7 +484,7 @@ export default function SubcategoryScreen() {
                     variant="figureLarge"
                     color={overBudget ? colors.danger : colors.accent}
                   >
-                    {formatMoney(ongoingTotal)}
+                    {formatMoney(displayTotal)}
                   </Text>
                 </View>
                 {plannedMinor > 0 ? (
@@ -438,16 +498,26 @@ export default function SubcategoryScreen() {
                       style={{ fontWeight: '700' }}
                     >
                       {overBudget
-                        ? `${formatMoney(ongoingTotal - plannedMinor)} over`
-                        : `${formatMoney(plannedMinor - ongoingTotal)} left`}
+                        ? `${formatMoney(budgetBasis - plannedMinor)} over`
+                        : `${formatMoney(plannedMinor - budgetBasis)} left`}
                     </Text>
                   </View>
                 ) : null}
               </Row>
 
+              {/* Say WHY the budget verdict uses a smaller figure than the
+                  total above it. Without this the two look inconsistent. */}
+              {budgetIsPartial && plannedMinor > 0 ? (
+                <Text variant="caption" tone="muted">
+                  Budget tracks your own home: {formatMoney(budgetedMinor)} of{' '}
+                  {formatMoney(plannedMinor)}
+                </Text>
+              ) : null}
+
+
               {plannedMinor > 0 ? (
                 <FundingBar
-                  pct={(ongoingTotal / plannedMinor) * 100}
+                  pct={(budgetBasis / plannedMinor) * 100}
                   color={overBudget ? colors.danger : category?.color ?? colors.accent}
                   height={8}
                 />
@@ -603,19 +673,28 @@ export default function SubcategoryScreen() {
         )}
 
         {/*
-         * Entries — ONGOING lines only.
+         * Entries — for any line that ACCUMULATES them.
          *
-         * A dated bill is one payment a month, so a list of entries is the
-         * wrong shape for it: there is only ever one, and what it cost is a
-         * single figure typed into the field above. Smart Detect already agrees
-         * — confirming an SMS writes a transaction for an ongoing line and the
-         * month's actual for a dated one (see `confirmDraft`).
+         * A dated bill is normally one payment a month, so a list is the wrong
+         * shape for it: there is only ever one, and what it cost is the figure
+         * typed above. That stops being true for a house-scoped bill on a
+         * multi-house board — electricity for your own home AND for a parents'
+         * house are two payments against one line — so those get the list too,
+         * which is the only place their per-house split is visible.
          */}
-        {ongoing ? (
+        {accumulates ? (
         <OngoingTransactions
           transactions={transactions}
           total={ongoingTotal}
           plannedMinor={plannedMinor}
+          /* The same basis the header above uses, so the two cannot disagree
+             about whether the line is overspent. */
+          budgetedMinor={budgetBasis}
+          houses={state.houses}
+          /* A PROPERTY line IS one house, so splitting it by house says nothing
+             — it read "Unassigned 12,000 · Weligama 3,781" on the Weligama
+             line, dividing by a tag that is redundant there. */
+          showHouseSplit={houseForLine(subcategory.name, state.houses) === null}
           onAdd={() => router.push(`/transaction/ongoing?subcategoryId=${subcategory.id}`)}
           onEdit={(txn) => setEditingTxn(txn)}
           onRemove={(txnId, txnName, splitWays) =>
@@ -875,6 +954,14 @@ export default function SubcategoryScreen() {
           ) : null}
         </View>
 
+        {/* How this line has behaved month to month. Renders nothing until
+            there are two months to compare — see SpendHistoryChart. */}
+        <SpendHistoryChart
+          months={history}
+          budgetMinor={plannedMinor}
+          currentPeriod={state.period}
+        />
+
         <Pressable
           onPress={confirmDelete}
           accessibilityRole="button"
@@ -1032,20 +1119,51 @@ function OngoingTransactions({
   transactions,
   total,
   plannedMinor,
+  budgetedMinor,
+  houses,
+  showHouseSplit,
   onAdd,
   onEdit,
   onRemove,
 }: {
   transactions: TransactionEntry[];
   total: number;
+  /** Named so a row can say WHICH property its payment was for. */
+  houses: readonly House[];
+  /** False on a line that already stands for one house — see the call site. */
+  showHouseSplit: boolean;
   /** The monthly amount, when set — drives the header's remaining figure. */
   plannedMinor: number;
+  /**
+   * The share the BUDGET is judged against — the user's own house on a line
+   * that pays for several. Passed in rather than recomputed so this header and
+   * the one above it can never disagree about whether a line is overspent.
+   */
+  budgetedMinor: number;
   onAdd: () => void;
   onEdit: (txn: Transaction) => void;
   onRemove: (id: string, name: string, splitWays: number) => void;
 }) {
   const { colors, space } = useTheme();
-  const overBudget = plannedMinor > 0 && total > plannedMinor;
+  const overBudget = plannedMinor > 0 && budgetedMinor > plannedMinor;
+
+  /** This month's spend per property, for the caption under the total. */
+  const houseBreakdown = useMemo(() => {
+    const totals = totalsByHouse(
+      transactions.map((entry) => ({
+        houseId: entry.txn.houseId ?? null,
+        amountMinor: entry.shareMinor,
+      })),
+    );
+    if (!showHouseSplit) return [];
+    return [...totals.entries()]
+      .map(([houseId, totalMinor]) => ({
+        name: houses.find((house) => house.id === houseId)?.name ?? 'Unassigned',
+        totalMinor,
+      }))
+      // Biggest first: the property costing the most is the one worth seeing.
+      .sort((a, b) => b.totalMinor - a.totalMinor);
+  }, [transactions, houses, showHouseSplit]);
 
   return (
     <Surface padded={false} style={{ overflow: 'hidden' }}>
@@ -1065,14 +1183,25 @@ function OngoingTransactions({
             <Text variant="caption" tone="muted">
               {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'} ·{' '}
               {overBudget
-                ? `${formatMoney(total - plannedMinor)} over budget`
-                : `${formatMoney(plannedMinor - total)} left`}
+                ? `${formatMoney(budgetedMinor - plannedMinor)} over budget`
+                : `${formatMoney(plannedMinor - budgetedMinor)} left`}
             </Text>
           ) : (
             <Text variant="caption" tone="muted">
               {transactions.length} {transactions.length === 1 ? 'entry' : 'entries'} · no monthly amount set
             </Text>
           )}
+
+          {/* The per-house split. Without it a line paid for two properties
+              shows one lump and reads as though it were all for one house —
+              which is exactly how four correctly-tagged payments looked wrong. */}
+          {houseBreakdown.length > 1 ? (
+            <Text variant="caption" tone="muted" numberOfLines={1}>
+              {houseBreakdown
+                .map(({ name, totalMinor }) => `${name} ${formatMoney(totalMinor)}`)
+                .join('  ·  ')}
+            </Text>
+          ) : null}
         </View>
         <Button label="Add" icon="add" size="sm" onPress={onAdd} />
       </Row>
@@ -1128,6 +1257,15 @@ function OngoingTransactions({
                 {splits.length > 0 ? (
                   <Text variant="caption" color={colors.accent} numberOfLines={1}>
                     Part of {formatMoney(txn.amountMinor)}
+                  </Text>
+                ) : null}
+
+                {/* Which property this payment was for. Only when more than one
+                    appears in the list — on a single-house month the label is
+                    the same on every row and adds nothing but noise. */}
+                {houseBreakdown.length > 1 && txn.houseId ? (
+                  <Text variant="caption" tone="muted" numberOfLines={1}>
+                    {houses.find((house) => house.id === txn.houseId)?.name ?? 'Unassigned'}
                   </Text>
                 ) : null}
               </View>

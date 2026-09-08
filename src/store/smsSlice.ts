@@ -55,6 +55,11 @@ import {
   SETTINGS_KEYS,
 } from '~/db/repositories';
 import type { AppState } from '~/store/useAppStore';
+import {
+  billAccumulatesPerHouse,
+  fileUnderHouseLine,
+  houseForLine,
+} from '~/features/budget/logic/houses';
 
 /**
  * Whether a drain is in flight.
@@ -1152,12 +1157,40 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const draft = smsDrafts.find((d) => d.id === draftId);
     if (!draft) return;
 
-    const subcategoryId = overrides?.subcategoryId ?? draft.subcategoryId;
+    let subcategoryId = overrides?.subcategoryId ?? draft.subcategoryId;
     // Without a target bill there is nothing to mark paid; the confirm card
     // must supply one before this is reachable.
     if (!subcategoryId) return;
 
     const amountMinor = overrides?.amountMinor ?? draft.amountMinor;
+
+    /*
+     * Naming another household's house FILES the payment under that house.
+     *
+     * A bill paid for a parents' house is not this household's electricity —
+     * it is support sent to that property. Leaving it on the Electricity line
+     * charged the user's own budget for money that was never theirs: 9,100 of
+     * own usage against an 8,000 budget read as "11,900, 3,900 over" once a
+     * 2,800 Weligama bill joined it.
+     *
+     * Only a non-primary house redirects; the user's own home stays on the bill
+     * line, which is exactly what that line is for. See `fileUnderHouseLine`.
+     */
+    const houseLines = get()
+      .subcategories.map((line) => ({
+        subcategoryId: line.id,
+        houseId: houseForLine(line.name, get().houses),
+      }))
+      .filter((entry): entry is { subcategoryId: string; houseId: string } =>
+        entry.houseId !== null,
+      );
+    const filedUnder = fileUnderHouseLine(
+      overrides?.houseId ?? null,
+      get().houses,
+      houseLines,
+    );
+    if (filedUnder) subcategoryId = filedUnder;
+
     const target = get().subcategories.find((s) => s.id === subcategoryId);
 
     /*
@@ -1196,8 +1229,21 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
           note: part.note ?? null,
         })),
       );
-    } else if (target && target.frequency === 'ongoing') {
-      // An ongoing line accumulates individual entries, so a confirmed SMS
+    } else if (
+      target &&
+      (target.frequency === 'ongoing' ||
+        /*
+         * A house-scoped bill on a multi-house board accumulates too.
+         *
+         * Its single monthly `actual` holds one amount and one house, so a
+         * second payment for a DIFFERENT property overwrote the first and took
+         * its house with it — the user's 9,100 own-home electricity vanished
+         * when the 2,800 parents'-house bill was confirmed. One row per payment
+         * is the only shape that can hold both. See `billAccumulatesPerHouse`.
+         */
+        billAccumulatesPerHouse(get().houses, target.houseScoped))
+    ) {
+      // An accumulating line records individual entries, so a confirmed SMS
       // becomes one transaction rather than the month's single "actual".
       transactionRepo.create({
         subcategoryId,
@@ -1237,9 +1283,27 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      */
     const isFeeRow = draft.parsed.kind === 'bank_charge' && draft.parsed.detail === 'fee';
 
-    const upsert = isFeeRow
-      ? null
-      : planRuleUpsert(draft.parsed.merchant, subcategoryId, draft.hint, get().merchantRules);
+    /*
+     * Never learn a merchant from a payment FILED UNDER A HOUSE.
+     *
+     * The line it landed on is a property accumulator, chosen because of the
+     * house the user picked THIS time — not because the merchant belongs there.
+     * Learning it taught "ceylon electricity board -> Weligama home", so the
+     * next CEB bill was suggested that line outright, the house picker never
+     * appeared (a property line is not house-scoped), and the user's own
+     * electricity went to their parents' house with no way to see why.
+     *
+     * Exactly the poisoned-rule shape as the fee row above, and just as
+     * unrecoverable: a learned rule outranks every other tier, so the mistake
+     * compounds with each confirmation.
+     *
+     * Nothing is lost by not learning: the merchant's own bill line keeps its
+     * existing rule, and the house is chosen per payment anyway.
+     */
+    const upsert =
+      isFeeRow || filedUnder
+        ? null
+        : planRuleUpsert(draft.parsed.merchant, subcategoryId, draft.hint, get().merchantRules);
     if (upsert) merchantRuleRepo.apply(upsert);
 
     /*

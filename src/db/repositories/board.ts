@@ -275,6 +275,116 @@ export const transactionRepo = {
   },
 
   /**
+   * What one line cost in each of the last `months` months.
+   *
+   * Unions BOTH places a month's spend can live, which is the whole difficulty:
+   * an accumulating line keeps `transactions` rows, while a dated bill stores a
+   * single `actual` on `subcategory_states`. Reading either one alone silently
+   * drops half a line's history — the same split that once let a second payment
+   * overwrite the first.
+   *
+   * Split payments contribute their PARTS, matching `totalsByPeriod`, so a
+   * payment divided across lines is not counted whole against each of them.
+   *
+   * Returns only months that actually have spend, newest last, so the caller
+   * can decide whether there is enough history to be worth charting.
+   */
+  monthlyHistory(subcategoryId: string, months: number): { period: string; totalMinor: number }[] {
+    const rows = db.all<{ period: string; total: number }>(sql`
+      SELECT period, SUM(amount_minor) AS total FROM (
+        SELECT t.period AS period, t.amount_minor AS amount_minor
+          FROM ${transactions} t
+         WHERE t.subcategory_id = ${subcategoryId}
+           AND NOT EXISTS (
+             SELECT 1 FROM ${transactionSplits} s WHERE s.transaction_id = t.id
+           )
+        UNION ALL
+        SELECT t.period AS period, s.amount_minor AS amount_minor
+          FROM ${transactionSplits} s
+          JOIN ${transactions} t ON t.id = s.transaction_id
+         WHERE s.subcategory_id = ${subcategoryId}
+        UNION ALL
+        SELECT ss.period AS period, ss.actual_minor AS amount_minor
+          FROM ${subcategoryStates} ss
+         WHERE ss.subcategory_id = ${subcategoryId}
+           AND ss.actual_minor IS NOT NULL
+           AND ss.actual_minor > 0
+           -- Skip a month that ALSO has entries: a stale figure left beside
+           -- newly written entries would otherwise be counted twice, showing a
+           -- bar of double the real spend. Entries win, as billActual decides
+           -- it on screen.
+           AND NOT EXISTS (
+             SELECT 1 FROM ${transactions} t2
+              WHERE t2.subcategory_id = ${subcategoryId} AND t2.period = ss.period
+           )
+      )
+      GROUP BY period
+      ORDER BY period DESC
+      LIMIT ${months}
+    `);
+
+    // Oldest first for display; the query took the NEWEST n, so this reverses.
+    return rows
+      .map((row) => ({ period: row.period, totalMinor: Number(row.total) }))
+      .reverse();
+  },
+
+  /**
+   * This month's spend per HOUSE, for the property lines that accumulate it.
+   *
+   * Counts payments tagged to a house from anywhere on the board — an
+   * electricity bill under Living tagged "Weligama" belongs to Weligama's true
+   * cost just as much as a transfer sent to it. Without this the house lines
+   * only ever saw the transfers, and a property looked cheaper than it was.
+   *
+   * Split payments are handled the same way `totalsByPeriod` handles them: an
+   * unsplit transaction counts whole, and a split one contributes its PARTS, so
+   * nothing is double counted. The house tag lives on the parent payment, which
+   * is where the user set it.
+   */
+  houseTotalsByPeriod(period: string): Map<string, number> {
+    const rows = db.all<{ house_id: string; total: number }>(sql`
+      SELECT house_id, SUM(amount_minor) AS total FROM (
+        SELECT t.house_id AS house_id, t.amount_minor AS amount_minor
+          FROM ${transactions} t
+         WHERE t.period = ${period}
+           AND t.house_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM ${transactionSplits} s WHERE s.transaction_id = t.id
+           )
+        UNION ALL
+        SELECT t.house_id AS house_id, s.amount_minor AS amount_minor
+          FROM ${transactionSplits} s
+          JOIN ${transactions} t ON t.id = s.transaction_id
+         WHERE t.period = ${period} AND t.house_id IS NOT NULL
+      )
+      GROUP BY house_id
+    `);
+    /*
+     * Dated bills that stored their house on the MONTH rather than on an entry.
+     *
+     * A house-scoped bill now writes entries (see `billAccumulatesPerHouse`),
+     * but a board carries months logged before that — and a single-house board
+     * still writes the monthly figure. Those carry a house too, and omitting
+     * them would under-report the property by exactly the bills paid that way.
+     */
+    const stateRows = db.all<{ house_id: string; total: number }>(sql`
+      SELECT house_id, SUM(actual_minor) AS total
+        FROM ${subcategoryStates}
+       WHERE period = ${period}
+         AND house_id IS NOT NULL
+         AND actual_minor IS NOT NULL
+       GROUP BY house_id
+    `);
+
+    const totals = new Map(rows.map((row) => [row.house_id, Number(row.total)]));
+    for (const row of stateRows) {
+      totals.set(row.house_id, (totals.get(row.house_id) ?? 0) + Number(row.total));
+    }
+    return totals;
+  },
+
+  /**
    * Payments that live on ANOTHER line but were split onto this one.
    *
    * A split does not move the parent transaction — it stays on the line it was

@@ -174,6 +174,77 @@ export function shouldAskForHouse(
 }
 
 /**
+ * Whether a DATED bill should accumulate entries instead of one monthly figure.
+ *
+ * A dated bill normally holds a single `actual` per month, which is right when
+ * one bill arrives per month. It is wrong the moment the same line is paid for
+ * two different properties: the second payment overwrote the first, taking its
+ * house with it, so paying 9,100 for your own home and 2,800 for a parents'
+ * house left ONE record reading 2,800 / parents. The money and the attribution
+ * were both lost, silently.
+ *
+ * The condition is exactly `shouldAskForHouse`: if the UI is asking which house
+ * a payment was for, then more than one answer is possible this month, and the
+ * line needs a row per payment rather than a single slot. A one-house board is
+ * untouched and keeps the simpler shape.
+ *
+ * Ongoing lines already accumulate and never reach this.
+ */
+export function billAccumulatesPerHouse(
+  houses: readonly HouseLike[],
+  lineIsHouseScoped: boolean,
+): boolean {
+  return shouldAskForHouse(houses, lineIsHouseScoped);
+}
+
+/**
+ * The spend a BUDGET should be judged against, when one line serves several
+ * properties.
+ *
+ * A budget is set for the house the user lives in. Once the same line also pays
+ * a parents' bill, comparing the budget to the combined total is wrong in a way
+ * that misleads: electricity of 9,100 against an 8,000 budget became "11,900 —
+ * 3,900 over" once a 2,800 Weligama bill joined it, so the user's own usage
+ * looked far worse than it is. Money sent to support another household is real
+ * spending, but it is not overspending on THIS budget.
+ *
+ * So the comparison uses the primary house's share, and the other houses are
+ * reported alongside rather than folded in. Everything else — the month's total
+ * and the per-house caption — is unchanged.
+ *
+ * Falls back to the full total whenever there is nothing to separate: no
+ * primary house, no per-house tags, or a board with a single house. That keeps
+ * every existing line behaving exactly as it did.
+ */
+export function budgetedSpendMinor(
+  entries: readonly { houseId: string | null; amountMinor: number }[],
+  houses: readonly HouseLike[],
+  lineIsHouseScoped: boolean,
+): number {
+  const total = entries.reduce((sum, entry) => sum + entry.amountMinor, 0);
+  if (!billAccumulatesPerHouse(houses, lineIsHouseScoped)) return total;
+
+  const primary = houses.find((house) => house.isPrimary);
+  if (!primary) return total;
+
+  /*
+   * An UNTAGGED entry counts toward the budget.
+   *
+   * It predates houses or was logged without choosing one, and the budget is
+   * the user's own — so the safe reading is "mine". Excluding it would quietly
+   * shrink the figure the budget is judged against and make an overspent line
+   * look healthy.
+   */
+  const mine = entries.filter(
+    (entry) => entry.houseId === null || entry.houseId === primary.id,
+  );
+  // No tags at all means the split is not in use on this line yet.
+  return mine.length === entries.length
+    ? total
+    : mine.reduce((sum, entry) => sum + entry.amountMinor, 0);
+}
+
+/**
  * Which house a new payment should be attributed to before the user chooses.
  *
  * Order of preference:
@@ -204,6 +275,74 @@ export function defaultHouseId(
   if (primary) return primary.id;
 
   return houses.length === 1 ? houses[0].id : null;
+}
+
+/**
+ * The house a "Houses" category LINE stands for, matched by name.
+ *
+ * These lines ("Weligama home") are accumulators for one property, but nothing
+ * in the schema links them to the `houses` row of the same name —
+ * `subcategories.houseId` means "default house for THIS line's payments", which
+ * is a different question and is empty on these rows anyway.
+ *
+ * Matching on the name is therefore the available join, and it is deliberately
+ * strict: the house's name must appear as a whole word in the line's name, so
+ * "Weligama home" finds Weligama while a line merely mentioning it in passing
+ * does not. A rename breaks the link rather than mis-attributing money, which
+ * is the safer failure — the line simply stops rolling bills up, visibly.
+ */
+export function houseForLine(
+  lineName: string,
+  houses: readonly (HouseLike & { name: string })[],
+): string | null {
+  const haystack = lineName.toLowerCase();
+  // Longest name first, so "Weligama" cannot win over a more specific
+  // "Weligama beach" when both exist.
+  const ordered = [...houses].sort((a, b) => b.name.length - a.name.length);
+
+  for (const house of ordered) {
+    const needle = house.name.trim().toLowerCase();
+    if (!needle) continue;
+    if (new RegExp(`\\b${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(haystack)) {
+      return house.id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Where a payment should be FILED once the user names the house it was for.
+ *
+ * A bill paid for another household is not this household's electricity — it is
+ * support sent to that property. So choosing "Weligama" on a 2,800 electricity
+ * bill files it under the Weligama line, and the user's own Electricity line
+ * keeps showing only their own 9,100 against their own budget. Two questions
+ * that were being answered by one number now have one line each.
+ *
+ * Returns null — meaning "leave it where it is" — for the cases where moving it
+ * would be wrong or pointless:
+ *
+ *   - the payment is for the user's own home, which is what the bill line is
+ *     already for;
+ *   - no house was chosen at all;
+ *   - the board has no line standing for that house, so there is nowhere to
+ *     file it and silently dropping it would lose the payment.
+ *
+ * `houseLines` are the property lines, paired with the house each one stands
+ * for — see `houseForLine` for how that pairing is made.
+ */
+export function fileUnderHouseLine(
+  chosenHouseId: string | null,
+  houses: readonly HouseLike[],
+  houseLines: readonly { subcategoryId: string; houseId: string }[],
+): string | null {
+  if (!chosenHouseId) return null;
+
+  // The user's own home is what the bill line already tracks.
+  const primary = houses.find((house) => house.isPrimary);
+  if (primary && chosenHouseId === primary.id) return null;
+
+  return houseLines.find((line) => line.houseId === chosenHouseId)?.subcategoryId ?? null;
 }
 
 /**

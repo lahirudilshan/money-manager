@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
 import { ManagePlanSheet } from '~/features/budget/components/ManagePlanSheet';
@@ -151,6 +151,34 @@ export default function SmsDraftModal() {
    * house across — see `effectiveHouseId`.
    */
   const [houseChoice, setHouseChoice] = useState<string | null>(null);
+
+  /*
+   * Reset every per-draft choice when a DIFFERENT message opens here.
+   *
+   * All of the state above is seeded by `useState`, which runs once per mount —
+   * and this screen is reused as the queue is worked through, so the next draft
+   * inherited the previous one's answers. It went unnoticed while the target
+   * line was only ever the suggestion; once naming a house FILES the payment
+   * under that house's line (see `fileUnderHouseLine`), the stale value became
+   * money in the wrong place: confirming a Weligama bill and then an own-home
+   * one sent the second to Weligama too.
+   *
+   * Keyed on the route id rather than the draft object, which is a fresh
+   * reference on every store update and would reset mid-edit.
+   */
+  const lastDraftId = useRef(id);
+  useEffect(() => {
+    if (lastDraftId.current === id) return;
+    lastDraftId.current = id;
+
+    setSubcategoryId(draft?.subcategoryId ?? '');
+    setHouseChoice(null);
+    setSplitting(false);
+    setSplitParts([]);
+    setPickingPartKey(null);
+    setAmountText(draft ? formatAmountInput(toMajor(draft.amountMinor).toFixed(2)) : '0');
+    setPicking(!draft?.subcategoryId || draft.confidence === 'unknown');
+  }, [id, draft]);
   /**
    * The manage-plan sheet, reachable from the category grid.
    *

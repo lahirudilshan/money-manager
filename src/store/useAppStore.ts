@@ -145,6 +145,7 @@ import { defaultCurrencyForRegion } from '~/features/rates/logic/currencies';
 import { deviceRegion } from '~/features/rates/logic/deviceRegion';
 import { salaryRateCurrency } from '~/features/rates/logic/useSalaryRate';
 import type { BankRate } from '~/features/rates/logic/bankRates';
+import { billAccumulatesPerHouse } from '~/features/budget/logic/houses';
 import type {
   Card,
   Category,
@@ -192,6 +193,14 @@ export interface AppState {
   fundingTotals: Map<string, Minor>;
   /** SUM of child transactions per ongoing subcategory, for the period. */
   transactionTotals: Map<string, Minor>;
+  /**
+   * This month's spend per HOUSE, from anywhere on the board.
+   *
+   * Lets a property's own line report what that property really cost —
+   * transfers sent to it PLUS the bills tagged to it, which previously sat
+   * under Living and were counted nowhere against the house.
+   */
+  houseTotals: Map<string, Minor>;
   incomes: Income[];
   loans: Loan[];
   currency: string;
@@ -746,6 +755,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   accountTransferStates: new Map(),
   fundingTotals: new Map(),
   transactionTotals: new Map(),
+  houseTotals: new Map(),
   incomes: [],
   loans: [],
   currency: 'LKR',
@@ -883,6 +893,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       accountTransferStates: accountTransferRepo.byPeriod(period),
       fundingTotals: fundingRepo.totalsByPeriod(period),
       transactionTotals: transactionRepo.totalsByPeriod(period),
+      houseTotals: transactionRepo.houseTotalsByPeriod(period),
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
     });
@@ -1449,6 +1460,32 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     // it wins over the month currently on screen — otherwise back-dating an
     // entry would silently file it under whichever period was being viewed.
     const period = input.date ? periodKey(input.date) : get().period;
+
+    /*
+     * A house-scoped bill on a multi-house board records an ENTRY per payment.
+     *
+     * `stateRepo.logTransaction` writes the month's single figure, which holds
+     * one amount and one house — so paying the same bill for two properties
+     * overwrote the first payment and took its house with it. Same reasoning,
+     * and same predicate, as the SMS path in smsSlice; done here so the manual
+     * "log a payment" screens cannot lose money the confirm flow now keeps.
+     */
+    const line = get().subcategories.find((s) => s.id === subcategoryId);
+    if (line && !isOngoing(line.frequency) && billAccumulatesPerHouse(get().houses, line.houseScoped)) {
+      transactionRepo.create({
+        subcategoryId,
+        period,
+        name: line.name,
+        amountMinor: input.actualMinor ?? 0,
+        date: input.date ?? new Date(),
+        note: input.note ?? null,
+        imageUri: input.imageUri ?? null,
+        houseId: input.houseId ?? null,
+      });
+      get().refreshBoard();
+      return;
+    }
+
     stateRepo.logTransaction(subcategoryId, period, input);
     get().refreshBoard();
   },

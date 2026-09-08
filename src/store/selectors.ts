@@ -328,6 +328,20 @@ export function selectTransactionEntries(
   return entries.sort((a, b) => new Date(b.txn.date).getTime() - new Date(a.txn.date).getTime());
 }
 
+/**
+ * A line's month-by-month spend, for the history chart on its detail screen.
+ *
+ * Reads the DB directly rather than the totals map, which only ever holds the
+ * month being viewed. Capped at a year: enough to show a season (heating,
+ * water in summer) without turning the chart into a wall of thin bars.
+ */
+export function selectMonthlyHistory(
+  subcategoryId: string,
+  months = 12,
+): { period: string; totalMinor: Minor }[] {
+  return transactionRepo.monthlyHistory(subcategoryId, months);
+}
+
 export function selectCategoryView(state: AppState, categoryId: string): CategoryView | undefined {
   return selectCategoryViews(state).find((view) => view.category.id === categoryId);
 }
