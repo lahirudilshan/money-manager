@@ -12,8 +12,21 @@ import {
   withAmount,
   type SplitPart,
 } from '~/features/budget/logic/splits';
-import { AmountField, Field } from '~/shared/components/forms';
-import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { AmountField, Field, NameWithIconField } from '~/shared/components/forms';
+import {
+  BottomSheet,
+  Button,
+  GradientButton,
+  Label,
+  Row,
+  Segmented,
+  Surface,
+  Text,
+} from '~/shared/components/ui';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { parseEnabled } from '~/shared/lib/miniApps';
+import { defaultDirection, offersLoanAction } from '~/features/buddyloans/logic/fromDraft';
+import { LoanFields, useLoanDraft } from '~/features/buddyloans/components/LoanFields';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { to12Hour } from '~/shared/lib/dates';
 import { defaultHouseId } from '~/features/budget/logic/houses';
@@ -150,6 +163,38 @@ export default function SmsDraftModal() {
    * line re-derives its own default instead of carrying the previous line's
    * house across — see `effectiveHouseId`.
    */
+  /**
+   * What the payment WAS, in the user's words.
+   *
+   * Seeded from the bank's merchant so the common case stays one tap — the
+   * string is usually right, and re-typing "KEELLS SUPER" helps nobody. It
+   * earns its place on the messages that carry no merchant at all, which used
+   * to log as the literally useless "SMS transaction".
+   */
+  const [nameText, setNameText] = useState(draft?.parsed.merchant ?? '');
+
+  /*
+   * Recording this transfer as a LOAN rather than an expense.
+   *
+   * Money lent to a friend is an asset coming back, not spending. Kept in this
+   * screen's own state (rather than a route) so the answer is collected without
+   * leaving the message being reviewed.
+   */
+  const [loanOpen, setLoanOpen] = useState(false);
+
+  /*
+   * The loan form's state, seeded from the message: the bank stated the amount,
+   * the date, and that it moved by transfer. Only the person is unknowable from
+   * the text — a CEFTS alert names the channel, never the payee.
+   */
+  const loanDraft = useLoanDraft({
+    seedAmountMinor: draft?.amountMinor,
+    seedDirection: draft ? defaultDirection(draft.parsed.kind) : 'lent',
+    seedMethod: 'transfer',
+    seedLentOn: draft?.parsed.date ? new Date(draft.parsed.date) : undefined,
+    seedNote: draft?.parsed.raw ?? null,
+  });
+
   const [houseChoice, setHouseChoice] = useState<string | null>(null);
 
   /*
@@ -172,6 +217,8 @@ export default function SmsDraftModal() {
     lastDraftId.current = id;
 
     setSubcategoryId(draft?.subcategoryId ?? '');
+    setNameText(draft?.parsed.merchant ?? '');
+    setLoanOpen(false);
     setHouseChoice(null);
     setSplitting(false);
     setSplitParts([]);
@@ -318,6 +365,7 @@ export default function SmsDraftModal() {
     state.confirmDraft(draft.id, {
       subcategoryId,
       amountMinor,
+      name: nameText,
       houseId: houseScoped ? effectiveHouseId : null,
       // Only when the split is complete — a half-filled editor logs as an
       // ordinary single-line entry rather than silently dropping the parts.
@@ -358,6 +406,7 @@ export default function SmsDraftModal() {
     state.confirmDraft(draft.id, {
       subcategoryId: suggested.id,
       amountMinor,
+      name: nameText,
       houseId: houseScoped ? effectiveHouseId : null,
     });
     closeModal();
@@ -416,6 +465,22 @@ export default function SmsDraftModal() {
 
   const createAndLog = () => {
     state.createLineForDraft(draft.id, { amountMinor });
+    closeModal();
+  };
+
+  /*
+   * Save as a loan, writing NO transaction.
+   *
+   * The bank never names the payee — a CEFTS transfer parses to "CEFTS Outward
+   * Transfer", the channel it used — so the person is asked for and is the one
+   * thing that gates saving.
+   */
+  const saveAsLoan = () => {
+    if (!loanDraft.canSave) {
+      loanDraft.setShowErrors(true);
+      return;
+    }
+    state.logDraftAsBuddyLoan(draft.id, loanDraft.toPatch());
     closeModal();
   };
 
@@ -581,6 +646,17 @@ export default function SmsDraftModal() {
           value={amountText}
           onChangeText={setAmountText}
           error={amountError}
+        />
+
+        {/* The same question manual entry asks. A bank message names a
+            merchant at best, and often nothing — so without this the entry
+            reads back as "SMS transaction" and the user cannot say what it
+            was. Not autofocused: the sheet opens to be READ first. */}
+        <Field
+          label="What was it?"
+          value={nameText}
+          onChangeText={setNameText}
+          placeholder="e.g. Keells run"
         />
 
         {/* What the system detected, and how sure it is. Shown instead of the
@@ -790,12 +866,69 @@ export default function SmsDraftModal() {
         {/* The only escape here: deleting is offered by the × on the dashboard
             card, so repeating it in this modal would be two controls for one
             action. */}
+        {/* Offered on TRANSFERS only, and only with the add-on switched on:
+            a supermarket purchase is not a loan, and putting this on every
+            message would be noise on the ninety-nine that are spending. */}
+        {offersLoanAction(parsed.kind, parseEnabled(state.miniApps).has('buddyloans')) ? (
+          <Button
+            label="This was a loan"
+            icon="people-outline"
+            variant="ghost"
+            /* The direction is already seeded from the message when the draft
+               is built — see `useLoanDraft` above — so opening is all this does. */
+            onPress={() => setLoanOpen(true)}
+          />
+        ) : null}
+
         <Button
           label="Mark as already logged"
           icon="checkmark-done-outline"
           variant="ghost"
           onPress={markAlreadyLogged}
         />
+
+      {/*
+        Who the money went to, and when it is due back.
+
+        NOT `asRoute`: this is nested inside the review sheet, which IS the
+        route modal, so it needs its own presentation. Mutually exclusive with
+        the other nested sheets here — two native pageSheets mounted at once is
+        the stacking failure that made a sheet silently never appear.
+      */}
+      {loanOpen && !manageOpen && pickingPartKey === null ? (
+        <BottomSheet
+          visible
+          onClose={() => setLoanOpen(false)}
+          title="Record as a loan"
+          eyebrow={formatMoney(amountMinor)}
+          icon="people-outline"
+          iconColor={colors.accent}
+          scroll
+          footer={
+            <GradientButton
+              label="Save loan"
+              icon="checkmark"
+              onPress={saveAsLoan}
+              disabled={!loanDraft.canSave}
+            />
+          }
+        >
+          {/*
+            The SAME form the add-on's "New loan" sheet uses.
+
+            Two screens record a loan, and when each owned its form they drifted
+            — this one asked three questions with a different direction control
+            and no method, note or photo. The amount is hidden because the bank
+            already stated it, and editing it would let the record disagree with
+            the statement line it came from.
+          */}
+          <LoanFields
+            draft={loanDraft}
+            hideAmount
+            intro="This is money coming back, so it is not logged as spending."
+          />
+        </BottomSheet>
+      ) : null}
 
       {/*
         The grid's "Manage" tile, as a PICKER as well as an editor.

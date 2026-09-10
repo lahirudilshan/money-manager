@@ -749,7 +749,19 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
      * An empty row is rendered inert instead (see the dashboard), so the list
      * stays a list of actions without hiding the accounts that have none.
      */
-    .sort((a, b) => b.toTransferMinor - a.toTransferMinor || b.plannedMinor - a.plannedMinor);
+    /*
+     * Ordered by what the account is FOR, not by what is left to move.
+     *
+     * Sorting on `toTransferMinor` re-ordered the list mid-task: ticking an
+     * account drops its outstanding figure to zero, so the row slid to the
+     * bottom and the next one jumped up into the spot the user was already
+     * reaching for — marking the wrong account transferred.
+     *
+     * `plannedMinor` is fixed for the month, so the list a user works down
+     * stays put under their finger. Ticked rows are dimmed in place (see the
+     * dashboard's `done`), which shows progress without moving anything.
+     */
+    .sort((a, b) => b.plannedMinor - a.plannedMinor || a.card.id.localeCompare(b.card.id));
 }
 
 /**

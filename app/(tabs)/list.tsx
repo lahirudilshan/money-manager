@@ -438,11 +438,21 @@ export default function ListScreen() {
         />
       )}
 
-        <AddSubcategorySheet
-          category={addingToCategory}
-          onClose={() => setAddingToCategoryId(null)}
-        />
+        {/*
+          Only ONE of these is mounted at a time.
 
+          Both render a native `pageSheet` Modal, and iOS silently refuses to
+          present a second while one is up — so a sheet left mounted (even
+          invisible) could block the next one from ever appearing. Rendering
+          them exclusively means there is never a second presentation to
+          refuse, which is the whole of the bug.
+        */}
+        {addingToCategory ? (
+          <AddSubcategorySheet
+            category={addingToCategory}
+            onClose={() => setAddingToCategoryId(null)}
+          />
+        ) : (
         <PlanDetailSheet
           visible={showingPlanDetail}
           onClose={() => setShowingPlanDetail(false)}
@@ -451,6 +461,7 @@ export default function ListScreen() {
           totals={totals}
           health={health}
         />
+        )}
       </ScrollView>
     </View>
   );

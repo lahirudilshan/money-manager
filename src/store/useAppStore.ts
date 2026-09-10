@@ -562,6 +562,15 @@ export interface AppState {
     overrides?: {
       subcategoryId?: string;
       amountMinor?: Minor;
+      /**
+       * What the payment WAS, in the user's words.
+       *
+       * The bank's merchant string is a starting point, not an answer — a
+       * transfer or an unnamed debit arrives as "SMS transaction", which tells
+       * the user nothing when they read the line back. Manual entry has always
+       * asked "What was it?"; this is the same question on the confirm path.
+       */
+      name?: string;
       note?: string | null;
       /** Which property this payment was for — see core/houses.ts. */
       houseId?: string | null;
@@ -581,6 +590,22 @@ export interface AppState {
   ) => void;
   /** Discard a queued draft without logging it. */
   dismissDraft: (draftId: string) => void;
+  /**
+   * Record a detected transfer as a LOAN instead of an expense.
+   *
+   * Money lent to a friend is an asset coming back, not spending — logging it
+   * as a transaction overstated the month by the whole amount, and dismissing
+   * the message lost the record. This writes the buddy-loan row and resolves
+   * the draft WITHOUT touching `transactions`.
+   *
+   * The draft resolves as `dismissed` rather than `confirmed`: nothing was
+   * added to the board, and the status enum has no third option. Its
+   * fingerprint still blocks the same message from re-importing.
+   */
+  logDraftAsBuddyLoan: (
+    draftId: string,
+    input: Omit<NewBuddyLoan, 'id'>,
+  ) => BuddyLoan | null;
 
   /** Add a property whose bills are tracked separately. See core/houses.ts. */
   addHouse: (input: Omit<NewHouse, 'id'>) => House;
@@ -992,6 +1017,18 @@ export const useAppStore = create<AppState>((set, get, api) => ({
 
   addBuddyLoan(input) {
     const created = buddyLoanRepo.create(input);
+    get().refreshMiniAppData();
+    return created;
+  },
+
+  logDraftAsBuddyLoan(draftId, input) {
+    const draft = get().smsDrafts.find((d) => d.id === draftId);
+    if (!draft) return null;
+
+    // The loan first: if this throws, the draft stays in the queue rather than
+    // being resolved against a record that was never written.
+    const created = buddyLoanRepo.create(input);
+    get().dismissDraft(draftId);
     get().refreshMiniAppData();
     return created;
   },

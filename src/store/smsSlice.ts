@@ -1214,7 +1214,10 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       const created = transactionRepo.create({
         subcategoryId: splits[0].subcategoryId,
         period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
-        name: draft.parsed.merchant || 'SMS transaction',
+        // The user's own words win over the bank's merchant string, which is
+        // often absent — an unnamed debit otherwise reads back as the useless
+        // "SMS transaction".
+        name: overrides?.name?.trim() || draft.parsed.merchant || 'SMS transaction',
         amountMinor,
         date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
         note: overrides?.note ?? draft.parsed.raw,
@@ -1248,7 +1251,10 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       transactionRepo.create({
         subcategoryId,
         period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
-        name: draft.parsed.merchant || 'SMS transaction',
+        // The user's own words win over the bank's merchant string, which is
+        // often absent — an unnamed debit otherwise reads back as the useless
+        // "SMS transaction".
+        name: overrides?.name?.trim() || draft.parsed.merchant || 'SMS transaction',
         amountMinor,
         date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
         note: overrides?.note ?? draft.parsed.raw,
