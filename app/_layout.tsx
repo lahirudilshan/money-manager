@@ -582,6 +582,10 @@ function RootNavigator() {
             backing out of a form returns to the timeline rather than to the
             chooser it came through.
           */}
+          <Stack.Screen name="mini/trackers/index" />
+          <Stack.Screen name="mini/trackers/detail" />
+          <Stack.Screen name="mini/trackers/item" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/trackers/refill" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/health/index" />
           <Stack.Screen name="mini/health/prescriptions" />
           {/* Browsing destinations: places you go and come back from, so they

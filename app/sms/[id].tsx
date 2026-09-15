@@ -866,18 +866,56 @@ export default function SmsDraftModal() {
         {/* The only escape here: deleting is offered by the × on the dashboard
             card, so repeating it in this modal would be two controls for one
             action. */}
-        {/* Offered on TRANSFERS only, and only with the add-on switched on:
-            a supermarket purchase is not a loan, and putting this on every
-            message would be noise on the ninety-nine that are spending. */}
+        {/*
+          Offered on TRANSFERS only, and only with the add-on switched on: a
+          supermarket purchase is not a loan, and putting this on every message
+          would be noise on the ninety-nine that are spending.
+
+          Shaped as the QUESTION card the split action uses, not a button.
+          "This was a loan" was a statement the user had to recognise as
+          relevant; both of these ask about the thing they actually did — money
+          handed to a person — and the answer is a plain yes. The two live
+          side by side, so they read as the same kind of prompt.
+        */}
         {offersLoanAction(parsed.kind, parseEnabled(state.miniApps).has('buddyloans')) ? (
-          <Button
-            label="This was a loan"
-            icon="people-outline"
-            variant="ghost"
+          <Pressable
             /* The direction is already seeded from the message when the draft
                is built — see `useLoanDraft` above — so opening is all this does. */
             onPress={() => setLoanOpen(true)}
-          />
+            accessibilityRole="button"
+            accessibilityLabel={
+              isCredit
+                ? 'Is someone paying you back? Record it as a loan.'
+                : 'Did you lend this to someone? Record it as a loan.'
+            }
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.sm,
+              paddingVertical: 12,
+              paddingHorizontal: space.md,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderStyle: 'dashed',
+              borderColor: colors.hairlineStrong,
+              backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+            })}
+          >
+            <Ionicons name="help-circle-outline" size={17} color={colors.accent} />
+            <View style={{ flex: 1 }}>
+              <Text variant="small" style={{ fontWeight: '600' }}>
+                {isCredit ? 'Is someone paying you back?' : 'Did you lend this to someone?'}
+              </Text>
+              <Text variant="caption" tone="muted">
+                {isCredit
+                  ? 'Money coming back is not income'
+                  : 'Money coming back is not spending'}
+              </Text>
+            </View>
+            <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+              Yes, it&apos;s a loan
+            </Text>
+          </Pressable>
         ) : null}
 
         <Button

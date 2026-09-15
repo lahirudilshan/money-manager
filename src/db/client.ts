@@ -626,6 +626,34 @@ CREATE TABLE IF NOT EXISTS category_states (
   // rather than drawing the same month on the chart twice.
   `CREATE UNIQUE INDEX IF NOT EXISTS meter_readings_account_period_idx
      ON meter_readings(account_number, period)`,
+  // A thing that gets used up and replaced. Generic on purpose: the gap between
+  // replacements is the same measurement whatever the item is.
+  `CREATE TABLE IF NOT EXISTS tracked_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    unit_label TEXT,
+    icon TEXT,
+    expected_days INTEGER,
+    archived INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS tracked_items_archived_idx
+     ON tracked_items(archived, name)`,
+  // price_minor is nullable: a refill with no price still measures a duration,
+  // and that measurement is the point of the add-on.
+  `CREATE TABLE IF NOT EXISTS refills (
+    id TEXT PRIMARY KEY NOT NULL,
+    item_id TEXT NOT NULL REFERENCES tracked_items(id) ON DELETE CASCADE,
+    filled_on INTEGER NOT NULL,
+    price_minor INTEGER,
+    transaction_id TEXT,
+    note TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  )`,
+  `CREATE INDEX IF NOT EXISTS refills_item_idx ON refills(item_id, filled_on)`,
 ];
 
 /**

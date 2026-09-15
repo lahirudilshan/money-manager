@@ -1724,3 +1724,84 @@ export const SUBCATEGORY_STATUSES: SubcategoryStatus[] = ['pending', 'paid'];
 /** The two states a category's bulk transfer moves through in a month. */
 export type CategoryFundingStatus = CategoryState['status'];
 export const CATEGORY_FUNDING_STATUSES: CategoryFundingStatus[] = ['pending', 'transferred'];
+
+/**
+ * A thing that gets used up and replaced: a gas cylinder, a water bottle, a
+ * filter cartridge.
+ *
+ * Deliberately generic. The add-on's value is the gap between replacements,
+ * which is the same measurement whatever the item is, so the schema carries a
+ * name and a free-text unit rather than any notion of what is being tracked.
+ */
+export const trackedItems = sqliteTable(
+  'tracked_items',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    /**
+     * What one unit IS — "12.5kg cylinder", "20L bottle". Shown beside the
+     * name, never parsed: the app has no business knowing what a kilogram is.
+     */
+    unitLabel: text('unit_label'),
+    /** Ionicons glyph, so a list of items is scannable at a glance. */
+    icon: text('icon'),
+    /**
+     * The user's own guess at how long one lasts, in days. NULLABLE because
+     * most people do not know — and once there is real history it is ignored
+     * entirely (see `nextDue`), which is the point of the add-on.
+     */
+    expectedDays: integer('expected_days'),
+    /**
+     * Archived rather than deleted: an item you stop tracking still holds the
+     * price history you paid to collect. It drops out of the list and keeps
+     * its records.
+     */
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [index('tracked_items_archived_idx').on(t.archived, t.name)],
+);
+
+/** One replacement of a tracked item. */
+export const refills = sqliteTable(
+  'refills',
+  {
+    id: text('id').primaryKey(),
+    itemId: text('item_id')
+      .notNull()
+      .references(() => trackedItems.id, { onDelete: 'cascade' }),
+    filledOn: integer('filled_on', { mode: 'timestamp_ms' }).notNull(),
+    /**
+     * NULLABLE on purpose: a refill with no price still measures a duration,
+     * and refusing to save one without a figure would lose that measurement
+     * for the sake of a nicer chart.
+     */
+    priceMinor: integer('price_minor'),
+    /**
+     * The expense this refill wrote, when the user asked for one.
+     *
+     * Null is the default and the common case — Smart Detect usually catches
+     * the same purchase from the bank SMS, and writing a transaction here too
+     * would double-count it. Held so the expense can be cleaned up if the
+     * refill is deleted.
+     */
+    transactionId: text('transaction_id'),
+    note: text('note'),
+    ...timestamps,
+  },
+  (t) => [
+    // Every read is "this item's refills, newest first".
+    index('refills_item_idx').on(t.itemId, t.filledOn),
+  ],
+);
+
+export type TrackedItem = typeof trackedItems.$inferSelect;
+export type NewTrackedItem = typeof trackedItems.$inferInsert;
+/**
+ * The stored row. Distinct from `Refill` in features/refills/logic, which is
+ * the shape the maths needs — the logic module is deliberately ignorant of
+ * which item a refill belongs to, so it can be reused for anything.
+ */
+export type RefillRow = typeof refills.$inferSelect;
+export type NewRefill = typeof refills.$inferInsert;

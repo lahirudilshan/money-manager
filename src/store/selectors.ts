@@ -16,6 +16,11 @@ import {
   remainingBalance,
 } from '~/features/loans/logic/amortization';
 import { dueBuddyLoans } from '~/features/buddyloans/logic/buddyLoans';
+import {
+  trackerReminders,
+  type Refill as RefillLike,
+  type TrackerReminder,
+} from '~/features/refills/logic/refills';
 import { parseEnabled } from '~/shared/lib/miniApps';
 import type { BuddyLoan, BuddyRepayment as BuddyRepaymentRow } from '~/db/schema';
 import {
@@ -1009,4 +1014,28 @@ export function selectBuddyReminders(
     daysUntil: entry.daysUntil,
     urgency: entry.urgency,
   }));
+}
+
+/**
+ * Tracked items due for replacement, for the dashboard's "Coming up".
+ *
+ * ## Why the refills are a PARAMETER
+ *
+ * This module is imported by pure selector tests that stub `~/db/repositories`
+ * and run in plain node. Reading refills here — from any repository path —
+ * pulls `expo-sqlite` and therefore React Native's Flow-typed entry point into
+ * that graph, which vitest cannot parse: it took out three unrelated suites.
+ *
+ * So the caller supplies them. The dashboard already knows how to read a
+ * repository; this selector only has to decide what is due.
+ */
+export function selectTrackerReminders(
+  state: AppState,
+  refillsByItem: ReadonlyMap<string, readonly RefillLike[]>,
+  today = new Date(),
+): TrackerReminder[] {
+  if (!parseEnabled(state.miniApps).has('trackers')) return [];
+  if (state.trackedItems.length === 0) return [];
+
+  return trackerReminders(state.trackedItems, refillsByItem, today);
 }

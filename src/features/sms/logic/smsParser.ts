@@ -1141,6 +1141,23 @@ function extractMerchant(text: string): string {
    * and nothing else has no merchant to find — the stated transaction type
    * below is the right answer for it.
    */
+  /*
+   * "@ A S P Pharmacy & Grocery Kelaniya." — NDB's payee marker.
+   *
+   * This bank prints the shop after an "@", then states the transaction type:
+   * "@ <payee>. ATM POS Transaction." No clause read it, so every NDB alert
+   * reached the queue with an EMPTY merchant — and an empty merchant matches no
+   * category, which is why these drafts arrived with nothing suggested.
+   *
+   * Stops at the sentence end, so the trailing "ATM POS Transaction" and the
+   * bank's sign-off stay out of the name.
+   */
+  const atSign = text.match(/@\s*([^.\n]+?)\s*(?:\.|$)/);
+  if (atSign) {
+    const value = clean(atSign[1]);
+    if (value && /[A-Za-z]/.test(value)) return value;
+  }
+
   const at = text.match(/\bat\s+(.+?)(?:\.\s*Avl|\.\s*Av\.|\s+Avl\b|\n|$)/i);
   if (at && !LEADING_TIME.test(at[1])) return clean(at[1]);
 
@@ -1390,6 +1407,17 @@ function classifyKind(text: string, direction: SmsDirection, amountMinor: number
    * withdrawal, and `extractAmount` already skips the fee clause when reading
    * the amount.
    */
+  /*
+   * "ATM POS Transaction" is a PURCHASE, not a withdrawal.
+   *
+   * NDB prints that phrase on a card payment made at a POS terminal, so the
+   * bare-ATM test below claimed it and filed a 1,124.20 pharmacy purchase as
+   * cash out of a machine — which also meant no merchant category could ever
+   * match it. Only an explicit cash withdrawal is `atm`.
+   */
+  if (/\bATM\b[^.]*\bPOS\b/i.test(text) && !/cash\s+withdrawal/i.test(text)) {
+    return 'purchase';
+  }
   if (/\bATM\b|withdrawal/i.test(text)) return 'atm';
 
   /*

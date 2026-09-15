@@ -15,6 +15,8 @@ import { formatPeriod, planHealth, shiftPeriod } from '~/features/budget/logic/p
 import { canUse } from '~/features/budget/logic/plans';
 import { enabledMiniApps, MINI_APPS, parseEnabled } from '~/shared/lib/miniApps';
 import { HEALTH_VISUALS, shadeHex } from '~/shared/theme';
+import type { Refill as RefillLike, TrackerReminder } from '~/features/refills/logic/refills';
+import { refillRepo } from '~/db/repositories/trackers';
 import { accountLabel, resolveBrand } from '~/shared/data/banks';
 import {
   selectAccountTransfers,
@@ -24,6 +26,7 @@ import {
   selectRatios,
   selectReminders,
   selectBuddyReminders,
+  selectTrackerReminders,
   type BuddyReminderView,
   selectTotalIncome,
   useAppStore,
@@ -143,6 +146,38 @@ export default function DashboardScreen() {
   const buddyReminders = useMemo(() => selectBuddyReminders(state), [state]);
 
   /*
+   * Tracked items running out, in the same list as the bills and loans.
+   *
+   * A gas cylinder with four days left is a deadline like any other, and the
+   * whole point of measuring how long one lasts is to be told BEFORE it runs
+   * out rather than after. `selectTrackerReminders` returns nothing when the
+   * add-on is off, and nothing for an item still running on the user's own
+   * estimate — see its note on why a guess is not news.
+   */
+  const trackerRemindersList = useMemo(() => {
+    /*
+     * Refills are read HERE, not inside the selector.
+     *
+     * `selectors.ts` is imported by pure node tests that stub the repositories;
+     * reaching for `expo-sqlite` from inside it drags React Native's Flow entry
+     * point into that graph and vitest cannot parse it. The screen already owns
+     * a database, so the lookup belongs on this side of the boundary.
+     *
+     * Skipped entirely when there are no tracked items, so the majority who
+     * never enable the add-on never touch the table.
+     */
+    if (state.trackedItems.length === 0) return [];
+
+    const byItem = new Map<string, RefillLike[]>();
+    for (const row of refillRepo.all()) {
+      const bucket = byItem.get(row.itemId) ?? [];
+      bucket.push({ id: row.id, filledOn: row.filledOn, priceMinor: row.priceMinor });
+      byItem.set(row.itemId, bucket);
+    }
+    return selectTrackerReminders(state, byItem);
+  }, [state]);
+
+  /*
    * One list, ranked by urgency across BOTH kinds.
    *
    * Interleaved rather than appended: a loan nine days late belongs above a
@@ -153,12 +188,15 @@ export default function DashboardScreen() {
   const actionable = [
     ...[...overdue, ...dueSoon, ...upcoming].map((r) => ({ kind: 'bill' as const, r })),
     ...buddyReminders.map((r) => ({ kind: 'buddy' as const, r })),
+    ...trackerRemindersList.map((r) => ({ kind: 'tracker' as const, r })),
   ]
     .sort((a, b) => a.r.daysUntil - b.r.daysUntil)
     .slice(0, 5);
 
   const lateCount =
-    overdue.length + buddyReminders.filter((r) => r.urgency === 'overdue').length;
+    overdue.length +
+    buddyReminders.filter((r) => r.urgency === 'overdue').length +
+    trackerRemindersList.filter((r) => r.status === 'overdue').length;
 
   /*
    * Summed in the HOME currency, deliberately.
@@ -436,18 +474,10 @@ export default function DashboardScreen() {
                     opacity: pressed ? 0.7 : 1,
                   })}
                 >
-                  <View
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 12,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: `${app.color}1A`,
-                    }}
-                  >
-                    <Ionicons name={app.icon} size={19} color={app.color} />
-                  </View>
+                  {/* `Glyph`, not a hand-rolled tile: the add-on's icon appears
+                      in four places and two of them had drifted to different
+                      alphas and corner radii. One component, one recipe. */}
+                  <Glyph icon={app.icon} color={app.color} />
                   <View style={{ flex: 1 }}>
                     <Text variant="bodyStrong">{app.name}</Text>
                     <Text variant="caption" tone="muted" numberOfLines={1}>
@@ -627,17 +657,30 @@ export default function DashboardScreen() {
 
           <Surface padded={false} style={{ paddingVertical: space.xs }}>
             {actionable.map((entry, index) => (
-              <View key={entry.kind === 'bill' ? entry.r.subcategory.id : entry.r.loan.id}>
+              <View
+                key={
+                  entry.kind === 'bill'
+                    ? entry.r.subcategory.id
+                    : entry.kind === 'buddy'
+                      ? entry.r.loan.id
+                      : entry.r.itemId
+                }
+              >
                 {index > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
                 {entry.kind === 'bill' ? (
                   <ReminderRow
                     reminder={entry.r}
                     onPress={() => router.push(`/subcategory/${entry.r.subcategory.id}`)}
                   />
-                ) : (
+                ) : entry.kind === 'buddy' ? (
                   <BuddyReminderRow
                     reminder={entry.r}
                     onPress={() => router.push(`/mini/buddyloans/detail?id=${entry.r.loan.id}`)}
+                  />
+                ) : (
+                  <TrackerReminderRow
+                    reminder={entry.r}
+                    onPress={() => router.push(`/mini/trackers/detail?id=${entry.r.itemId}`)}
                   />
                 )}
               </View>
@@ -1374,5 +1417,92 @@ function LegendDot({ shade, label }: { shade: number; label: string }) {
         {label}
       </Text>
     </Row>
+  );
+}
+
+/**
+ * A tracked item about to run out, in "Coming up".
+ *
+ * Deliberately shaped like `BuddyReminderRow` — same tile, same urgency accent,
+ * same chevron — because the section's whole premise is that a bill, a loan and
+ * a gas cylinder are the same kind of thing here: something with a date
+ * attached. What differs is the trailing figure: a loan owes money, an item
+ * owes a REPLACEMENT, so this row ends in the days left rather than an amount.
+ */
+function TrackerReminderRow({
+  reminder,
+  onPress,
+}: {
+  reminder: TrackerReminder;
+  onPress: () => void;
+}) {
+  const { colors, space } = useTheme();
+
+  const overdue = reminder.status === 'overdue';
+  const accent = overdue ? colors.danger : colors.pending;
+
+  const days = Math.abs(reminder.daysUntil);
+  const when = overdue
+    ? days === 1
+      ? 'Ran out a day ago'
+      : `Ran out ${days} days ago`
+    : reminder.daysUntil === 0
+      ? 'Due today'
+      : reminder.daysUntil === 1
+        ? 'Due tomorrow'
+        : `${days} days left`;
+
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${reminder.name}, ${when}`}
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 12,
+          backgroundColor: overdue ? colors.dangerSoft : colors.pendingSoft,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Ionicons
+          name={(reminder.icon as keyof typeof Ionicons.glyphMap) ?? 'repeat-outline'}
+          size={18}
+          color={accent}
+        />
+      </View>
+
+      <View style={{ flex: 1 }}>
+        <Text variant="bodyStrong" numberOfLines={1}>
+          {reminder.name}
+        </Text>
+        <Row gap={space.xs}>
+          <Text variant="caption" color={accent} style={{ fontWeight: '700' }}>
+            {when}
+          </Text>
+          {/*
+            A projection from ONE span is hedged in the row itself. The reader
+            cannot see how much history is behind the date, and a guess dressed
+            as a deadline is the failure this add-on exists to avoid.
+          */}
+          <Text variant="caption" tone="muted" numberOfLines={1}>
+            · {reminder.provisional ? 'rough estimate' : 'time to replace'}
+          </Text>
+        </Row>
+      </View>
+
+      <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
+    </Pressable>
   );
 }

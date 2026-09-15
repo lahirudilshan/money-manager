@@ -11,6 +11,7 @@ import {
 } from '~/features/budget/logic/sortOrder';
 import { isFullyRepaid } from '~/features/buddyloans/logic/buddyLoans';
 import { buddyLoanRepo, buddyRepaymentRepo } from '~/db/repositories/buddyLoans';
+import { refillRepo, trackedItemRepo } from '~/db/repositories/trackers';
 import { deletePersistedImage } from '~/shared/lib/imageStorage';
 
 /**
@@ -127,6 +128,10 @@ import {
   type NewVehicle,
   type Vehicle,
   type HealthPerson,
+  type TrackedItem,
+  type NewTrackedItem,
+  type NewRefill,
+  type RefillRow,
   type BuddyLoan,
   type BuddyRepayment,
   type NewBuddyLoan,
@@ -284,6 +289,14 @@ export interface AppState {
   /** Family members tracked by the health add-on — see core/miniApps.ts. */
   healthPeople: HealthPerson[];
   /**
+   * Tracked items only — never their refills.
+   *
+   * The list is small and every screen needs it for a header; refills are read
+   * from the repository by the screen showing them, as the fuel add-on does
+   * with fill-ups.
+   */
+  trackedItems: TrackedItem[];
+  /**
    * Money lent to people — see core/miniApps.ts.
    *
    * Unlike the health add-on's records, these DO live in the store: the
@@ -311,6 +324,25 @@ export interface AppState {
   addVehicle: (input: Omit<NewVehicle, 'id'>) => Vehicle;
   updateVehicle: (id: string, patch: Partial<NewVehicle>) => void;
   deleteVehicle: (id: string) => void;
+  addTrackedItem: (input: Omit<NewTrackedItem, 'id'>) => TrackedItem;
+  updateTrackedItem: (id: string, patch: Partial<NewTrackedItem>) => void;
+  /** Archive keeps the price history; only an explicit delete discards it. */
+  archiveTrackedItem: (id: string, archived: boolean) => void;
+  deleteTrackedItem: (id: string) => void;
+  /**
+   * Record a replacement.
+   *
+   * `logAs` is optional and off by default: Smart Detect usually catches the
+   * same purchase from the bank SMS, so writing a transaction here too would
+   * double-count it. When given, the expense is written and its id kept on the
+   * refill so deleting one cleans up the other.
+   */
+  addRefill: (
+    input: Omit<NewRefill, 'id' | 'transactionId'>,
+    logAs?: { subcategoryId: string; name: string } | null,
+  ) => RefillRow;
+  updateRefill: (id: string, patch: Partial<NewRefill>) => void;
+  deleteRefill: (id: string) => void;
   addHealthPerson: (input: Omit<NewHealthPerson, 'id'>) => HealthPerson;
   updateHealthPerson: (id: string, patch: Partial<NewHealthPerson>) => void;
   deleteHealthPerson: (id: string) => void;
@@ -800,6 +832,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   miniApps: '',
   vehicles: [],
   healthPeople: [],
+  trackedItems: [],
   buddyLoans: [],
   buddyRepayments: [],
 
@@ -1012,6 +1045,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
        * enable this — and would keep it in memory long after the screen closed.
        */
       healthPeople: healthPersonRepo.all(),
+      trackedItems: trackedItemRepo.all(),
     });
   },
 
@@ -1019,6 +1053,70 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     const created = buddyLoanRepo.create(input);
     get().refreshMiniAppData();
     return created;
+  },
+
+  addTrackedItem(input) {
+    const created = trackedItemRepo.create(input);
+    get().refreshMiniAppData();
+    return created;
+  },
+
+  updateTrackedItem(id, patch) {
+    trackedItemRepo.update(id, patch);
+    get().refreshMiniAppData();
+  },
+
+  archiveTrackedItem(id, archived) {
+    trackedItemRepo.archive(id, archived);
+    get().refreshMiniAppData();
+  },
+
+  deleteTrackedItem(id) {
+    trackedItemRepo.remove(id);
+    get().refreshMiniAppData();
+  },
+
+  addRefill(input, logAs) {
+    /*
+     * The expense is written FIRST, so the refill can hold its id. A failure
+     * here leaves no refill rather than a refill pointing at a transaction
+     * that was never created.
+     */
+    let transactionId: string | null = null;
+    if (logAs && input.priceMinor != null) {
+      const created = transactionRepo.create({
+        subcategoryId: logAs.subcategoryId,
+        period: periodKey(input.filledOn),
+        name: logAs.name,
+        amountMinor: input.priceMinor,
+        date: input.filledOn,
+      });
+      transactionId = created.id;
+    }
+
+    const refill = refillRepo.create({ ...input, transactionId });
+    get().refreshMiniAppData();
+    // A new expense changes the board's totals; the tracker list does not.
+    if (transactionId) get().refreshBoard();
+    return refill;
+  },
+
+  updateRefill(id, patch) {
+    refillRepo.update(id, patch);
+    get().refreshMiniAppData();
+  },
+
+  deleteRefill(id) {
+    /*
+     * An expense written BY this refill goes with it. Leaving it behind would
+     * put a charge in the budget with nothing left in the app explaining it.
+     */
+    const existing = refillRepo.byId(id);
+    if (existing?.transactionId) transactionRepo.remove(existing.transactionId);
+
+    refillRepo.remove(id);
+    get().refreshMiniAppData();
+    if (existing?.transactionId) get().refreshBoard();
   },
 
   logDraftAsBuddyLoan(draftId, input) {

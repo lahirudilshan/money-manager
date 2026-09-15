@@ -1,7 +1,12 @@
 import React from 'react';
 import { AppState, View } from 'react-native';
-import { shouldRelockOnResume, shouldTrackAbsence } from '~/shared/lib/lockPolicy';
-import { verifyPin } from '~/shared/lib/appPin';
+import {
+  shouldRelockOnResume,
+  shouldTrackAbsence,
+  unlockMethod,
+  type UnlockMethod,
+} from '~/shared/lib/lockPolicy';
+import { hasPin, verifyPin } from '~/shared/lib/appPin';
 import { canUseBiometrics, confirmWithBiometrics } from '~/shared/lib/biometrics';
 import { useAppStore } from '~/store/useAppStore';
 import { useTheme } from '../theme/ThemeProvider';
@@ -64,6 +69,7 @@ export function AppLockGate({
   const splashCanvas = SPLASH_THEME[mode === 'dark' ? 'dark' : 'light'].canvas;
   const enabled = useAppStore((s) => s.appLockEnabled);
   const ready = useAppStore((s) => s.ready);
+  const setAppLockEnabled = useAppStore((s) => s.setAppLockEnabled);
 
   const [unlocked, setUnlocked] = React.useState(false);
   const [prompting, setPrompting] = React.useState(false);
@@ -72,7 +78,7 @@ export function AppLockGate({
    * the capability check resolves, which is why nothing is rendered before then
    * — guessing wrong would flash the wrong lock screen on every launch.
    */
-  const [method, setMethod] = React.useState<'biometric' | 'pin' | null>(null);
+  const [method, setMethod] = React.useState<UnlockMethod | null>(null);
   const [pin, setPin] = React.useState('');
   const [pinError, setPinError] = React.useState<string | null>(null);
   /** Set when a scan failed or was dismissed, so a retry can be offered. */
@@ -102,7 +108,24 @@ export function AppLockGate({
     void (async () => {
       const canScan = await canUseBiometrics();
       if (cancelled) return;
-      setMethod(canScan ? 'biometric' : 'pin');
+
+      /*
+       * No biometric AND no stored PIN means this lock cannot be satisfied.
+       *
+       * `app_lock` lives in SQLite but the PIN lives in the keychain, which is
+       * NOT part of a backup — so a restore, or a database copied from another
+       * device, arrives with the flag on and no secret to check against.
+       * `verifyPin` answers false when nothing is stored, so the keypad would
+       * reject every one of the ten thousand possible PINs with no way past it.
+       *
+       * Opening is the honest outcome: the app never had a secret to enforce,
+       * so there is nothing here to defeat. The settings screen still refuses
+       * to ENABLE a lock without setting a PIN first, which is what keeps this
+       * from weakening a lock the user actually configured.
+       */
+      const stored = canScan ? false : await hasPin();
+      if (cancelled) return;
+      setMethod(unlockMethod(canScan, stored));
     })();
     return () => {
       cancelled = true;
@@ -160,13 +183,24 @@ export function AppLockGate({
       setUnlocked(true);
       return;
     }
+
+    /*
+     * A lock with no way to satisfy it is cleared rather than merely opened,
+     * so the dead flag does not strand the next launch as well.
+     */
+    if (method === 'unsatisfiable') {
+      setUnlocked(true);
+      setAppLockEnabled(false);
+      return;
+    }
+
     if (unlocked || prompting || method !== 'biometric' || scanFailed) return;
 
     void runBiometrics();
     // `prompting` is deliberately absent: including it would re-run this when
     // the prompt closes and immediately re-prompt on a cancelled attempt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, ready, unlocked, method, scanFailed, runBiometrics]);
+  }, [enabled, ready, unlocked, method, scanFailed, runBiometrics, setAppLockEnabled]);
 
   /**
    * Re-lock only after a real absence.
@@ -270,6 +304,14 @@ export function AppLockGate({
   // Nothing until the capability check resolves — a flash of the wrong lock
   // screen on every launch is worse than a frame of the background colour.
   if (method === null) return <View style={{ flex: 1, backgroundColor: splashCanvas }} />;
+
+  /*
+   * Hold the canvas for the frame between learning the lock cannot be satisfied
+   * and the effect above clearing it — never the keypad, which would reject
+   * every entry.
+   */
+  if (method === 'unsatisfiable')
+    return <View style={{ flex: 1, backgroundColor: splashCanvas }} />;
 
   /*
    * A biometric device renders NOTHING here.

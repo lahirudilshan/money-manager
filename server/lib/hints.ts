@@ -122,6 +122,7 @@ const HINT_KEYWORDS: [Hint, RegExp[]][] = [
     'subscription',
     [
       /\bsubscription\b/i,
+      /\bdistrokid\b/i,
       /\bnetflix\b/i,
       /\bspotify\b/i,
       /\byoutube\b/i,
@@ -138,6 +139,56 @@ const HINT_KEYWORDS: [Hint, RegExp[]][] = [
    * ATM before fees: an ATM e-receipt itemises its own "Txn Fee", so testing
    * fee wording first tags every cash withdrawal as a bank charge.
    */
+  /*
+   * Health, BEFORE `atm` and `groceries`.
+   *
+   * Two reasons for the position. NDB prints "ATM POS Transaction" on a card
+   * payment, so the atm rule below claimed a 1,124.20 purchase at a chemist and
+   * labelled it "ATM cash". And a shop called "Pharmacy & Grocery" contains the
+   * word grocery, so the groceries rule would take it — but someone at a
+   * chemist's counter is buying medicine, and the pharmacy word is the more
+   * specific signal.
+   *
+   * `health` already existed as a tag with these words in HINT_SELF_WORDS,
+   * which matches BILL NAMES. Nothing matched them in a MESSAGE, so every
+   * pharmacy and hospital payment arrived with no suggestion at all.
+   */
+  [
+    'health',
+    [
+      /\bpharmac/i,
+      /\bchemist/i,
+      /\bhospital\b/i,
+      /\bmedical\b/i,
+      /\bmedicine\b/i,
+      /\bclinic\b/i,
+      /\bdental\b/i,
+      /\bnawaloka\b/i,
+      /\basiri\b/i,
+      /\bdurdans\b/i,
+      /\blanka\s+hospital/i,
+    ],
+  ],
+  /*
+   * Getting about, AFTER `fuel` so a filling station keeps its own tag.
+   *
+   * `transport` was declared as a tag and had no patterns anywhere, so a
+   * railway ticket in the user's history matched nothing at all and the card
+   * said "Needs a category" on a message that plainly says RAILWAY.
+   */
+  [
+    'transport',
+    [
+      /\brailway\b/i,
+      /\bpickme\b/i,
+      /\buber\b/i,
+      /\btaxi\b/i,
+      /\bbus\s+(?:ticket|fare|pass)\b/i,
+      /\btrain\s+(?:ticket|fare)\b/i,
+      /\bparking\b/i,
+      /\btoll\b/i,
+    ],
+  ],
   ['atm', [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i]],
   /*
    * Bank fees. AFTER `atm` (an ATM e-receipt itemises its own "Txn Fee", and

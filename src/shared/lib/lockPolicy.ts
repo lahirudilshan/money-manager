@@ -111,3 +111,26 @@ export function describeIdleTimeout(idleMs: number = IDLE_LOCK_MS): string {
   if (minutes < 1) return 'immediately';
   return `after ${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
+
+/** How this device can satisfy the lock. */
+export type UnlockMethod = 'biometric' | 'pin' | 'unsatisfiable';
+
+/**
+ * Which method a device must use, given what it actually has.
+ *
+ * `unsatisfiable` is the case that matters: `app_lock` lives in SQLite but the
+ * PIN lives in the keychain, and the keychain is NOT part of a backup. A
+ * restored database — or one copied from another device — therefore arrives
+ * with the lock switched on and no secret behind it. `verifyPin` answers false
+ * when nothing is stored, so a keypad shown in that state rejects all ten
+ * thousand possible PINs with no way past it.
+ *
+ * Reporting it as its own state rather than falling through to `pin` is what
+ * lets the gate open instead of stranding the user. It does not weaken a real
+ * lock: enabling one in settings still requires setting a PIN first, so a
+ * configured lock always has a secret to check against.
+ */
+export function unlockMethod(canScan: boolean, pinStored: boolean): UnlockMethod {
+  if (canScan) return 'biometric';
+  return pinStored ? 'pin' : 'unsatisfiable';
+}

@@ -44,7 +44,7 @@ import { CURRENCIES } from '~/features/rates/logic/currencies';
  */
 
 export default function SettingsScreen() {
-  const { colors, space } = useTheme();
+  const { colors, space, radius } = useTheme();
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -114,6 +114,28 @@ export default function SettingsScreen() {
     void canUseBiometrics().then(setBiometricsAvailable);
   }, []);
   const [themeOpen, setThemeOpen] = useState(false);
+  const [addOnsOpen, setAddOnsOpen] = useState(false);
+  const [addOnQuery, setAddOnQuery] = useState('');
+
+  /**
+   * Add-ons matching the search, in registry order.
+   *
+   * Matches name AND description, so the words a feature is known by find it:
+   * "gas" and "cylinder" only appear in the Usage tracker's description, and a
+   * name-only filter would report no matches for either.
+   *
+   * Order is never re-ranked by relevance — with four items the list is read
+   * whole, and a set that reshuffles as you type is harder to use than one that
+   * simply shortens.
+   */
+  const visibleAddOns = useMemo(() => {
+    const q = addOnQuery.trim().toLowerCase();
+    if (!q) return MINI_APPS;
+    return MINI_APPS.filter(
+      (app) =>
+        app.name.toLowerCase().includes(q) || app.description.toLowerCase().includes(q),
+    );
+  }, [addOnQuery]);
 
 
 
@@ -402,34 +424,24 @@ export default function SettingsScreen() {
           moving this month. A fuel log is genuinely useful to someone who drives
           and pure noise to someone who does not, so these are opt-in rather than
           shipped to everybody with an apology in Settings later.
+
+          Behind ONE row rather than listed inline. Each add-on needs a sentence
+          explaining what it does — nobody can judge "Usage tracker" from the
+          name — and four of those stacked in the middle of Settings pushed
+          every real preference below the fold. The set only grows, so the list
+          moved into its own sheet where the descriptions have room.
         */}
         <Section title="ADD-ON FEATURES">
-          {MINI_APPS.map((app, index) => {
-            const on = enabled.has(app.id);
-            return (
-              <View key={app.id}>
-                {index > 0 ? <Divider /> : null}
-                <Row
-                  gap={space.md}
-                  align="center"
-                  style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
-                >
-                  <Glyph icon={app.icon} color={app.color} />
-                  <View style={{ flex: 1 }}>
-                    <Text variant="body">{app.name}</Text>
-                    <Text variant="caption" tone="muted">
-                      {app.description}
-                    </Text>
-                  </View>
-                  <Switch
-                    value={on}
-                    onValueChange={(next) => state.setMiniAppEnabled(app.id, next)}
-                    accessibilityLabel={`${app.name}, ${on ? 'on' : 'off'}`}
-                  />
-                </Row>
-              </View>
-            );
-          })}
+          <SettingRow
+            icon="grid-outline"
+            color={colors.accent}
+            title="Add-ons"
+            subtitle="Extra tools for the dashboard"
+            /* The count IS the state: "2 on" answers "did I enable that?"
+               without opening anything. */
+            valueLabel={`${enabled.size} on`}
+            onPress={() => setAddOnsOpen(true)}
+          />
         </Section>
 
         {/* Preferences. */}
@@ -682,6 +694,189 @@ export default function SettingsScreen() {
       </BottomSheet>
 
       {/* Theme picker — a bottom sheet with an icon and description per option. */}
+      {/*
+        The add-on picker.
+
+        Each row carries its own sentence, because the name alone does not say
+        what the thing is — "Usage tracker" could be almost anything until you
+        read that it measures how long a gas cylinder lasts. Inline in Settings
+        there was no room for that; here there is.
+
+        Switched ON in place rather than needing a save: the switch IS the
+        setting, and a sheet with a confirm button would imply the choice could
+        be abandoned, which it cannot — `setMiniAppEnabled` writes immediately.
+      */}
+      <BottomSheet
+        visible={addOnsOpen}
+        onClose={() => {
+          setAddOnsOpen(false);
+          // Cleared on close: a sheet reopening onto a stale filter looks like
+          // add-ons have gone missing.
+          setAddOnQuery('');
+        }}
+        title="Add-ons"
+        icon="grid-outline"
+        iconColor={colors.accent}
+        scroll
+      >
+        {/*
+          No padding of its own.
+
+          `BottomSheet`'s scroll container already applies `padding: space.lg`
+          on every side plus a `gap` between children, so a wrapper repeating it
+          produced 32pt gutters against the sheet's own 16 — and a doubled gap
+          under the last card. Only the vertical rhythm between rows is set
+          here; the sheet owns the outer frame.
+        */}
+        <View style={{ gap: space.sm }}>
+          {/*
+            Search matches the DESCRIPTION as well as the name.
+            
+            Nobody looking for the gas-cylinder tracker searches "usage" — they
+            type "gas", or "cylinder", which only appear in the description. A
+            name-only filter would answer "no matches" to the words the feature
+            is actually known by.
+          */}
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: space.sm,
+              backgroundColor: colors.surfaceSunken,
+              borderRadius: 12,
+              paddingHorizontal: space.md,
+            }}
+          >
+            <Ionicons name="search" size={16} color={colors.inkMuted} />
+            <TextInput
+              value={addOnQuery}
+              onChangeText={setAddOnQuery}
+              placeholder="Search add-ons…"
+              placeholderTextColor={colors.inkMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{ flex: 1, paddingVertical: 11, fontSize: 15, color: colors.ink }}
+            />
+            {addOnQuery.length > 0 ? (
+              <Pressable onPress={() => setAddOnQuery('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={17} color={colors.inkMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          {/*
+            A count, not a sentence. The live tally doubles as feedback when a
+            switch is flipped, and while searching it reports the match count
+            instead — the number the user is looking at.
+          */}
+          <Row align="center" gap={space.sm} style={{ paddingBottom: space.xs }}>
+            <Text variant="small" tone="muted" style={{ flex: 1 }}>
+              {addOnQuery.trim()
+                ? `${visibleAddOns.length} of ${MINI_APPS.length} shown`
+                : `${enabled.size} of ${MINI_APPS.length} on — they appear under Your tools`}
+            </Text>
+          </Row>
+
+          {visibleAddOns.length === 0 ? (
+            <Text variant="small" tone="muted" style={{ paddingVertical: space.lg, textAlign: 'center' }}>
+              Nothing matches “{addOnQuery.trim()}”.
+            </Text>
+          ) : null}
+
+          {visibleAddOns.map((app) => {
+            const on = enabled.has(app.id);
+            return (
+              /*
+               * A CARD each, and the whole card is the switch.
+               *
+               * Four rows sharing one surface read as a settings list, where the
+               * eye goes to the switches and the sentences underneath become
+               * grey filler. Separating them makes each add-on a thing being
+               * offered rather than a line item.
+               *
+               * Tapping anywhere toggles it: the row is one decision, so
+               * requiring the 50pt switch specifically was a target the rest of
+               * the card only looked like.
+               */
+              <Pressable
+                key={app.id}
+                onPress={() => state.setMiniAppEnabled(app.id, !on)}
+                accessibilityRole="switch"
+                accessibilityState={{ checked: on }}
+                accessibilityLabel={`${app.name}. ${app.description}`}
+                style={({ pressed }) => ({
+                  borderRadius: radius.lg,
+                  padding: space.md,
+                  opacity: pressed ? 0.7 : 1,
+                  /*
+                   * ON is a filled card in the add-on's own colour; OFF is a
+                   * plain surface with a hairline. The difference has to survive
+                   * a glance across four of them, which a switch alone did not.
+                   */
+                  backgroundColor: on ? `${app.color}0D` : colors.surface,
+                  borderWidth: 1,
+                  borderColor: on ? `${app.color}33` : colors.hairline,
+                })}
+              >
+                <Row gap={space.md} align="center">
+                  {/*
+                    The same `Glyph` the dashboard uses, so an add-on looks
+                    identical wherever it appears. This sheet is where the user
+                    CHOOSES a tool and the chosen ones sit under Your tools —
+                    two hand-rolled tiles had already drifted to different
+                    alphas and radii. Off items grey out.
+                  */}
+                  <Glyph icon={app.icon} color={on ? app.color : colors.inkMuted} />
+
+                  <View style={{ flex: 1, gap: 3 }}>
+                    {/*
+                      The check sits on the TITLE line, not beside the whole
+                      card. Placed outside, it stole a column from every
+                      description — pushing them to three and four lines and
+                      leaving the cards at wildly different heights. Here the
+                      text runs the full width and the mark still lands where
+                      the eye scans for state.
+                    */}
+                    <Row align="center" gap={space.sm}>
+                      <Text variant="body" style={{ flex: 1, fontWeight: '600' }}>
+                        {app.name}
+                      </Text>
+                      {/*
+                        The switch is the control people reach for, so it is
+                        here as well as the whole-card tap — the card stays
+                        tappable for anyone who aims at the name.
+                      */}
+                      <Switch
+                        value={on}
+                        onValueChange={(next) => state.setMiniAppEnabled(app.id, next)}
+                        accessibilityLabel={`${app.name}, ${on ? 'on' : 'off'}`}
+                      />
+                    </Row>
+
+                    <Text variant="caption" tone="muted">
+                      {app.description}
+                    </Text>
+                  </View>
+                </Row>
+              </Pressable>
+            );
+          })}
+
+          {/*
+            Says what switching one OFF does, where the question is actually
+            asked. Nothing is deleted — that matters, because a toggle like this
+            looks exactly like the kind that would throw the data away.
+          */}
+          <Row gap={space.sm} align="flex-start" style={{ paddingTop: space.sm }}>
+            <Ionicons name="lock-closed-outline" size={14} color={colors.inkMuted} />
+            <Text variant="caption" tone="muted" style={{ flex: 1 }}>
+              Turning one off just hides it. Everything you logged stays, and comes back if you
+              switch it on again.
+            </Text>
+          </Row>
+        </View>
+      </BottomSheet>
+
       <BottomSheet visible={themeOpen} onClose={() => setThemeOpen(false)} title="Appearance">
         <View style={{ paddingHorizontal: space.lg, paddingBottom: space.md, gap: space.xs }}>
           {(

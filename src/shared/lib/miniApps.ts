@@ -17,7 +17,7 @@
 
 import type { Ionicons } from '@expo/vector-icons';
 
-export type MiniAppId = 'fuel' | 'health' | 'buddyloans';
+export type MiniAppId = 'fuel' | 'health' | 'buddyloans' | 'trackers';
 
 export interface MiniApp {
   id: MiniAppId;
@@ -54,6 +54,15 @@ export const MINI_APPS: MiniApp[] = [
      */
     color: '#0E7C86',
     route: '/mini/buddyloans',
+  },
+  {
+    id: 'trackers',
+    name: 'Usage tracker',
+    description:
+      'How long things last — gas cylinders, water bottles, filters. Track what you replace, what it costs, and when the next one is due.',
+    icon: 'repeat-outline',
+    color: '#7C3AED',
+    route: '/mini/trackers',
   },
   {
     id: 'health',
