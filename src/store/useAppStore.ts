@@ -12,6 +12,8 @@ import {
 import { isFullyRepaid } from '~/features/buddyloans/logic/buddyLoans';
 import { buddyLoanRepo, buddyRepaymentRepo } from '~/db/repositories/buddyLoans';
 import { refillRepo, trackedItemRepo } from '~/db/repositories/trackers';
+import { runSync, type SyncResult } from '~/features/sync/logic/syncDrive';
+import { driveGateway } from '~/features/backup/logic/googleDrive';
 import { deletePersistedImage } from '~/shared/lib/imageStorage';
 
 /**
@@ -324,6 +326,13 @@ export interface AppState {
   addVehicle: (input: Omit<NewVehicle, 'id'>) => Vehicle;
   updateVehicle: (id: string, patch: Partial<NewVehicle>) => void;
   deleteVehicle: (id: string) => void;
+  /**
+   * Merge this phone's data with the other paired device, through Drive.
+   *
+   * Returns the result rather than storing it: the screen shows what moved, and
+   * a failure needs a message the user can act on.
+   */
+  runDriveSync: () => Promise<SyncResult>;
   addTrackedItem: (input: Omit<NewTrackedItem, 'id'>) => TrackedItem;
   updateTrackedItem: (id: string, patch: Partial<NewTrackedItem>) => void;
   /** Archive keeps the price history; only an explicit delete discards it. */
@@ -486,6 +495,14 @@ export interface AppState {
     planTargetMinor?: Minor | null;
     planDueDate?: Date | null;
     planStartDate?: Date | null;
+    /**
+     * Which month a one-time cost belongs to, as a period key.
+     *
+     * Only meaningful on a `one_time` line. Left unset it defaults to the
+     * board's current period — the month the user is looking at while adding
+     * it, which is the one they mean.
+     */
+    onceInPeriod?: string | null;
     /** Whether payments on this line are attributed to a house. */
     houseScoped?: boolean;
     /** Default house for this line's payments — see core/houses.ts. */
@@ -1053,6 +1070,32 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     const created = buddyLoanRepo.create(input);
     get().refreshMiniAppData();
     return created;
+  },
+
+  async runDriveSync() {
+    const cached = settingsRepo.get(SETTINGS_KEYS.syncFileId);
+    const result = await runSync(driveGateway, { fileId: cached ?? null });
+
+    /*
+     * The file id is stored even on a FAILED sync that found or created one:
+     * losing it would send the next attempt hunting by name again, and on a
+     * first-ever sync that failed at the upload it would create a second file
+     * and split the pairing in two.
+     */
+    if (result.fileId) settingsRepo.set(SETTINGS_KEYS.syncFileId, result.fileId);
+    if (result.ok && result.at) settingsRepo.set(SETTINGS_KEYS.lastSyncAt, result.at);
+
+    /*
+     * A full refresh, not a narrow one.
+     *
+     * A sync can touch any table — the merged rows are whatever the other phone
+     * had — so every slice must re-read. This is the one place the blanket
+     * `refresh()` is the correct choice rather than the lazy one.
+     */
+    if (result.pulled > 0) get().refresh();
+    else get().refreshSettings();
+
+    return result;
   },
 
   addTrackedItem(input) {
@@ -1866,13 +1909,26 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   addSubcategory(input) {
     const siblings = get().subcategories.filter((s) => s.categoryId === input.categoryId);
     const category = get().categories.find((c) => c.id === input.categoryId);
+    // Resolved once: the anchor below depends on which cadence actually won,
+    // which may come from the category rather than the caller.
+    const frequency = input.frequency ?? category?.defaultFrequency ?? 'monthly';
     const created = subcategoryRepo.create({
       name: input.name,
       type: input.type ?? 'expense',
       categoryId: input.categoryId,
       plannedMinor: input.plannedMinor,
       // Fall back to the category's default cadence, not a blanket "monthly".
-      frequency: input.frequency ?? category?.defaultFrequency ?? 'monthly',
+      frequency,
+      /*
+       * A one-time line counts in exactly one month, and needs to say which.
+       *
+       * Without an anchor the detail screen back-fills it from `createdAt`
+       * (see app/subcategory/[id].tsx), so a one-time bill added while looking
+       * at NEXT month silently landed in this one. Any other cadence recurs
+       * and must carry no anchor at all.
+       */
+      onceInPeriod:
+        frequency === 'one_time' ? (input.onceInPeriod ?? get().period) : null,
       dueDay: input.dueDay ?? null,
       icon: input.icon ?? 'pricetag-outline',
       color: category?.color ?? nextColor(siblings.length),

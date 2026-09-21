@@ -20,7 +20,11 @@ import {
   SUBCATEGORY_FREQUENCIES,
   type SubcategoryFrequency,
 } from '~/db/schema';
-import { formatAmountInput } from '~/shared/lib/money';
+import { formatAmountInput, formatMoney } from '~/shared/lib/money';
+import {
+  evaluateAmountExpression,
+  formatAmountExpression,
+} from '~/shared/lib/amountExpression';
 import { useTheme } from '../theme/ThemeProvider';
 import { BottomSheet, Label, Row, Text } from './ui';
 
@@ -346,6 +350,7 @@ export function AmountField({
   autoFocus,
   placeholder = '0',
   error,
+  allowExpression = false,
 }: {
   value: string;
   onChangeText: (text: string) => void;
@@ -356,6 +361,19 @@ export function AmountField({
   placeholder?: string;
   /** Why the amount cannot be saved. See `validateAmount` in core/money. */
   error?: string | null;
+  /**
+   * Accept a sum — "100 + 5,000 + 1,000" — and show the running total.
+   *
+   * Opt-in, because most money fields record ONE figure that already happened:
+   * a payment's amount is what the receipt says, and arithmetic there invites
+   * typing a calculation where a fact belongs. A plan amount is the opposite —
+   * it is assembled from parts the user knows separately — so the screens that
+   * set one turn this on. See `amountExpression.ts`.
+   *
+   * The caller still holds a plain string; it is the expression text, and
+   * `amountExpressionTotal` turns it into minor units on save.
+   */
+  allowExpression?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
 
@@ -369,7 +387,17 @@ export function AmountField({
    * The caller therefore always holds a display-formatted string; `parseAmount`
    * strips the separators again on save.
    */
-  const handleChange = (next: string) => onChangeText(formatAmountInput(next));
+  const handleChange = (next: string) =>
+    onChangeText(allowExpression ? formatAmountExpression(next) : formatAmountInput(next));
+
+  /*
+   * The running total, shown only once the field holds an actual sum.
+   *
+   * A single figure needs no total — it would just repeat the number already on
+   * screen, which reads as the field having misunderstood something.
+   */
+  const expression = allowExpression ? evaluateAmountExpression(value) : null;
+  const showTotal = Boolean(expression?.isSum && expression.total !== null);
 
   /*
    * The headline shrinks as the number grows.
@@ -406,7 +434,12 @@ export function AmountField({
           <TextInput
             value={value}
             onChangeText={handleChange}
-            keyboardType="decimal-pad"
+            /*
+              `numbers-and-punctuation` rather than `decimal-pad` when a sum is
+              allowed: the decimal pad has no `+`, so the feature would be
+              unreachable on the keyboard the field itself opens.
+            */
+            keyboardType={allowExpression ? 'numbers-and-punctuation' : 'decimal-pad'}
             autoFocus={autoFocus}
             placeholder={placeholder}
             placeholderTextColor={colors.inkMuted}
@@ -414,6 +447,27 @@ export function AmountField({
             style={{ flex: 1, paddingVertical: 13, fontSize: 16, fontWeight: '400', color: colors.ink, letterSpacing: 0 }}
           />
         </View>
+
+        {/* The total of a sum, under the field that produced it. */}
+        {showTotal ? (
+          <Row align="center" gap={space.xs}>
+            <Ionicons name="calculator-outline" size={13} color={colors.inkMuted} />
+            <Text variant="caption" tone="muted">
+              {expression!.terms.length} amounts ={' '}
+            </Text>
+            <Text variant="caption" style={{ fontWeight: '700', color: colors.ink }}>
+              {/* Decimals shown only when the total has them: "6,100" for a sum
+                  of round figures, "12.75" when the cents are real. Rounding
+                  them away here would make the total contradict the terms. */}
+              {currency}{' '}
+              {formatMoney(expression!.total!, {
+                showCurrency: false,
+                showDecimals: expression!.total! % 100 !== 0,
+              })}
+            </Text>
+          </Row>
+        ) : null}
+
         {error ? (
           <Text variant="caption" color={colors.danger}>
             {error}

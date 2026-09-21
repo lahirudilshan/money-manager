@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { View } from 'react-native';
-import { formatAmountInput, parseAmount, toMajor, type Minor } from '~/shared/lib/money';
+import { formatAmountInput, toMajor, type Minor } from '~/shared/lib/money';
+import { amountExpressionTotal } from '~/shared/lib/amountExpression';
 import { resolveCardId } from '~/features/budget/logic/planning';
+import { isHouseScopedName } from '~/features/budget/logic/houses';
 import type { Card, Subcategory, SubcategoryFrequency } from '~/db/schema';
 import { useAppStore } from '~/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -15,7 +17,13 @@ import {
   toSavingPlanPatch,
   type SavingPlanDraft,
 } from './SavingPlanFields';
-import { AmountField, Field, FrequencyPicker } from '~/shared/components/forms';
+import {
+  AmountField,
+  Field,
+  FrequencyPicker,
+  IconPicker,
+  NameWithIconField,
+} from '~/shared/components/forms';
 import { Label, Row, Text } from '~/shared/components/ui';
 
 /**
@@ -35,6 +43,8 @@ import { Label, Row, Text } from '~/shared/components/ui';
 export interface BillDraft {
   name: string;
   setName: (next: string) => void;
+  icon: keyof typeof Ionicons.glyphMap;
+  setIcon: (next: keyof typeof Ionicons.glyphMap) => void;
   amount: string;
   setAmount: (next: string) => void;
   dueDay: number;
@@ -53,15 +63,21 @@ export interface BillDraft {
    */
   toPatch: () => {
     name: string;
+    icon: string;
     plannedMinor: Minor;
     dueDay: number;
     frequency: SubcategoryFrequency;
     cardId: string | null;
+    /** Set only when creating — see `toPatch`. */
+    houseScoped?: boolean;
     planTargetMinor: Minor | null;
     planDueDate: Date | null;
     planStartDate: Date | null;
   };
 }
+
+/** What a bill wears on the board before the user picks something better. */
+const DEFAULT_BILL_ICON = 'pricetag-outline' satisfies keyof typeof Ionicons.glyphMap;
 
 export function useBillDraft({
   existing,
@@ -76,6 +92,9 @@ export function useBillDraft({
   resetKey?: string | null;
 }): BillDraft {
   const [name, setName] = React.useState(existing?.name ?? '');
+  const [icon, setIcon] = React.useState<keyof typeof Ionicons.glyphMap>(
+    (existing?.icon as keyof typeof Ionicons.glyphMap) ?? DEFAULT_BILL_ICON,
+  );
   /*
    * Seeded through the SAME formatter the field applies to typing.
    *
@@ -105,6 +124,7 @@ export function useBillDraft({
   // refresh mid-edit never clears what the user is typing.
   React.useEffect(() => {
     setName(existing?.name ?? '');
+    setIcon((existing?.icon as keyof typeof Ionicons.glyphMap) ?? DEFAULT_BILL_ICON);
     setAmount(existing ? formatAmountInput(String(toMajor(existing.plannedMinor))) : '');
     setDueDay(existing?.dueDay ?? categoryDueDay ?? 1);
     setFrequency(existing?.frequency ?? 'monthly');
@@ -116,7 +136,17 @@ export function useBillDraft({
   // Saving plans belong only to yearly bills, matching the rest of the app.
   const planPatch = frequency === 'yearly' ? toSavingPlanPatch(plan) : null;
   // With a saving plan the monthly set-aside *is* the planned amount.
-  const plannedMinor = planPatch ? planPatch.monthlyMinor : (parseAmount(amount) ?? 0);
+  /*
+   * `amountExpressionTotal`, NOT `parseAmount`.
+   *
+   * The field accepts a sum, and `parseAmount` strips the operators and
+   * concatenates what is left — "100 + 5,000" would save as 1,005,000 rather
+   * than 5,100. It still reads a single figure identically, so this is the
+   * right call for both shapes.
+   */
+  const plannedMinor = planPatch
+    ? planPatch.monthlyMinor
+    : (amountExpressionTotal(amount) ?? 0);
 
   const canSave =
     Boolean(name.trim()) && (frequency !== 'yearly' || !plan.enabled || planPatch !== null);
@@ -124,6 +154,8 @@ export function useBillDraft({
   return {
     name,
     setName,
+    icon,
+    setIcon,
     amount,
     setAmount,
     dueDay,
@@ -137,9 +169,29 @@ export function useBillDraft({
     canSave,
     toPatch: () => ({
       name: name.trim(),
+      icon,
       plannedMinor,
       dueDay,
       frequency,
+      /*
+       * Per-property bills scope themselves from their name — on a NEW bill.
+       *
+       * Every other creation path already does this: the SMS draft from its
+       * hint, onboarding from its catalog id. A bill typed in by hand was the
+       * one route that produced an unscoped "Electricity", so the house picker
+       * never appeared on it. `isHouseScopedName` existed for exactly this and
+       * had no callers.
+       *
+       * Inferred rather than asked, because on a single-house board the answer
+       * changes nothing visible (see `shouldAskForHouse`) — a toggle would be a
+       * question almost nobody needs to answer.
+       *
+       * An EXISTING bill keeps what it has. `ManagePlanSheet` spreads this
+       * whole patch into `updateSubcategory`, so inferring here would let a
+       * rename — or a plain re-save — overwrite scoping that an SMS hint set
+       * deliberately, and no name pattern can recover it.
+       */
+      ...(existing ? null : { houseScoped: isHouseScopedName(name) }),
       // Accepting the pre-filled category account is not an override: store null
       // so the bill keeps *inheriting*, and later changing the category's
       // account still moves it.
@@ -156,14 +208,17 @@ export function BillFields({
   cards,
   /** The category this bill sits in, for the account hint and defaults. */
   category,
-  amountAutoFocus,
+  nameAutoFocus,
 }: {
   draft: BillDraft;
   cards: readonly Card[];
-  category?: { id: string; name: string; cardId: string | null } | undefined;
-  amountAutoFocus?: boolean;
+  category?:
+    | { id: string; name: string; cardId: string | null; color?: string | null }
+    | undefined;
+  /** Focus the name on open — it is the first field the form asks for. */
+  nameAutoFocus?: boolean;
 }) {
-  const { colors, space } = useTheme();
+  const { colors, radius, space } = useTheme();
   const state = useAppStore();
 
   const ongoing = draft.frequency === 'ongoing';
@@ -173,25 +228,66 @@ export function BillFields({
 
   return (
     <>
-      {/* Amount hero. With a saving plan (yearly) the monthly figure is derived
+      {/*
+        WHAT IT IS, first.
+
+        The amount used to open the form, which asked how much before the user
+        had said what they were adding — and the answer to "how much" often
+        depends on having named the thing. Naming it first also means the icon
+        row below is chosen against a name that is already on screen.
+      */}
+      <NameWithIconField
+        label="What is it?"
+        value={draft.name}
+        onChangeText={draft.setName}
+        icon={draft.icon}
+        iconColor={category?.color ?? colors.accent}
+        placeholder="e.g. Rent, Electricity, Netflix"
+        autoFocus={nameAutoFocus}
+      />
+
+      {/* Icon grid, as on the detail screen and the category editor. Every
+          bill added here used to start on the default tag and could only be
+          re-iconed after the fact, by opening it again. */}
+      <IconPicker
+        value={draft.icon}
+        onChange={draft.setIcon}
+        accent={category?.color ?? colors.accent}
+      />
+
+      {/* The amount. With a saving plan (yearly) the monthly figure is derived
           and shown read-only. Otherwise it is entered — for a spending budget
           it is the monthly cap its entries are drawn against, not a bill to pay
           once. */}
       {draft.plan.enabled && draft.frequency === 'yearly' ? (
-        <View style={{ alignItems: 'center', gap: 4 }}>
+        <View style={{ gap: space.sm }}>
           <Label>MONTHLY SET-ASIDE</Label>
-          {/* Matches the editable hero in `AmountField` — same 42px digits, so
-              the same gap, or the read-only figure would sit tighter than the
-              one the user types into. */}
-          <Row gap={space.sm} align="center">
-            <Text variant="title" tone="muted">
+          {/*
+            Shaped like the inert `Field` next to it, not like the old 42px
+            hero it used to mirror. The figure is derived from the plan, so it
+            reads as a field the form is filling in rather than one awaiting an
+            answer — sunken ground and muted text, the same way `Field` renders
+            a value the screen shows but does not own.
+          */}
+          <Row
+            gap={space.sm}
+            align="center"
+            style={{
+              backgroundColor: colors.surfaceSunken,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderColor: colors.hairline,
+              paddingHorizontal: space.md,
+              paddingVertical: 13,
+            }}
+          >
+            <Text variant="small" tone="muted">
               {state.currency}
             </Text>
             <Text
               style={{
-                fontSize: 42,
-                fontWeight: '800',
-                letterSpacing: -1.2,
+                flex: 1,
+                fontSize: 16,
                 color: planPatch ? colors.ink : colors.inkMuted,
               }}
             >
@@ -201,23 +297,30 @@ export function BillFields({
         </View>
       ) : (
         <AmountField
-          // "Plan amount" — what this bill is expected to cost, as opposed to
-          // the actual logged against it each month. Matches the onboarding
-          // plan step, which sets the same field.
-          label={ongoing ? 'Monthly budget' : 'Plan amount'}
+          // "Plan amount" — what this line is expected to cost, as opposed to
+          // the actual logged against it each month. One label for every
+          // cadence: an ongoing line's figure is the same planned number, and
+          // calling it "Monthly budget" here while the detail screen and the
+          // onboarding step both said "Plan amount" made one field look like
+          // three different ones depending on where it was opened.
+          label="Plan amount"
           value={draft.amount}
           onChangeText={draft.setAmount}
           currency={state.currency}
-          autoFocus={amountAutoFocus}
+          // A normal field, not the 42px headline. The hero belongs where the
+          // amount IS the screen — logging a payment — but here it is one of
+          // six things being described, and sizing it like the headline act of
+          // the form put the weight on the figure rather than the bill. It now
+          // matches the name and account fields it sits between.
+          hero={false}
+          /*
+            A plan amount is often several costs the user knows separately —
+            three subscriptions, a rent plus its service charge — so it can be
+            typed as "100 + 5,000 + 1,000" and the total is what gets saved.
+          */
+          allowExpression
         />
       )}
-
-      <Field
-        label="What is it?"
-        value={draft.name}
-        onChangeText={draft.setName}
-        placeholder="e.g. Rent, Electricity, Netflix"
-      />
 
       {/*
         Paid from — overrides the category's account for this bill. Null means
