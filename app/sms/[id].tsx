@@ -8,6 +8,7 @@ import { HousePicker } from '~/features/budget/components/HousePicker';
 import { SplitEditor } from '~/features/budget/components/SplitEditor';
 import {
   emptyPart,
+  toSavedParts,
   validateSplit,
   withAmount,
   type SplitPart,
@@ -370,13 +371,7 @@ export default function SmsDraftModal() {
       // Only when the split is complete — a half-filled editor logs as an
       // ordinary single-line entry rather than silently dropping the parts.
       ...(splitting && splitValidation.valid
-        ? {
-            splits: splitParts.map((part) => ({
-              subcategoryId: part.subcategoryId!,
-              amountMinor: part.amountMinor!,
-              note: part.note ?? null,
-            })),
-          }
+        ? { splits: toSavedParts(splitParts) }
         : null),
     });
     closeModal();
@@ -517,7 +512,26 @@ export default function SmsDraftModal() {
             />
           </View>
         ) : (
-          <GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />
+          <View style={{ gap: space.sm }}>
+            {/*
+              Why the button is off, when it is off.
+
+              A disabled "Log it" with a settled remainder above it reads as a
+              broken button — which is exactly how the user reported it. The
+              blocker is always one of two things, and naming it turns a dead
+              end into an instruction.
+            */}
+            {splitting && !canLog ? (
+              <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+                {splitValidation.incompleteCount > 0
+                  ? 'Finish every line you started — each needs a category and an amount.'
+                  : splitValidation.remainderMinor !== 0
+                    ? `${formatMoney(Math.abs(splitValidation.remainderMinor), { showDecimals: true })} ${splitValidation.remainderMinor > 0 ? 'still to allocate' : 'over the payment'}.`
+                    : 'Add a second line, or cancel the split.'}
+              </Text>
+            ) : null}
+            <GradientButton label="Log it" icon="checkmark" onPress={logIt} disabled={!canLog} />
+          </View>
         )
       }
     >

@@ -295,7 +295,7 @@ export default function TrackersHome() {
  * "what do I act on today", which is binary.
  */
 const SECTIONS: {
-  key: 'now' | 'later';
+  key: 'now' | 'later' | 'unstarted';
   title: string;
   match: (status: RefillStatus) => boolean;
 }[] = [
@@ -307,7 +307,24 @@ const SECTIONS: {
   {
     key: 'later',
     title: 'ALL GOOD',
-    match: (status) => status === 'fresh' || status === 'unknown',
+    match: (status) => status === 'fresh',
+  },
+  /*
+   * An item with no history is NOT "all good".
+   *
+   * `unknown` used to sit under ALL GOOD, so a tracker created months ago and
+   * never logged reported itself as fine — the one state where the app knows
+   * nothing read as the state where everything is well. On a real board a gas
+   * cylinder added in September with zero refills sat there reassuringly, its
+   * countdown column an unexplained "—".
+   *
+   * Its own section instead, last, phrased as the invitation it is: these
+   * items need a first entry before any of this feature works for them.
+   */
+  {
+    key: 'unstarted',
+    title: 'NOT STARTED',
+    match: (status) => status === 'unknown',
   },
 ];
 
@@ -360,7 +377,9 @@ function detailLine(
  * "0 days" and reads like a stalled counter instead of one that has arrived.
  */
 function countdown(due: ReturnType<typeof nextDue>): string {
-  if (!due) return '—';
+  // An em dash says "no value" where the honest answer is "nothing logged
+  // yet" — and the second one tells the user what to do about it.
+  if (!due) return 'Add first';
   if (due.inDays === 0) return 'Today';
   if (due.inDays === 1) return 'Tomorrow';
   if (due.inDays < 0) return `${compact(-due.inDays)} over`;

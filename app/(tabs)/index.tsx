@@ -34,7 +34,7 @@ import {
 } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
-import { usdNeededFor } from '~/features/rates/logic/bankRates';
+import { describeRateAge, usdNeededFor } from '~/features/rates/logic/bankRates';
 
 /** Thickness of the gradient edge grouping the Smart Detect section. */
 const DETECT_BORDER = 1.5;
@@ -185,13 +185,27 @@ export default function DashboardScreen() {
    * different (a person's initial, not a category glyph), so which is which
    * stays obvious without needing them separated.
    */
-  const actionable = [
+  const allActionable = [
     ...[...overdue, ...dueSoon, ...upcoming].map((r) => ({ kind: 'bill' as const, r })),
     ...buddyReminders.map((r) => ({ kind: 'buddy' as const, r })),
     ...trackerRemindersList.map((r) => ({ kind: 'tracker' as const, r })),
-  ]
-    .sort((a, b) => a.r.daysUntil - b.r.daysUntil)
-    .slice(0, 5);
+  ].sort((a, b) => a.r.daysUntil - b.r.daysUntil);
+
+  const actionable = allActionable.slice(0, 5);
+
+  /*
+   * What the list does NOT show.
+   *
+   * Five rows is the right length for a dashboard section, but the cut was
+   * silent: on a board where the month's bills all fall between the 25th and
+   * the 30th, the sixth onwards simply did not exist, and the section looked
+   * like the whole picture while being a third of it. A count and a sum make
+   * the remainder visible without lengthening the list.
+   */
+  const hiddenCount = allActionable.length - actionable.length;
+  const hiddenMinor = allActionable
+    .slice(actionable.length)
+    .reduce((sum, entry) => sum + ('amountMinor' in entry.r ? (entry.r.amountMinor ?? 0) : 0), 0);
 
   const lateCount =
     overdue.length +
@@ -363,7 +377,16 @@ export default function DashboardScreen() {
             <HeroStat label="SPENT" value={formatMoney(totals.paidMinor, { compact: true, showCurrency: false })} />
             {/* This month's loan cost, not the lifetime balance: all four
                 figures are monthly, so they are actually comparable. Total
-                outstanding still leads the Debt card further down. */}
+                outstanding still leads the Debt card further down.
+
+                This figure is INSIDE the one beside it — loan installments are
+                ordinary plan lines carrying a `loanId`, so 281.2K of the real
+                board's 710.3K planned is this tile. A longer label ("OF WHICH
+                LOANS") said so and cost more than it was worth: these labels
+                shrink to fit, so the long one rendered visibly smaller than
+                its three neighbours and made the row look broken. The
+                containment is explained under the bar below instead, where
+                there is room for a sentence. */}
             <HeroStat label="LOANS" value={formatMoney(loanMonthly, { compact: true, showCurrency: false })} />
           </Row>
 
@@ -685,6 +708,31 @@ export default function DashboardScreen() {
                 )}
               </View>
             ))}
+
+            {/* The tail the list could not fit, so five rows never pass for
+                the whole month. Tapping opens the full plan. */}
+            {hiddenCount > 0 ? (
+              <Pressable
+                onPress={() => router.push('/(tabs)/list')}
+                accessibilityRole="button"
+                accessibilityLabel={`${hiddenCount} more due, open the plan`}
+                style={({ pressed }) => ({
+                  paddingHorizontal: space.md,
+                  paddingVertical: space.sm,
+                  opacity: pressed ? 0.6 : 1,
+                })}
+              >
+                <Row justify="space-between" align="center">
+                  <Text variant="caption" tone="muted">
+                    +{hiddenCount} more due
+                    {hiddenMinor > 0
+                      ? ` · ${formatMoney(hiddenMinor, { compact: true })}`
+                      : ''}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.inkMuted} />
+                </Row>
+              </Pressable>
+            ) : null}
           </Surface>
         </View>
       ) : views.length > 0 ? (
@@ -781,6 +829,22 @@ export default function DashboardScreen() {
               ) : null}
             </Row>
           </Row>
+
+          {/*
+            WHERE the dollar figure came from.
+
+            This is the number the user retypes into a bank transfer, and the
+            screen stated it with nothing to say which rate produced it or how
+            old that rate was — so "is this today's rate?" had no answer short
+            of opening the rates screen and comparing by hand. The bank, the
+            figure and its age are the three things that make it checkable.
+          */}
+          {usdToConvert !== null && salaryRate.rate?.ttBuying ? (
+            <Text variant="caption" tone="muted">
+              {salaryRate.rate.bankName} {salaryRate.rate.ttBuying.toFixed(2)} ·{' '}
+              {describeRateAge(salaryRate.rate.at)}
+            </Text>
+          ) : null}
 
           {/* One surface, hairline-divided: with three or four accounts this
               is a list to work down, and a card each turned it into a scroll. */}

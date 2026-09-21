@@ -1526,7 +1526,20 @@ function CategoryCard({
                              judge that number against. */
                           line.plannedMinor > 0
                           ? `${formatMoney(line.actualMinor ?? 0, { compact: true })} of ${formatMoney(line.plannedMinor, { compact: true })} spent`
-                          : 'Ongoing · no monthly amount set'
+                          : /*
+                               Spending against NO budget still names the
+                               spend.
+
+                               "no monthly amount set" alone reads as an empty
+                               line the user has not got to yet — which is true
+                               until money starts going through it. On a real
+                               board a line called "Others" carried 154,460
+                               with this subtitle, so the largest unbudgeted
+                               outflow on the board was also its quietest row.
+                            */
+                            (line.actualMinor ?? 0) > 0
+                            ? `${formatMoney(line.actualMinor ?? 0, { compact: true })} spent · no budget set`
+                            : 'Ongoing · no monthly amount set'
                         : /* The due-day stays visible even once paid — "was it
                              the 1st or the 5th" is still worth answering, and
                              the tick on the marker already says it is paid. */
@@ -1696,7 +1709,7 @@ function AddSubcategorySheet({
     >
       {/* Shared with the grid picker's manage sheet, so a bill describes the
           same things wherever it is created. */}
-      <BillFields draft={draft} cards={state.cards} category={category} amountAutoFocus />
+      <BillFields draft={draft} cards={state.cards} category={category} nameAutoFocus />
     </BottomSheet>
   );
 }

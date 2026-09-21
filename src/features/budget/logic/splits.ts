@@ -95,10 +95,20 @@ export interface SplitValidation {
    * rather than reported as an absolute "difference".
    */
   remainderMinor: number;
-  /** Every part names a line and an amount, and the amounts sum exactly. */
+  /**
+   * Every STARTED part names a line and an amount, and the amounts sum
+   * exactly. Wholly empty rows are ignored — see `validateSplit`.
+   */
   valid: boolean;
   /** Parts that are complete enough to be saved. */
   usableCount: number;
+  /**
+   * Parts the user began but did not finish — a line with no amount, or an
+   * amount with no line. Non-zero is the one reason a split with a settled
+   * remainder still cannot be saved, so the editor can say which row to fix
+   * instead of leaving a dead button.
+   */
+  incompleteCount: number;
 }
 
 /**
@@ -118,6 +128,26 @@ export function validateSplit(
   );
   const allocatedMinor = usable.reduce((sum, part) => sum + (part.amountMinor ?? 0), 0);
 
+  /*
+   * A row with NOTHING in it is not an unfinished part — it is an empty row.
+   *
+   * The editor keeps a spare row at the bottom to add the next part into, and
+   * "Add another line" leaves one behind if the user changes their mind. The
+   * rule used to be `usable.length === parts.length`, which counted those as
+   * incomplete: a split of 3,800 + 6,200 against 10,000 showed "SETTLED, 0.00
+   * left" and still refused to save, with the disabled "Log it" button giving
+   * no reason. The user reasonably read that as the button being broken.
+   *
+   * A row that is HALF filled — a line chosen with no amount, or an amount
+   * with no line — is still genuinely unfinished and must still block the
+   * save, because it says the user meant to allocate something and has not
+   * finished saying what.
+   */
+  const started = parts.filter(
+    (part) => part.subcategoryId !== null || (part.amountMinor ?? 0) > 0,
+  );
+  const halfFilled = started.length - usable.length;
+
   return {
     allocatedMinor,
     remainderMinor: totalMinor - allocatedMinor,
@@ -129,11 +159,9 @@ export function validateSplit(
      * — so the editor treats that as unfinished rather than saving a split that
      * means nothing.
      */
-    valid:
-      usable.length >= 2 &&
-      usable.length === parts.length &&
-      allocatedMinor === totalMinor,
+    valid: usable.length >= 2 && halfFilled === 0 && allocatedMinor === totalMinor,
     usableCount: usable.length,
+    incompleteCount: halfFilled,
   };
 }
 
@@ -146,6 +174,33 @@ export function validateSplit(
  * eye lands first and reads as deliberate, and no part is ever short by more
  * than one minor unit. The parts sum to exactly `totalMinor` by construction.
  */
+/**
+ * The parts as the store should store them.
+ *
+ * Empty rows are dropped: the editor keeps a spare row to type the next part
+ * into, and `validateSplit` now ignores those rather than blocking the save,
+ * so they reach here and must not be written. Without this the map in each
+ * screen sent `subcategoryId: null!` — a row the database would reject or,
+ * worse, accept as an orphan part belonging to no line.
+ *
+ * Shared by the SMS review screen and the entry editor so the two cannot
+ * disagree about what a saved split contains.
+ */
+export function toSavedParts(
+  parts: readonly SplitPart[],
+): { subcategoryId: string; amountMinor: number; note: string | null }[] {
+  return parts
+    .filter(
+      (part): part is SplitPart & { subcategoryId: string; amountMinor: number } =>
+        part.subcategoryId !== null && (part.amountMinor ?? 0) > 0,
+    )
+    .map((part) => ({
+      subcategoryId: part.subcategoryId,
+      amountMinor: part.amountMinor,
+      note: part.note ?? null,
+    }));
+}
+
 export function splitEvenly(totalMinor: number, count: number): number[] {
   if (count <= 0) return [];
 

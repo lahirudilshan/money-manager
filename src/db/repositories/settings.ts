@@ -55,6 +55,23 @@ export const SETTINGS_KEYS = {
   /** Share anonymous merchant corrections with the shared catalog. */
   catalogSync: 'catalog_sync',
   /**
+   * Whether this phone syncs its data with the other paired device.
+   *
+   * Separate from the Drive BACKUP setting: a user may well want their data
+   * backed up without it travelling to a second phone, and conflating the two
+   * would turn enabling backups into sharing everything with a partner.
+   */
+  syncEnabled: 'sync_enabled',
+  /**
+   * The Drive id of the shared sync file.
+   *
+   * Cached so every sync after the first skips the search-by-name round trip.
+   * A stale id is harmless — the sync falls back to searching again.
+   */
+  syncFileId: 'sync_file_id',
+  /** ISO timestamp of the last successful sync, for the screen's status line. */
+  lastSyncAt: 'last_sync_at',
+  /**
    * Whether the Shortcuts drop-file intake is set up.
    *
    * Stored rather than inferred from the file existing: the app DELETES that
@@ -79,14 +96,21 @@ export const SETTINGS_KEYS = {
   /** ISO timestamp of the last local backup file written. */
   lastLocalBackupAt: 'last_local_backup_at',
 
-  /** Whether the app refreshes the USD rate on its own — see core/exchangeRate.ts. */
-  rateAutoFetch: 'rate_auto_fetch',
-  /** Which figure the board converts with: 'live' | 'average' | 'safe'. */
-  rateMode: 'rate_mode',
-  /** JSON list of recent readings, newest first. */
-  rateHistory: 'rate_history',
-  /** ISO timestamp of the last successful fetch, for the daily cadence. */
-  rateFetchedAt: 'rate_fetched_at',
+  /*
+   * `rate_auto_fetch`, `rate_mode`, `rate_history` and `rate_fetched_at` were
+   * removed here.
+   *
+   * They belonged to the ORIGINAL single-scalar rate, which `bank_rates`
+   * replaced: rates are now per bank, refreshed daily, and captioned with
+   * their own timestamp. Nothing had read or written these four in a long
+   * while, so on a real board `rate_history` sat frozen at one reading from
+   * three weeks earlier while `bank_rates` updated every morning — two rate
+   * systems on screen, one of them dead, with nothing saying which was which.
+   *
+   * The rows themselves are left in the database rather than migrated away:
+   * they are inert, a delete would be the one destructive step in an otherwise
+   * additive change, and a downgrade to an older build still finds its data.
+   */
 
   /**
    * JSON list of per-BANK rates, as last fetched — see features/rates.

@@ -243,3 +243,31 @@ export function resolveUsdRate(options: {
 export function roundRate(rate: number): number {
   return Math.round(rate * 100) / 100;
 }
+
+/**
+ * How old a rate is, in the words a person would use.
+ *
+ * Shown beside the dollar figure the user is about to retype into a transfer.
+ * An ISO timestamp answers the question technically and not practically —
+ * "2026-09-21T04:31:44.000Z" requires arithmetic before it means anything,
+ * and the only thing the reader wants to know is whether to trust it.
+ *
+ * Deliberately coarse. A rate published this morning and one published at noon
+ * are both "today" for this purpose, and pretending to more precision than
+ * that invites reading significance into the difference.
+ */
+export function describeRateAge(at: string, now: Date = new Date()): string {
+  const observed = new Date(at);
+  if (Number.isNaN(observed.getTime())) return 'date unknown';
+
+  // Calendar days apart, not elapsed hours: a rate from 11pm yesterday reads
+  // as "yesterday" at 1am, which is what a person would call it.
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(now) - startOfDay(observed)) / 86_400_000);
+
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  if (days < 14) return 'last week';
+  return `${Math.floor(days / 7)} weeks ago`;
+}

@@ -5,6 +5,7 @@ import {
   ordinal,
   parsePartAmount,
   splitEvenly,
+  toSavedParts,
   validateSplit,
   withAmount,
   type SplitPart,
@@ -58,6 +59,65 @@ describe('validateSplit', () => {
     expect(result.usableCount).toBe(1);
   });
 
+  /*
+   * The bug the user hit, verbatim.
+   *
+   * The editor keeps a spare row to type the next part into, so a finished
+   * split of 3,800 + 6,200 against 10,000 arrives here with THREE parts, one
+   * of them blank. The old rule (`usable.length === parts.length`) called that
+   * invalid, so the screen showed "SETTLED, 0.00 left" and the "Log it" button
+   * stayed greyed out with no reason given — indistinguishable from a button
+   * that simply does not work.
+   */
+  it('saves a settled split even with a trailing empty row', () => {
+    const result = validateSplit(
+      [
+        part({ key: 'a', subcategoryId: 'dining', ...withAmount(380000) }),
+        part({ key: 'b', subcategoryId: 'groceries', ...withAmount(620000) }),
+        part({ key: 'c', subcategoryId: null, amountMinor: null, amountText: '' }),
+      ],
+      1000000,
+    );
+
+    expect(result.remainderMinor).toBe(0);
+    expect(result.valid).toBe(true);
+    expect(result.incompleteCount).toBe(0);
+  });
+
+  /*
+   * A row the user STARTED is different from one they never touched: it says
+   * they meant to allocate something and have not finished saying what, so it
+   * must still block the save.
+   */
+  it('still refuses a line chosen with no amount', () => {
+    const result = validateSplit(
+      [
+        part({ key: 'a', subcategoryId: 'dining', ...withAmount(380000) }),
+        part({ key: 'b', subcategoryId: 'groceries', ...withAmount(620000) }),
+        part({ key: 'c', subcategoryId: 'pet', amountMinor: null, amountText: '' }),
+      ],
+      1000000,
+    );
+
+    expect(result.remainderMinor).toBe(0);
+    expect(result.valid).toBe(false);
+    expect(result.incompleteCount).toBe(1);
+  });
+
+  it('still refuses an amount with no line', () => {
+    const result = validateSplit(
+      [
+        part({ key: 'a', subcategoryId: 'dining', ...withAmount(380000) }),
+        part({ key: 'b', subcategoryId: 'groceries', ...withAmount(620000) }),
+        part({ key: 'c', subcategoryId: null, ...withAmount(500) }),
+      ],
+      1000000,
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.incompleteCount).toBe(1);
+  });
+
   it('treats a half-filled row as unallocated rather than invalid', () => {
     const result = validateSplit(
       [
@@ -69,6 +129,59 @@ describe('validateSplit', () => {
     expect(result.allocatedMinor).toBe(300000);
     expect(result.remainderMinor).toBe(200000);
     expect(result.valid).toBe(false);
+  });
+});
+
+describe('toSavedParts', () => {
+  /*
+   * The other half of the empty-row fix. `validateSplit` now allows a blank
+   * row through, so the thing that writes to the database has to drop it —
+   * otherwise the screens' old `parts.map(p => p.subcategoryId!)` would send a
+   * part belonging to no line at all.
+   */
+  it('drops a trailing empty row', () => {
+    const saved = toSavedParts([
+      part({ key: 'a', subcategoryId: 'dining', ...withAmount(380000) }),
+      part({ key: 'b', subcategoryId: 'groceries', ...withAmount(620000) }),
+      part({ key: 'c', subcategoryId: null, amountMinor: null, amountText: '' }),
+    ]);
+
+    expect(saved).toEqual([
+      { subcategoryId: 'dining', amountMinor: 380000, note: null },
+      { subcategoryId: 'groceries', amountMinor: 620000, note: null },
+    ]);
+  });
+
+  it('never emits a part with no line', () => {
+    const saved = toSavedParts([
+      part({ key: 'a', subcategoryId: null, ...withAmount(100) }),
+      part({ key: 'b', subcategoryId: 'x', amountMinor: null, amountText: '' }),
+    ]);
+    expect(saved).toEqual([]);
+  });
+
+  it('keeps a note the user wrote on a part', () => {
+    const saved = toSavedParts([
+      part({ key: 'a', subcategoryId: 'pet', ...withAmount(200), note: 'pet food' }),
+      part({ key: 'b', subcategoryId: 'food', ...withAmount(300) }),
+    ]);
+    expect(saved[0].note).toBe('pet food');
+    expect(saved[1].note).toBeNull();
+  });
+
+  /* What the store writes must be exactly what the validator approved. */
+  it('agrees with validateSplit about what counts', () => {
+    const parts = [
+      part({ key: 'a', subcategoryId: 'dining', ...withAmount(380000) }),
+      part({ key: 'b', subcategoryId: 'groceries', ...withAmount(620000) }),
+      part({ key: 'c', subcategoryId: null, amountMinor: null, amountText: '' }),
+    ];
+    const validation = validateSplit(parts, 1000000);
+    const saved = toSavedParts(parts);
+
+    expect(validation.valid).toBe(true);
+    expect(saved).toHaveLength(validation.usableCount);
+    expect(saved.reduce((sum, p) => sum + p.amountMinor, 0)).toBe(1000000);
   });
 });
 
