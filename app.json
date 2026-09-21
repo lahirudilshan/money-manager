@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Money Manager",
+    "name": "Dayly",
     "slug": "money-manager",
     "version": "1.0.0",
     "scheme": "moneymanager",
@@ -19,7 +19,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.anonymous.moneymanager",
       "infoPlist": {
-        "NSFaceIDUsageDescription": "Money Manager uses Face ID to unlock the app, so your accounts and balances stay private.",
+        "NSFaceIDUsageDescription": "Dayly uses Face ID to unlock the app, so your accounts and balances stay private.",
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "CFBundleURLTypes": [
@@ -67,6 +67,7 @@
     ],
     "extra": {
       "googleClientId": "486010862889-aaps2ikec9a1aigbei98varil468mn9f.apps.googleusercontent.com"
-    }
+    },
+    "description": "Everything you need to track, daily"
   }
 }

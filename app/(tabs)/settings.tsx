@@ -569,6 +569,20 @@ export default function SettingsScreen() {
             subtitle="Save your data, or bring it back"
             onPress={() => router.push('/settings/backup')}
           />
+          {/*
+            Sync is BUILT BUT NOT REACHABLE yet.
+
+            The merge engine, the Drive transport and the invite flow all work
+            and are tested, but deletes are still hard deletes: the 23
+            `db.delete` call sites have not been converted to tombstones, so a
+            row deleted on one phone is resurrected by the other on the next
+            sync. That is invisible and looks exactly like the delete failing.
+
+            The screen and its route stay in the build — restoring this row is
+            the only change needed once the conversion lands. Shipping it
+            reachable would put a data-losing feature one tap from the user's
+            real budget.
+          */}
         </Section>
 
         <Section
@@ -587,7 +601,7 @@ export default function SettingsScreen() {
 
         <View style={{ alignItems: 'center', paddingTop: space.md }}>
           <Text variant="caption" tone="muted">
-            {Constants.expoConfig?.name ?? 'Money Manager'}
+            {Constants.expoConfig?.name ?? 'Dayly'}
             {Constants.expoConfig?.version ? ` · v${Constants.expoConfig.version}` : ''}
           </Text>
         </View>
@@ -948,7 +962,7 @@ function PlansSheet({ onClose }: { onClose: () => void }) {
       visible
       onClose={onClose}
       title="Plans"
-      eyebrow="Money Manager"
+      eyebrow="Dayly"
       icon="pricetags-outline"
       iconColor={colors.accent}
       scroll

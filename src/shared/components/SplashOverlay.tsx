@@ -465,10 +465,18 @@ export function SplashOverlay({
             surface is regardless of the user's setting.
           */}
           <Text variant="display" color={palette.ink}>
-            Money Manager
+            Dayly
           </Text>
+          {/*
+            The tagline lives HERE, not in the app's name.
+
+            iOS truncates a home-screen label at roughly twelve characters, so
+            "Dayly — everything you need to track, daily" would render as
+            "Dayly — ev…". The splash is the surface with room to say it in
+            full, and the only one a user reads before the app has loaded.
+          */}
           <Text variant="small" color={palette.inkMuted}>
-            Plan every rupee
+            Everything you need to track, daily
           </Text>
         </Animated.View>
       </View>

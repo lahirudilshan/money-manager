@@ -144,7 +144,7 @@ export function AppLockGate({
        * *device passcode*, which iOS presents itself. That is the fallback the
        * user already knows, so the app needs no second secret of its own.
        */
-      const ok = await confirmWithBiometrics('Unlock Money Manager');
+      const ok = await confirmWithBiometrics('Unlock Dayly');
       if (ok) {
         setUnlocked(true);
         setScanFailed(false);
@@ -341,7 +341,7 @@ export function AppLockGate({
       }}
     >
       <View style={{ alignItems: 'center', gap: space.xs }}>
-        <Text variant="heading">Money Manager</Text>
+        <Text variant="heading">Dayly</Text>
         <Text variant="small" tone="muted">
           Enter your PIN to unlock
         </Text>
