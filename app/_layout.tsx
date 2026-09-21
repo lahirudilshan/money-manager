@@ -542,6 +542,7 @@ function RootNavigator() {
           */}
           <Stack.Screen name="settings/rates" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/backup" options={SHEET_ROUTE} />
+          <Stack.Screen name="settings/sync" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/sms-history" options={SHEET_ROUTE} />
           {/*
             Fuel add-on — see core/miniApps.ts.
