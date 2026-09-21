@@ -14,7 +14,7 @@ import { ImageUploader } from '~/shared/components/ImageUploader';
 import { formatAmountInput, formatMoney, parseAmount } from '~/shared/lib/money';
 import { SplitEditor } from '~/features/budget/components/SplitEditor';
 import { CategoryGridPicker } from '~/features/budget/components/CategoryGridPicker';
-import { validateSplit, type SplitPart } from '~/features/budget/logic/splits';
+import { toSavedParts, validateSplit, type SplitPart } from '~/features/budget/logic/splits';
 import { transactionSplitRepo } from '~/db/repositories';
 import {
   dueDateFor,
@@ -249,6 +249,35 @@ export default function SubcategoryScreen() {
    */
   const history = useMemo(() => (id ? selectMonthlyHistory(id) : []), [state, id]);
 
+  /*
+   * The budget is judged against the user's OWN house, not the combined total.
+   *
+   * A budget is set for the home you live in. Once the same line also pays a
+   * parents' bill, comparing it to the total reads as overspending that is not
+   * yours — 9,100 against an 8,000 budget became "3,900 over" once a 2,800
+   * Weligama bill joined it. The total still shows; only the verdict narrows.
+   *
+   * Sits ABOVE the `!subcategory` guard, with every other hook.
+   *
+   * Deleting this line re-renders the screen with `subcategory` gone, so a
+   * hook below the guard is skipped on exactly that render — React counted it
+   * on the previous one and throws "Rendered fewer hooks than expected",
+   * turning every delete into a red screen. It already tolerates a missing
+   * line, so running it unconditionally costs nothing.
+   */
+  const budgetedMinor = useMemo(
+    () =>
+      budgetedSpendMinor(
+        transactions.map((entry) => ({
+          houseId: entry.txn.houseId ?? null,
+          amountMinor: entry.shareMinor,
+        })),
+        state.houses,
+        subcategory?.houseScoped ?? false,
+      ),
+    [transactions, state.houses, subcategory],
+  );
+
   if (!subcategory) {
     return (
       <View
@@ -276,26 +305,6 @@ export default function SubcategoryScreen() {
   // the bar responds as the user types a new figure rather than after saving.
   const plannedMinor = parseAmount(planned) ?? 0;
 
-  /*
-   * The budget is judged against the user's OWN house, not the combined total.
-   *
-   * A budget is set for the home you live in. Once the same line also pays a
-   * parents' bill, comparing it to the total reads as overspending that is not
-   * yours — 9,100 against an 8,000 budget became "3,900 over" once a 2,800
-   * Weligama bill joined it. The total still shows; only the verdict narrows.
-   */
-  const budgetedMinor = useMemo(
-    () =>
-      budgetedSpendMinor(
-        transactions.map((entry) => ({
-          houseId: entry.txn.houseId ?? null,
-          amountMinor: entry.shareMinor,
-        })),
-        state.houses,
-        subcategory?.houseScoped ?? false,
-      ),
-    [transactions, state.houses, subcategory],
-  );
   /** True when the budget covers only part of what this line paid out. */
   const budgetIsPartial = budgetedMinor !== ongoingTotal;
 
@@ -1431,6 +1440,19 @@ function EditTransactionSheet({
       iconColor={colors.accent}
       scroll
       footer={
+        <View style={{ gap: space.sm }}>
+          {/* Why Save is off — the same dead-button problem the review screen
+              had: a disabled button above a settled remainder reads as broken
+              rather than as waiting for something. */}
+          {splitting && !canSave && name.trim() && amountMinor > 0 ? (
+            <Text variant="caption" tone="muted" style={{ textAlign: 'center' }}>
+              {splitValidation.incompleteCount > 0
+                ? 'Finish every line you started — each needs a category and an amount.'
+                : splitValidation.remainderMinor !== 0
+                  ? `${formatMoney(Math.abs(splitValidation.remainderMinor), { showDecimals: true })} ${splitValidation.remainderMinor > 0 ? 'still to allocate' : 'over the payment'}.`
+                  : 'Add a second line, or cancel the split.'}
+            </Text>
+          ) : null}
         <GradientButton
           label="Save entry"
           icon="checkmark"
@@ -1445,17 +1467,14 @@ function EditTransactionSheet({
               // Only when the editor was actually used: `undefined` leaves any
               // stored split alone, `[]` deliberately removes it.
               splits: splitting
-                ? splitParts.map((part) => ({
-                    subcategoryId: part.subcategoryId!,
-                    amountMinor: part.amountMinor!,
-                    note: part.note ?? null,
-                  }))
+                ? toSavedParts(splitParts)
                 : storedSplits.length > 0
                   ? []
                   : undefined,
             })
           }
         />
+        </View>
       }
     >
       <Field label="What was it?" value={name} onChangeText={setName} />

@@ -36,30 +36,26 @@ export default function AccountDetailScreen() {
   );
   const [revealed, setRevealed] = useState(false);
 
-  if (!view) {
-    return (
-      <BottomSheet
-        visible
-      asRoute
-        onClose={closeModal}
-        title="Account"
-        icon="card-outline"
-        iconColor={colors.accent}
-      >
-        <Text variant="small" tone="muted">
-          This account no longer exists.
-        </Text>
-      </BottomSheet>
-    );
-  }
+  /*
+   * `card` and everything derived from it are resolved BEFORE the `!view`
+   * guard below, so every hook on this screen runs on every render.
+   *
+   * Deleting the account re-renders with `view` gone, and a hook sitting below
+   * the guard would be skipped on exactly that render — React counted it on
+   * the previous one and throws "Rendered fewer hooks than expected", so the
+   * delete ends in a red screen instead of a closed sheet. The same shape was
+   * crashing the subcategory sheet; see app/subcategory/[id].tsx.
+   */
+  const card = view?.card;
+  const brand = useBrand({ bankId: card?.bankId, bankName: card?.bankName });
 
-  const { card } = view;
-  const label = accountLabel(card);
-  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName });
   // Categories funded from this account, each with its bills and their
   // effective (actual-or-planned) amounts — so the detail shows *where the
   // money goes*, not just a list of names.
   const fundedCategories = useMemo(() => {
+    // Nothing funds an account that no longer exists — see the note above the
+    // guard about why this runs at all on that render.
+    if (!card) return [];
     /*
      * Resolved per LEAF, matching `selectAccountTransfers`.
      *
@@ -110,7 +106,7 @@ export default function AccountDetailScreen() {
         };
       })
       .filter((cat) => cat.lines.length > 0);
-  }, [state, card.id]);
+  }, [state, card?.id]);
 
   /**
    * Every stored field, whether or not it holds anything.
@@ -130,6 +126,9 @@ export default function AccountDetailScreen() {
       empty: boolean;
       action?: { icon: 'eye-outline' | 'eye-off-outline'; onPress: () => void };
     }[] = [];
+
+    // A deleted account has no fields to list — see the note above the guard.
+    if (!card) return rows;
 
     /** One row, with the blank state handled in a single place. */
     const add = (
@@ -240,6 +239,33 @@ export default function AccountDetailScreen() {
     return rows;
   }, [card, brand.name, revealed, homeCurrency]);
 
+  /*
+   * The guard sits below EVERY hook, which is what keeps the hook count equal
+   * on the render where the account has just been deleted.
+   */
+  if (!view || !card) {
+    return (
+      <BottomSheet
+        visible
+        asRoute
+        onClose={closeModal}
+        title="Account"
+        icon="card-outline"
+        iconColor={colors.accent}
+      >
+        <Text variant="small" tone="muted">
+          This account no longer exists.
+        </Text>
+      </BottomSheet>
+    );
+  }
+
+  const label = accountLabel(card);
+  // Bound here rather than read as `card.id` inside the closure: `card` is
+  // optional until the guard above, and a hoisted `function` body is not
+  // covered by that narrowing.
+  const cardId = card.id;
+
   function confirmDelete() {
     Alert.alert(`Delete ${label.primary}?`, 'Categories pointing at it will need a new account.', [
       { text: 'Cancel', style: 'cancel' },
@@ -247,7 +273,7 @@ export default function AccountDetailScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          state.deleteCard(card.id);
+          state.deleteCard(cardId);
           closeModal();
         },
       },
