@@ -641,24 +641,27 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
           if (sub.type === 'income') continue;
 
           /*
-           * What this line asks the account for.
+           * What this line asks the account for: the PLAN, always.
            *
-           * `??` alone was wrong for an ONGOING line. A dated bill reports
-           * `actualMinor: null` until something is logged (see `billActual`),
-           * so the fallback fires and its plan amount is funded — but an
-           * ongoing line reports a real `0`, which `??` happily accepts. A
-           * grocery budget therefore asked for nothing until the first receipt
-           * of the month landed, and an account holding ONLY ongoing lines read
-           * as having nothing to move at all.
+           * This figure is a transfer target, and a target has to hold still.
+           * The user reads it once after the salary lands, converts it against
+           * a USD balance, and moves that sum — so a number that changes as the
+           * month is logged cannot be acted on: the amount you converted
+           * yesterday is not the amount showing today.
            *
-           * Spending against a budget does not reduce what must be moved onto
-           * the card: the money still has to be there to spend. So the budget
-           * is the floor, and a month that has already overspent it asks for
-           * the larger real figure instead.
+           * It used to take the larger of plan and actual (and, for a dated
+           * bill, the actual outright). That made "money to move" GROW with
+           * spending: a line named "Others" with no plan and LKR 154,460 logged
+           * against it contributed the whole 154,460, pushing the total past
+           * 700K when the real plan was 592K. Overspending is worth surfacing,
+           * but it belongs on the board, which compares plan against actual per
+           * line — not in the one figure whose job is to stay fixed.
+           *
+           * Note this reads `plannedMinor` rather than `effectiveAmount`, so an
+           * ongoing budget contributes its plan even before its first receipt:
+           * the money still has to be on the card to be spent.
            */
-          const amount = isOngoing(sub.frequency)
-            ? Math.max(line.plannedMinor, line.actualMinor ?? 0)
-            : (line.actualMinor ?? line.plannedMinor);
+          const amount = line.plannedMinor;
           planned += amount;
           categoryNames.add(view.category.name);
 

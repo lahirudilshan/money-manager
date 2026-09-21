@@ -382,26 +382,55 @@ describe('board figures once money has been spent', () => {
     expect(household.plannedMinor).toBe(70_000_00);
   });
 
-  /** An overspent budget asks for the real figure, which is now the larger. */
-  it('funds an overspent budget at its real cost', () => {
+  /*
+   * "Money to move" is a TRANSFER TARGET, so it holds still.
+   *
+   * It used to take the larger of plan and actual, which made the figure grow
+   * as the month was logged. That is unusable for what it is for: the user
+   * reads it once after the salary lands, converts it against a USD balance
+   * and moves that sum — and the amount converted yesterday was not the amount
+   * showing today. On the real board a line with no plan and 154,460 logged
+   * against it pushed the total from 592K past 700K.
+   *
+   * Overspending still shows, on the board, which compares plan against actual
+   * per line. It just no longer moves the one figure whose job is to be fixed.
+   */
+  it('does not grow when a budget is overspent', () => {
     const over = buildSpentState({ 'l-groceries': 62_000_00 });
     const household = byName(selectAccountTransfers(over), 'Household');
 
-    // 62,000 actual (> 50,000 budget) + 10,000 + 5,000 + 5,000.
-    expect(household.plannedMinor).toBe(82_000_00);
+    // The plan: groceries 50,000 + eating out 10,000 + 5,000 + 5,000 — NOT the
+    // 62,000 actually spent on groceries.
+    expect(household.plannedMinor).toBe(70_000_00);
   });
 
-  /**
-   * A dated bill takes its ACTUAL once money moves — the electricity bill that
-   * came in over estimate is what the account really owes.
-   */
-  it('takes a dated bill at what it actually cost', () => {
+  /** The same rule for a dated bill that came in over its estimate. */
+  it('does not grow when a dated bill costs more than planned', () => {
     const over = buildSpentState({ 'l-rent': 37_500_00 });
     const salary = byName(selectAccountTransfers(over), 'Salary');
     const flat = byName(selectAccountTransfers(state), 'Salary');
 
     expect(over.transactionTotals.get('l-rent')).toBe(37_500_00);
-    expect(salary.plannedMinor - flat.plannedMinor).toBe(2_500_00);
+    // Unchanged by the overspend: the target is still the planned rent.
+    expect(salary.plannedMinor - flat.plannedMinor).toBe(0);
+  });
+
+  /*
+   * The shape that caused the report: an ongoing line with NO plan.
+   *
+   * `Math.max(0, spend)` returned the whole spend, so such a line contributed
+   * its entire month's logging to the transfer target. It now contributes its
+   * plan, which is zero — nothing has to be moved for a budget that was never
+   * budgeted.
+   */
+  it('ignores spending on an ongoing line that has no plan', () => {
+    const noPlan = buildSpentState({ 'l-groceries': 0 });
+    const before = byName(selectAccountTransfers(noPlan), 'Household').plannedMinor;
+
+    const spentHeavily = buildSpentState({ 'l-groceries': 154_460_00 });
+    const after = byName(selectAccountTransfers(spentHeavily), 'Household').plannedMinor;
+
+    expect(after).toBe(before);
   });
 
   /**
