@@ -1157,9 +1157,31 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const draft = smsDrafts.find((d) => d.id === draftId);
     if (!draft) return;
 
-    let subcategoryId = overrides?.subcategoryId ?? draft.subcategoryId;
-    // Without a target bill there is nothing to mark paid; the confirm card
-    // must supply one before this is reachable.
+    // Narrowed here rather than via a boolean, so every use below is typed.
+    const splits =
+      overrides?.splits && overrides.splits.length > 0 ? overrides.splits : null;
+
+    /*
+     * A SPLIT carries its own destinations, so the single line is not required.
+     *
+     * This guard used to demand `subcategoryId` unconditionally and return
+     * silently when it was missing. The review screen already knew better —
+     * `canLog` stops requiring a line once a split is open, because the parts
+     * ARE the destination — so the two disagreed, and the disagreement was
+     * invisible: the button enabled, `logIt` ran, the sheet closed, and this
+     * returned without writing anything. The draft then reappeared in Smart
+     * detect, which is precisely what the user saw.
+     *
+     * It only bit a merchant with no learned rule (so no suggested line), which
+     * is why splitting a recognised shop looked fine.
+     */
+    let subcategoryId = overrides?.subcategoryId ?? draft.subcategoryId ?? '';
+    if (!subcategoryId && splits) {
+      // The parent transaction is filed against the first part; see below.
+      subcategoryId = splits[0].subcategoryId;
+    }
+
+    // Without a target bill and without parts there is nothing to mark paid.
     if (!subcategoryId) return;
 
     const amountMinor = overrides?.amountMinor ?? draft.amountMinor;
@@ -1209,8 +1231,7 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      * (see `transactionRepo.totalsByPeriod`), so its own line is not
      * double-counted.
      */
-    const splits = overrides?.splits;
-    if (splits && splits.length > 0) {
+    if (splits) {
       const created = transactionRepo.create({
         subcategoryId: splits[0].subcategoryId,
         period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
@@ -1345,6 +1366,34 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      * and offered for logging again.
      */
     smsInboxRepo.resolve(draftId, 'confirmed');
+
+    /*
+     * Record the CONFIRMATION in the log too.
+     *
+     * The log only ever heard about intake, so every message stopped at the
+     * outcome it had on arrival — a confirmed payment sat there as `queued`
+     * forever. On the user's device that was 17 confirmations against 0
+     * `confirmed` rows, so the history screen showed a queue that had in fact
+     * been cleared weeks ago, and a split payment looked as though it had
+     * never been filed.
+     *
+     * Keyed by the same fingerprint as the intake row, so this UPDATES that
+     * row rather than adding a second one (see `record`), and the log reads as
+     * the message's final state rather than its first.
+     */
+    smsLogRepo.record({
+      raw: draft.parsed.raw,
+      fingerprint: fingerprintMessage(draft.parsed.raw),
+      outcome: 'confirmed',
+      // Where it landed, which is the question the history screen is asked
+      // about a confirmed message.
+      reason: get().subcategories.find((s) => s.id === subcategoryId)?.name ?? null,
+      amountMinor,
+      merchant: draft.parsed.merchant,
+      kind: draft.parsed.kind,
+      occurredOn: draft.parsed.date,
+    });
+
     set({ smsDrafts: smsDrafts.filter((d) => d.id !== draftId) });
     // Board (the logged payment) and rules (the merchant mapping just learned
     // above) — settings and mini-app tables cannot have changed here.
@@ -1358,9 +1407,27 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
   },
 
   dismissDraft(draftId) {
+    const draft = get().smsDrafts.find((d) => d.id === draftId);
+
     // Kept as a `dismissed` row rather than deleted, so its fingerprint still
     // rejects the same message if the automation delivers it again.
     smsInboxRepo.resolve(draftId, 'dismissed');
+
+    // The log follows the inbox, for the same reason as `confirmDraft` above:
+    // otherwise a dismissed message reads as still queued.
+    if (draft) {
+      smsLogRepo.record({
+        raw: draft.parsed.raw,
+        fingerprint: fingerprintMessage(draft.parsed.raw),
+        outcome: 'dismissed',
+        reason: 'Dismissed',
+        amountMinor: draft.parsed.amountMinor,
+        merchant: draft.parsed.merchant,
+        kind: draft.parsed.kind,
+        occurredOn: draft.parsed.date,
+      });
+    }
+
     set({ smsDrafts: get().smsDrafts.filter((d) => d.id !== draftId) });
   },
 });

@@ -34,8 +34,15 @@ import { useTheme } from '~/shared/theme/ThemeProvider';
  */
 const FILTERS: { key: string | null; label: string; outcomes?: readonly string[] }[] = [
   { key: null, label: 'All' },
-  { key: 'queued', label: 'Added', outcomes: ['queued'] },
-  { key: 'skipped', label: 'Skipped', outcomes: ['skipped', 'duplicate', 'ignored'] },
+  // "Added" covers both halves of a message that became a transaction: the
+  // moment it joined the queue and the moment it was filed. Separating them
+  // would ask the user to care about a distinction the log makes internally.
+  { key: 'queued', label: 'Added', outcomes: ['queued', 'confirmed'] },
+  {
+    key: 'skipped',
+    label: 'Skipped',
+    outcomes: ['skipped', 'duplicate', 'ignored', 'dismissed'],
+  },
   { key: 'problems', label: 'Problems', outcomes: ['unreadable', 'truncated'] },
 ];
 
@@ -617,7 +624,14 @@ const OUTCOME_LOOK: Record<
   string,
   { label: string; color: 'completed' | 'accent' | 'pending' | 'danger' | 'inkMuted' }
 > = {
+  /*
+   * `confirmed` outranks `queued`: a message that was reviewed and filed has
+   * reached its final state, and the log now records that (see `confirmDraft`)
+   * rather than leaving it reading as still waiting.
+   */
+  confirmed: { label: 'Logged', color: 'completed' },
   queued: { label: 'Added for review', color: 'completed' },
+  dismissed: { label: 'Dismissed', color: 'inkMuted' },
   duplicate: { label: 'Already imported', color: 'inkMuted' },
   skipped: { label: 'Skipped', color: 'accent' },
   ignored: { label: 'Not a payment', color: 'inkMuted' },

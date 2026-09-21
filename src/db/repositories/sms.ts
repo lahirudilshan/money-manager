@@ -349,9 +349,17 @@ export const smsLogRepo = {
           Date.now(),
         ],
       );
-    } catch {
-      // Diagnostics must never break intake. A log write that fails is a lost
-      // log line; a throw here would lose the transaction itself.
+    } catch (error) {
+      /*
+       * Diagnostics must never break intake: a log write that fails is a lost
+       * log line, while a throw here would lose the payment itself.
+       *
+       * But it is not swallowed SILENTLY. A bare `catch {}` on the inbox drain
+       * is what hid a total SMS outage earlier — the symptom was "nothing
+       * appears", with nothing anywhere saying why. Surfacing it on the console
+       * costs nothing and makes the next failure findable.
+       */
+      console.warn('[sms] log write failed', error);
     }
   },
 
