@@ -87,6 +87,12 @@ export const SNAPSHOT_TABLES = [
   'category_states',
   'fundings',
   'fuel_entries',
+  /*
+   * Account-to-account moves. Never in the snapshot until now, so a restore
+   * silently dropped every transfer between the user's own accounts.
+   */
+  'account_transfers',
+  'meter_readings',
   'vehicle_services',
   // References vehicle_services.
   'service_items',
@@ -108,6 +114,12 @@ export const SNAPSHOT_TABLES = [
    */
   'buddy_loans',
   'buddy_repayments',
+  /*
+   * The usage tracker. Added with the add-on itself; without these two a
+   * restore wiped every tracked item and its whole price history.
+   */
+  'tracked_items',
+  'refills',
   /*
    * The Smart Detect queue — messages waiting for review.
    *
@@ -586,6 +598,7 @@ export type BackupPartKey =
   | 'rules'
   | 'history'
   | 'health'
+  | 'trackers'
   | 'sms';
 
 export const BACKUP_PARTS: readonly BackupPart[] = [
@@ -620,7 +633,15 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
     key: 'history',
     label: 'Transactions & history',
     hint: 'Every payment recorded, month by month',
-    tables: ['transactions', 'subcategory_states', 'category_states', 'fundings', 'fuel_entries'],
+    tables: [
+      'transactions',
+      'subcategory_states',
+      'category_states',
+      'fundings',
+      'fuel_entries',
+      'account_transfers',
+      'meter_readings',
+    ],
   },
   /*
    * Health records — `sensitive`, so a backup never carries a family's medical
@@ -647,6 +668,12 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
       'health_readings',
     ],
     sensitive: true,
+  },
+  {
+    key: 'trackers',
+    label: 'Usage tracker',
+    hint: 'Things you replace, and how long each one lasted',
+    tables: ['tracked_items', 'refills'],
   },
   {
     key: 'sms',

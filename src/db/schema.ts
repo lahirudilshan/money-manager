@@ -20,6 +20,29 @@ const timestamps = {
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
     .notNull()
     .default(sql`(unixepoch() * 1000)`),
+  /**
+   * When this row was deleted — a TOMBSTONE, for sync.
+   *
+   * ## Why deletes cannot simply remove the row
+   *
+   * Two phones merge by comparing rows and keeping the newer of each. A row
+   * that is absent on one side is indistinguishable from one that side has not
+   * created YET, so a hard delete is resurrected by the next sync: the other
+   * phone still holds the row, sees it missing here, and treats it as something
+   * new to contribute.
+   *
+   * Keeping the row and stamping it dead makes the deletion itself a fact with
+   * a timestamp, which merges by the same rule as any edit. A later edit
+   * legitimately un-deletes it; an older one does not.
+   *
+   * NULL means live. Every read path filters these out — see `liveOnly` in
+   * db/repositories/internal.ts — so a tombstone is invisible to the app while
+   * remaining visible to sync.
+   *
+   * Rows are finally dropped after 90 days, once every device has certainly
+   * seen the delete. See `pruneTombstones` in features/sync/logic/merge.ts.
+   */
+  deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
 };
 
 /** A bank account, wallet or savings pot that groups draw from. */

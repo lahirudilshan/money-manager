@@ -244,3 +244,111 @@ function normalise(value: unknown): string | number | null {
   if (typeof value === 'number' || typeof value === 'string') return value;
   return JSON.stringify(value);
 }
+
+/**
+ * Write merged rows into the database WITHOUT clearing anything first.
+ *
+ * ## Why this is not `restoreSnapshot`
+ *
+ * A restore empties each table and refills it, which is right when the user
+ * deliberately rolls back to a known file. It is catastrophic for sync: the
+ * rows being written are the MERGE of both devices, and clearing first means a
+ * failure halfway leaves the user with neither side's data. More subtly, a
+ * table absent from the merged set would be emptied on a device that has rows
+ * in it — the other phone simply not having that feature yet would delete it
+ * here.
+ *
+ * So this only ever writes. Deletions travel as tombstones (see `deletedAt` in
+ * schema.ts), which arrive as ordinary rows with a date in them.
+ *
+ * Foreign keys stay ON, unlike a restore: the merged set is a superset of both
+ * devices' rows, so a child's parent is either already present or arriving in
+ * the same pass, and a genuine violation here means the merge produced
+ * something wrong that should fail loudly rather than be forced in.
+ */
+export function applyMerged(
+  tables: Readonly<Record<string, Record<string, unknown>[]>>,
+): RestoreResult {
+  const written: Record<string, number> = {};
+  const skipped: string[] = [];
+
+  try {
+    expoDb.execSync('BEGIN TRANSACTION;');
+
+    /*
+     * Dependency order, reusing the snapshot's own list.
+     *
+     * A merged set arrives as an unordered object, and inserting a transaction
+     * before the subcategory it points at fails the foreign key. Tables the
+     * list does not name are written afterwards, so a newer device's unknown
+     * table is still stored rather than dropped.
+     */
+    const ordered = [
+      ...SNAPSHOT_TABLES.filter((table) => table in tables),
+      ...Object.keys(tables).filter(
+        (table) => !(SNAPSHOT_TABLES as readonly string[]).includes(table),
+      ),
+    ];
+
+    for (const table of ordered) {
+      const rows = tables[table];
+      if (!rows || rows.length === 0) continue;
+
+      if (!tableExists(table)) {
+        skipped.push(table);
+        continue;
+      }
+
+      const liveColumns = new Set(
+        (expoDb.getAllSync(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name),
+      );
+
+      let count = 0;
+      for (const row of rows) {
+        const columns = Object.keys(row).filter((column) => liveColumns.has(column));
+        if (columns.length === 0) continue;
+
+        const placeholders = columns.map(() => '?').join(', ');
+        const values = columns.map((column) => normalise(migrateValue(table, column, row[column])));
+
+        expoDb.runSync(
+          `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`,
+          values,
+        );
+        count += 1;
+      }
+
+      written[table] = count;
+    }
+
+    expoDb.execSync('COMMIT;');
+    return { ok: true, written, skipped };
+  } catch (error) {
+    try {
+      expoDb.execSync('ROLLBACK;');
+    } catch {
+      // The failure was opening the transaction; there is nothing to roll back.
+    }
+    return { ok: false, written: {}, skipped, error: String(error) };
+  }
+}
+
+/**
+ * Every row of every synced table, tombstones INCLUDED.
+ *
+ * `exportSnapshot` is the backup path and carries what the user would restore;
+ * this is the sync path and must carry deletions too, or a row deleted here
+ * would simply look absent to the other device and be sent back.
+ */
+export function exportForSync(): Record<string, Record<string, unknown>[]> {
+  const tables: Record<string, Record<string, unknown>[]> = {};
+
+  for (const table of SNAPSHOT_TABLES) {
+    if (!tableExists(table)) continue;
+    // No `WHERE status = 'pending'` filter here, and no tombstone filter: sync
+    // moves the table as it stands.
+    tables[table] = expoDb.getAllSync(`SELECT * FROM ${table}`) as Record<string, unknown>[];
+  }
+
+  return tables;
+}

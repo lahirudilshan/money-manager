@@ -104,3 +104,28 @@ export function createId(): string {
 }
 
 export const now = () => new Date();
+
+/**
+ * "This row is not a tombstone."
+ *
+ * Every read path in every repository composes this, so the rule lives in one
+ * place: a deleted row stays in the table — see `deletedAt` in schema.ts — and
+ * must be invisible to the app while remaining visible to sync. Spelling the
+ * condition out at each call site would mean 40 chances to forget one, and a
+ * forgotten filter shows the user rows they deleted.
+ */
+export function liveOnly<T extends { deletedAt: unknown }>(table: T) {
+  return isNull(table.deletedAt as never);
+}
+
+/**
+ * Mark a row deleted instead of removing it.
+ *
+ * `updatedAt` is bumped alongside `deletedAt` because the merge compares rows
+ * by `updatedAt`: a tombstone stamped with an old modification time would lose
+ * to the other device's live copy and the row would come back.
+ */
+export function tombstone(): { deletedAt: Date; updatedAt: Date } {
+  const at = new Date();
+  return { deletedAt: at, updatedAt: at };
+}

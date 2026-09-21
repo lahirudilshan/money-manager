@@ -113,6 +113,111 @@ export function createFolderRequest(token: string): DriveRequest {
   };
 }
 
+/**
+ * Invite another Google account to the app's folder.
+ *
+ * ## Why sharing rather than one shared login
+ *
+ * The obvious way to get two phones onto one dataset is to sign both into the
+ * same Google account. That means handing over a password, and there is no way
+ * to revoke one phone without changing it. Sharing the FOLDER instead lets each
+ * person keep their own account: Drive's own permissions become the access
+ * control, the invite is visible in both accounts, and removing access is a
+ * single tap in Drive rather than a password reset.
+ *
+ * `role: 'writer'` is the minimum that works — sync writes the shared file on
+ * both sides, so a reader could never contribute their own changes.
+ *
+ * `sendNotificationEmail` is TRUE deliberately. Drive can share silently, but
+ * an invitation the other person never sees is indistinguishable from a broken
+ * feature, and they need the mail to find the folder in "Shared with me".
+ */
+export function shareFolderRequest(
+  token: string,
+  folderId: string,
+  email: string,
+): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}/${encodeURIComponent(folderId)}/permissions?fields=id&sendNotificationEmail=true`,
+    method: 'POST',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'user', role: 'writer', emailAddress: email }),
+  };
+}
+
+/** Who currently has access, so the screen can show and revoke them. */
+export function listPermissionsRequest(token: string, folderId: string): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}/${encodeURIComponent(folderId)}/permissions?fields=permissions(id,emailAddress,role,type)`,
+    method: 'GET',
+    headers: auth(token),
+  };
+}
+
+/** Revoke one person's access. */
+export function revokePermissionRequest(
+  token: string,
+  folderId: string,
+  permissionId: string,
+): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}/${encodeURIComponent(folderId)}/permissions/${encodeURIComponent(permissionId)}`,
+    method: 'DELETE',
+    headers: auth(token),
+  };
+}
+
+/** One account with access to the shared folder. */
+export interface FolderMember {
+  id: string;
+  email: string | null;
+  role: string;
+  /** True for the account that created the folder — it cannot be revoked. */
+  owner: boolean;
+}
+
+export function parsePermissions(payload: unknown): FolderMember[] {
+  const list = (payload as { permissions?: unknown } | null)?.permissions;
+  if (!Array.isArray(list)) return [];
+
+  return list
+    .map((raw) => {
+      const p = raw as { id?: unknown; emailAddress?: unknown; role?: unknown };
+      if (typeof p.id !== 'string') return null;
+      const role = typeof p.role === 'string' ? p.role : 'reader';
+      return {
+        id: p.id,
+        email: typeof p.emailAddress === 'string' ? p.emailAddress : null,
+        role,
+        owner: role === 'owner',
+      };
+    })
+    .filter((member): member is FolderMember => member !== null);
+}
+
+/**
+ * Find the folder someone ELSE shared with this account.
+ *
+ * `sharedWithMe` is what makes the invited phone work: the folder is not in her
+ * own Drive, so the ordinary name search — which looks at files she owns —
+ * finds nothing and the app would helpfully create a second, empty folder of
+ * the same name and sync into that instead. The two phones would then appear
+ * paired while sharing nothing.
+ *
+ * Checked BEFORE creating anything, and only then falling back to her own.
+ */
+export function findSharedFolderRequest(token: string): DriveRequest {
+  const query = [
+    `name='${BACKUP_FOLDER_NAME}'`,
+    `mimeType='${FOLDER_MIME}'`,
+    'trashed=false',
+    'sharedWithMe=true',
+  ].join(' and ');
+
+  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '1' });
+  return { url: `${DRIVE_FILES}?${params}`, method: 'GET', headers: auth(token) };
+}
+
 /** The folder id from a find/create response, or null. */
 export function parseFolderId(payload: unknown): string | null {
   if (payload === null || typeof payload !== 'object') return null;
@@ -233,6 +338,100 @@ export function downloadBackupRequest(token: string, fileId: string): DriveReque
     method: 'GET',
     headers: auth(token),
   };
+}
+
+/**
+ * The single file every paired device reads and writes.
+ *
+ * A fixed name, unlike backups which are timestamped: sync needs ONE shared
+ * state, and a new file per upload would leave each device merging against
+ * whichever copy it happened to find.
+ */
+export const SYNC_FILENAME = 'money-manager-sync.json';
+
+/**
+ * Find the shared sync file by name inside the app's folder.
+ *
+ * `trashed = false` matters: a file the user deleted in Drive still matches by
+ * name, and syncing into the bin would look like the data silently stopped
+ * travelling between phones.
+ */
+export function findSyncFileRequest(token: string, folderId: string): DriveRequest {
+  const query = [
+    `name = '${SYNC_FILENAME}'`,
+    `'${folderId}' in parents`,
+    'trashed = false',
+  ].join(' and ');
+
+  return {
+    url: `${DRIVE_FILES}?q=${encodeURIComponent(query)}&fields=files(id,name,modifiedTime)&pageSize=1`,
+    method: 'GET',
+    headers: auth(token),
+  };
+}
+
+/**
+ * Overwrite the shared file IN PLACE.
+ *
+ * `PATCH` against the existing file id, not a fresh `POST`: uploading a new
+ * file each sync would accumulate copies and, worse, leave the two phones
+ * pointing at different ones. The file id is the pairing.
+ */
+export function updateSyncFileRequest(
+  token: string,
+  fileId: string,
+  contents: string,
+): DriveRequest {
+  return {
+    url: `${DRIVE_UPLOAD}/${encodeURIComponent(fileId)}?uploadType=media&fields=id,modifiedTime`,
+    method: 'PATCH',
+    headers: {
+      ...auth(token),
+      'Content-Type': 'application/json',
+    },
+    body: contents,
+  };
+}
+
+/** Create the shared file the first time a device syncs. */
+export function createSyncFileRequest(
+  token: string,
+  folderId: string,
+  contents: string,
+): DriveRequest {
+  const boundary = 'money-manager-sync-boundary';
+  const metadata = JSON.stringify({ name: SYNC_FILENAME, parents: [folderId] });
+
+  const body = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    metadata,
+    `--${boundary}`,
+    'Content-Type: application/json',
+    '',
+    contents,
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
+
+  return {
+    url: `${DRIVE_UPLOAD}?uploadType=multipart&fields=id,modifiedTime`,
+    method: 'POST',
+    headers: {
+      ...auth(token),
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  };
+}
+
+/** The file id from a find, or null when the shared file does not exist yet. */
+export function parseSyncFileId(payload: unknown): string | null {
+  const files = (payload as { files?: { id?: unknown }[] } | null)?.files;
+  if (!Array.isArray(files) || files.length === 0) return null;
+  const id = files[0]?.id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
 }
 
 /** Delete an old backup, for pruning. */

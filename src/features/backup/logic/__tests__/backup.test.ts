@@ -451,7 +451,13 @@ describe('summariseSnapshot table breakdown', () => {
       (part) => part.key === 'history',
     );
 
-    expect(history?.tables).toHaveLength(5);
+    /*
+     * Seven, not five: `account_transfers` and `meter_readings` joined this
+     * part when the snapshot was found to be missing them entirely — a restore
+     * had been silently dropping every transfer between the user's own
+     * accounts.
+     */
+    expect(history?.tables).toHaveLength(7);
     expect(history?.tables.every((table) => table.count === 0)).toBe(true);
   });
 });

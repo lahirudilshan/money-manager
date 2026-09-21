@@ -29,6 +29,12 @@ import {
   accountRequest,
   createFolderRequest,
   findFolderRequest,
+  findSharedFolderRequest,
+  listPermissionsRequest,
+  parsePermissions,
+  revokePermissionRequest,
+  shareFolderRequest,
+  type FolderMember,
   deleteBackupRequest,
   downloadBackupRequest,
   listBackupsRequest,
@@ -363,8 +369,25 @@ async function send(request: DriveRequest): Promise<unknown | null> {
  * held the newest one.
  */
 async function folderId(token: string): Promise<string | null> {
-  const found = parseFolderId(await send(findFolderRequest(token)));
-  if (found) return found;
+  /*
+   * A folder this account OWNS wins, because that is the ordinary case: the
+   * person who set the app up first has their own backups here.
+   */
+  const own = parseFolderId(await send(findFolderRequest(token)));
+  if (own) return own;
+
+  /*
+   * Then one shared WITH this account — the invited phone.
+   *
+   * Checked before creating anything, and this order is the whole feature: the
+   * shared folder is not in her own Drive, so the search above finds nothing.
+   * Creating at that point would give her a second, empty `money-manager`
+   * folder and sync into it — both phones would report success while sharing
+   * nothing at all, which is the worst possible failure for a sync feature
+   * because it looks exactly like it is working.
+   */
+  const shared = parseFolderId(await send(findSharedFolderRequest(token)));
+  if (shared) return shared;
 
   return parseFolderId(await send(createFolderRequest(token)));
 }
@@ -554,4 +577,92 @@ export async function deleteDriveBackup(fileId: string): Promise<{ ok: boolean; 
   return result === null
     ? { ok: false, error: 'Could not delete it from Drive. Check your connection.' }
     : { ok: true };
+}
+
+/**
+ * The Drive plumbing the sync module needs, bound to this file's privates.
+ *
+ * `accessToken`, `folderId` and `send` are deliberately not exported — they
+ * carry the refresh logic and the secure-store reads, and every other caller
+ * should go through the named operations above. Sync genuinely needs the raw
+ * three, so they are handed over as one object rather than opened up
+ * individually.
+ *
+ * Constructed as a value rather than passed as free functions so the sync layer
+ * can be tested against a fake without importing anything that touches the
+ * keychain.
+ */
+export const driveGateway = {
+  token: accessToken,
+  folder: folderId,
+  send: (request: { url: string; method: string; headers: Record<string, string>; body?: string }) =>
+    send(request as DriveRequest),
+  download: downloadDriveBackup,
+};
+
+/** Re-exported so screens can type a member list without reaching into driveSync. */
+export type { FolderMember };
+
+/** What an invite attempt produced, in words the screen can show. */
+export interface InviteResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Invite another Google account to the shared folder.
+ *
+ * The folder is resolved first and CREATED if absent, so the inviting phone
+ * does not have to have backed up or synced before it can invite — "share with
+ * my wife" should not fail because no file happens to exist yet.
+ */
+export async function inviteToFolder(email: string): Promise<InviteResult> {
+  const trimmed = email.trim();
+  if (!trimmed.includes('@')) return { ok: false, error: 'Enter a valid email address.' };
+
+  const token = await accessToken();
+  if (!token) return { ok: false, error: 'Sign in to Google again to invite someone.' };
+
+  const folder = await folderId(token);
+  if (!folder) return { ok: false, error: 'Could not open the money-manager folder in Drive.' };
+
+  const result = await send(shareFolderRequest(token, folder, trimmed));
+  if (!result) {
+    /*
+     * Drive rejects an address it cannot deliver to, which is the most likely
+     * failure here and worth naming — "could not share" would send the user
+     * looking at their connection instead of their typing.
+     */
+    return {
+      ok: false,
+      error: 'Drive would not share with that address. Check it and try again.',
+    };
+  }
+
+  return { ok: true };
+}
+
+/** Everyone with access to the shared folder. Empty on any failure. */
+export async function folderMembers(): Promise<FolderMember[]> {
+  const token = await accessToken();
+  if (!token) return [];
+
+  const folder = await folderId(token);
+  if (!folder) return [];
+
+  return parsePermissions(await send(listPermissionsRequest(token, folder)));
+}
+
+/** Remove one person's access to the shared folder. */
+export async function revokeMember(permissionId: string): Promise<InviteResult> {
+  const token = await accessToken();
+  if (!token) return { ok: false, error: 'Sign in to Google again to manage access.' };
+
+  const folder = await folderId(token);
+  if (!folder) return { ok: false, error: 'Could not open the money-manager folder in Drive.' };
+
+  const result = await send(revokePermissionRequest(token, folder, permissionId));
+  // A DELETE returns an empty body on success, which `send` reports as null —
+  // indistinguishable from a failure, so the caller re-reads the member list.
+  return { ok: result !== undefined };
 }

@@ -153,7 +153,9 @@ const DDL = [
     archived_at INTEGER,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS loans (
     id TEXT PRIMARY KEY NOT NULL,
@@ -171,7 +173,9 @@ const DDL = [
     color TEXT NOT NULL DEFAULT '#F97316',
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // The primary object — funded as a unit, owns its own card/due day (see schema.ts).
   `CREATE TABLE IF NOT EXISTS categories (
@@ -185,7 +189,9 @@ const DDL = [
     sort_order INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // The real budget line — the board's leaf.
   `CREATE TABLE IF NOT EXISTS subcategories (
@@ -214,7 +220,9 @@ const DDL = [
     sort_order INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS subcategory_states (
     id TEXT PRIMARY KEY NOT NULL,
@@ -227,7 +235,9 @@ const DDL = [
     note TEXT,
     image_uri TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // Individual entries under an `ongoing` subcategory — see schema.ts.
   `CREATE TABLE IF NOT EXISTS transactions (
@@ -240,7 +250,9 @@ const DDL = [
     note TEXT,
     image_uri TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // The parts of a split payment — see `transactionSplits` in schema.ts. A
   // transaction with no rows here is unsplit, which is every row that predates
@@ -253,7 +265,9 @@ const DDL = [
     note TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS transaction_splits_txn_idx ON transaction_splits(transaction_id)`,
   `CREATE INDEX IF NOT EXISTS transaction_splits_sub_idx ON transaction_splits(subcategory_id)`,
@@ -269,7 +283,9 @@ const DDL = [
     -- manual one. See the accountTransfers table in schema.ts.
     matched_amount_minor INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   );
 CREATE TABLE IF NOT EXISTS category_states (
     id TEXT PRIMARY KEY NOT NULL,
@@ -278,7 +294,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     status TEXT NOT NULL DEFAULT 'pending',
     transferred_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS fundings (
     id TEXT PRIMARY KEY NOT NULL,
@@ -289,7 +307,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     date INTEGER NOT NULL,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS incomes (
     id TEXT PRIMARY KEY NOT NULL,
@@ -303,7 +323,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     is_active INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // Fuel mini-app — see core/miniApps.ts. Opt-in, so these stay empty on a
   // device that never enables it.
@@ -321,7 +343,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     is_active INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS fuel_entries (
     id TEXT PRIMARY KEY NOT NULL,
@@ -338,7 +362,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     note TEXT,
     image_uri TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS fuel_entries_vehicle_idx ON fuel_entries(vehicle_id)`,
   `CREATE INDEX IF NOT EXISTS fuel_entries_odometer_idx ON fuel_entries(vehicle_id, odometer)`,
@@ -355,7 +381,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     next_due_date INTEGER,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS vehicle_services_vehicle_idx ON vehicle_services(vehicle_id)`,
   `CREATE TABLE IF NOT EXISTS service_items (
@@ -368,7 +396,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     note TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS service_items_service_idx ON service_items(service_id)`,
   // Health mini-app — see core/miniApps.ts. Opt-in, so these stay empty on a
@@ -392,7 +422,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     is_active INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS health_visits (
     id TEXT PRIMARY KEY NOT NULL,
@@ -409,7 +441,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     transaction_id TEXT REFERENCES transactions(id) ON DELETE SET NULL,
     follow_up_on INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS health_visits_person_idx ON health_visits(person_id, visited_at)`,
   `CREATE INDEX IF NOT EXISTS health_visits_follow_up_idx ON health_visits(follow_up_on)`,
@@ -429,7 +463,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     is_active INTEGER NOT NULL DEFAULT 1,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS health_medicines_person_idx ON health_medicines(person_id)`,
   `CREATE INDEX IF NOT EXISTS health_medicines_visit_idx ON health_medicines(visit_id)`,
@@ -444,7 +480,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     summary TEXT,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS health_documents_person_idx ON health_documents(person_id, document_date)`,
   `CREATE INDEX IF NOT EXISTS health_documents_visit_idx ON health_documents(visit_id)`,
@@ -460,7 +498,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     context TEXT,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS health_readings_person_idx ON health_readings(person_id, metric, measured_at)`,
   // Buddy loans mini-app — see shared/lib/miniApps.ts. Opt-in, so these stay
@@ -480,7 +520,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     image_uri TEXT,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS buddy_loans_status_idx ON buddy_loans(status, due_on)`,
   `CREATE TABLE IF NOT EXISTS buddy_repayments (
@@ -491,13 +533,17 @@ CREATE TABLE IF NOT EXISTS category_states (
     image_uri TEXT,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS buddy_repayments_loan_idx ON buddy_repayments(loan_id, paid_on)`,
   `CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL,
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // Properties whose bills the user pays — see `houses` in schema.ts.
   `CREATE TABLE IF NOT EXISTS houses (
@@ -510,7 +556,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     sort_order INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // NOTE: the house_id indexes are NOT created here. On an upgraded device the
   // column is added by `ensureAdditiveColumns`, which runs after this DDL — so
@@ -525,7 +573,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     source TEXT NOT NULL DEFAULT 'learned',
     hit_count INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS categories_card_idx ON categories(card_id)`,
   `CREATE INDEX IF NOT EXISTS subcategories_category_idx ON subcategories(category_id)`,
@@ -599,7 +649,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     received_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     resolved_at INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // Unique: this is what makes the drain idempotent, so a retry after a crash
   // (or a Shortcut that appends the same alert twice) cannot double-queue.
@@ -620,7 +672,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     total_due_minor INTEGER,
     monthly_bill_minor INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   // Unique on (account, period): a re-delivered statement updates its row
   // rather than drawing the same month on the chart twice.
@@ -637,7 +691,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     archived INTEGER NOT NULL DEFAULT 0,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS tracked_items_archived_idx
      ON tracked_items(archived, name)`,
@@ -651,7 +707,9 @@ CREATE TABLE IF NOT EXISTS category_states (
     transaction_id TEXT,
     note TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS refills_item_idx ON refills(item_id, filled_on)`,
 ];
@@ -731,7 +789,9 @@ function migrateV2ToV3(): void {
       sort_order INTEGER NOT NULL DEFAULT 0,
       archived_at INTEGER,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
     );`);
 
     // New leaf `subcategories` shape.
@@ -750,7 +810,9 @@ function migrateV2ToV3(): void {
       sort_order INTEGER NOT NULL DEFAULT 0,
       archived_at INTEGER,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
     );`);
 
     // Every old category row gets a deterministic 1:1 wrapper category.
@@ -778,7 +840,9 @@ function migrateV2ToV3(): void {
       completed_at INTEGER,
       note TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
     );`);
     expoDb.execSync(`
       INSERT INTO subcategory_states (id, subcategory_id, period, status, actual_minor, transferred_at, completed_at, note, created_at, updated_at)
@@ -883,7 +947,9 @@ function migrateV3ToV4(): void {
       sort_order INTEGER NOT NULL DEFAULT 0,
       archived_at INTEGER,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
     );`);
 
     expoDb.execSync(`CREATE TABLE fundings (
@@ -895,7 +961,9 @@ function migrateV3ToV4(): void {
       date INTEGER NOT NULL,
       note TEXT,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
     );`);
 
     // Every old category keeps its id; it inherits its parent group's
@@ -1146,7 +1214,82 @@ function ensureAdditiveColumns(): void {
       `CREATE INDEX IF NOT EXISTS subcategory_states_house_idx ON subcategory_states(house_id, period)`,
     );
   }
+
+  ensureTombstoneColumns();
 }
+
+/**
+ * Every synced table gains `deleted_at`.
+ *
+ * A sweep rather than a line per table, because the column is identical
+ * everywhere and the list only grows: a new table that spreads `timestamps` in
+ * schema.ts would otherwise ship without its tombstone column and fail on the
+ * first delete, in a way no test on a fresh database would catch.
+ *
+ * `ensureColumn` is a no-op once the column exists, so this costs one
+ * `PRAGMA table_info` per table on launch and nothing else.
+ */
+function ensureTombstoneColumns(): void {
+  for (const table of SYNCED_TABLES) {
+    const exists = expoDb.getFirstSync(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`,
+    );
+    if (!exists) continue;
+    ensureColumn(table, 'deleted_at', 'deleted_at INTEGER');
+  }
+}
+
+/**
+ * The tables that take part in sync, and therefore need tombstones.
+ *
+ * Deliberately a literal list rather than a query over `sqlite_master`: a
+ * scratch or cache table must NOT gain a tombstone column and start travelling
+ * between devices just because it happens to exist.
+ */
+const SYNCED_TABLES = [
+  'cards',
+  'houses',
+  'loans',
+  'categories',
+  'subcategories',
+  'incomes',
+  'transactions',
+  'transaction_splits',
+  'subcategory_states',
+  'category_states',
+  'fundings',
+  'account_transfers',
+  'merchant_rules',
+  'vehicles',
+  'fuel_entries',
+  'vehicle_services',
+  'service_items',
+  'health_people',
+  'health_visits',
+  'health_medicines',
+  'health_documents',
+  'health_readings',
+  'buddy_loans',
+  'buddy_repayments',
+  'tracked_items',
+  'refills',
+  'meter_readings',
+  /*
+   * `sms_inbox` is here for a different reason from the rest.
+   *
+   * It is NOT synced — a review queue is a per-device decision, and shipping
+   * one phone's pending drafts to another would ask both people to dismiss the
+   * same message. It needs the column anyway, because it spreads `timestamps`
+   * in schema.ts, and Drizzle writes every column that helper declares. Leaving
+   * it out meant every insert named a `deleted_at` the table did not have, so
+   * SQLite rejected it — which silently broke ALL SMS intake until the error
+   * was surfaced.
+   *
+   * The rule: any table spreading `timestamps` belongs in this list, whether or
+   * not it syncs. `tombstoneColumns.test.ts` enforces that.
+   */
+  'sms_inbox',
+] as const;
 
 /**
  * Mirrors `groupColors` in src/theme/index.ts — duplicated as a plain literal
@@ -1519,6 +1662,115 @@ export const DEBT_CATEGORY_ID = 'cat_debt';
  * stray loan lines on every launch, so a loan added before this shipped (or by
  * an older build) is folded in the next time the app starts.
  */
+/**
+ * Teach the log about resolutions that happened before it was told about them.
+ *
+ * ## The gap this closes
+ *
+ * `smsLogRepo.record` was only ever called on the INTAKE path, so a message
+ * froze at the outcome it had on arrival. Confirming a draft resolved its
+ * `sms_inbox` row and left `sms_log` untouched: on the user's device that was
+ * 17 rows `confirmed` in the inbox against 0 in the log, every one still
+ * reading `queued`. The history screen therefore showed a queue that had in
+ * fact been cleared weeks earlier, and a payment split across two lines looked
+ * as though it had never been filed at all.
+ *
+ * `confirmDraft` and `dismissDraft` now record their own outcomes, but that
+ * only fixes resolutions from here on. This repairs the ones already stored.
+ *
+ * ## Why the inbox is the authority
+ *
+ * `sms_inbox` holds the resolution the user actually made, and carries the raw
+ * text, fingerprint, amount, merchant and kind the log row needs — so every
+ * field is recovered rather than guessed. A row the log never saw at all is
+ * inserted; one it saw at intake is updated in place, keyed on the same
+ * fingerprint the live path uses.
+ *
+ * Idempotent and shape-driven, like the helpers above: it looks for inbox rows
+ * whose log outcome disagrees with them, so a second launch finds nothing to
+ * do. That also means a device that upgrades later is repaired on ITS first
+ * launch, which matters once this database is shared with a second phone.
+ */
+function backfillResolvedSmsLog(): void {
+  const tables = expoDb.getAllSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('sms_inbox','sms_log')`,
+  ) as { name: string }[];
+  if (tables.length < 2) return;
+
+  /*
+   * Only rows where the log CONTRADICTS the inbox.
+   *
+   * A left join catches the message the log never recorded at all, and the
+   * outcome comparison catches the far commoner case of a stale `queued`. A
+   * row that already agrees is skipped, which is what makes re-running free.
+   */
+  const stale = expoDb.getAllSync(
+    `SELECT i.raw, i.fingerprint, i.status, i.amount_minor, i.merchant, i.kind,
+            i.occurred_on, i.resolved_at, l.fingerprint AS logged
+     FROM sms_inbox i
+     LEFT JOIN sms_log l ON l.fingerprint = i.fingerprint
+     WHERE i.status IN ('confirmed','dismissed')
+       AND (l.fingerprint IS NULL OR l.outcome <> i.status)`,
+  ) as {
+    raw: string;
+    fingerprint: string;
+    status: string;
+    amount_minor: number | null;
+    merchant: string | null;
+    kind: string | null;
+    occurred_on: string | null;
+    resolved_at: number | null;
+    logged: string | null;
+  }[];
+  if (stale.length === 0) return;
+
+  expoDb.execSync('BEGIN IMMEDIATE;');
+  try {
+    for (const row of stale) {
+      if (row.logged) {
+        /*
+         * Update in place, keeping `seen_at` as the moment of RESOLUTION where
+         * the inbox recorded one. The history screen orders by that column, so
+         * writing "now" instead would drag every repaired message to the top
+         * and reorder a history the user has already read.
+         */
+        expoDb.runSync(
+          `UPDATE sms_log
+           SET outcome = ?, seen_at = COALESCE(?, seen_at)
+           WHERE fingerprint = ?`,
+          [row.status, row.resolved_at, row.fingerprint],
+        );
+      } else {
+        expoDb.runSync(
+          `INSERT INTO sms_log
+             (id, raw, fingerprint, outcome, reason, source, amount_minor, merchant, kind, occurred_on, seen_at)
+           VALUES (?, ?, ?, ?, ?, 'backfill', ?, ?, ?, ?, ?)
+           ON CONFLICT(fingerprint) DO UPDATE SET outcome = excluded.outcome`,
+          [
+            migrationId('log'),
+            row.raw,
+            row.fingerprint,
+            row.status,
+            // The line it landed on is not recoverable from the inbox, so the
+            // reason says where the row came from rather than inventing one.
+            'Restored from the review queue',
+            row.amount_minor,
+            row.merchant,
+            row.kind,
+            row.occurred_on,
+            row.resolved_at ?? Date.now(),
+          ],
+        );
+      }
+    }
+    expoDb.execSync('COMMIT;');
+  } catch (error) {
+    expoDb.execSync('ROLLBACK;');
+    // The log is diagnostics: a failed repair must never stop the app opening.
+    console.warn('[db] sms_log backfill failed', error);
+  }
+}
+
 function consolidateDebtCategories(): void {
   const hasSubcategories = expoDb.getFirstSync(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='subcategories'`,
@@ -1763,6 +2015,7 @@ export function initialiseDatabase(): void {
   // the helpers above it is idempotent and shape-driven, so a loan category
   // created by an older build is folded in on the next launch.
   consolidateDebtCategories();
+  backfillResolvedSmsLog();
 
   expoDb.execSync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   initialised = true;
