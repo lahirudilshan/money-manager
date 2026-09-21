@@ -280,7 +280,19 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
       /\btoll\b/i,
     ],
   ],
-  ['atm', [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i]],
+  /*
+   * ATM, unless the message's SUBJECT is a fee.
+   *
+   * "debited ... as ATM Withdrawal Fee" is a charge that merely happens to name
+   * a machine; it was read as a cash withdrawal and offered as pocket money.
+   * The `as <something> Fee` construction names what the debit IS, which an
+   * e-receipt itemising "Txn Fee: 30.00" inside a withdrawal does not — so the
+   * receipt case below still resolves to `atm`.
+   */
+  [
+    'atm',
+    [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i],
+  ],
   /*
    * Bank fees, AFTER `atm` but BEFORE `transfer` — both placements matter.
    *
@@ -294,7 +306,7 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
   [
     'bank_charge',
     [
-      /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:charge|charges|fee|fees)\b/i,
+      /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:\w+\s+)?(?:charge|charges|fee|fees)\b/i,
       /\bstamp\s+duty\b/i,
       /\bcommission\b/i,
       /\bcharges?\s*(?:applied|debited)\b/i,
@@ -305,17 +317,62 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
 ];
 
 /**
- * Infer the single best category tag for a piece of SMS text (usually the
- * merchant plus the raw message), or null when nothing recognisable matches.
- * The first entry in HINT_KEYWORDS whose patterns hit wins, so utilities are
- * chosen ahead of the generic transfer bucket.
+ * Infer the single best category tag for a piece of SMS text.
+ *
+ * ## Why this scores rather than taking the first match
+ *
+ * This used to return the first entry in `HINT_KEYWORDS` whose pattern hit,
+ * which made correctness a property of LIST ORDER. Every new keyword risked
+ * shadowing one below it, and the failure was silent: "debited ... as ATM
+ * Withdrawal Fee" matched the one-word `/\batm\b/` before it ever reached the
+ * fee patterns, so a 30-rupee bank charge was offered to the user as pocket
+ * money. Fixing that by shuffling the list would only move the problem to
+ * whichever rule ended up underneath.
+ *
+ * So the winner is the most SPECIFIC match instead. A pattern that matches
+ * "ATM Withdrawal Fee" — eighteen characters of agreement with the message —
+ * beats one matching the three letters of "ATM", whatever order they are
+ * declared in. That is the same judgement a person makes reading the message:
+ * the longer phrase says more.
+ *
+ * List order survives only as the tiebreak, so existing deliberate precedence
+ * (utilities ahead of the generic transfer bucket) still holds when two rules
+ * match equally well.
  */
 export function inferCategoryHint(text: string): CategoryHint | null {
   if (!text) return null;
+
+  let best: CategoryHint | null = null;
+  let bestScore = 0;
+
   for (const [hint, patterns] of HINT_KEYWORDS) {
-    if (patterns.some((pattern) => pattern.test(text))) return hint;
+    const score = specificity(text, patterns);
+    // Strictly greater, so an earlier entry wins a tie — see above.
+    if (score > bestScore) {
+      bestScore = score;
+      best = hint;
+    }
   }
-  return null;
+
+  return best;
+}
+
+/**
+ * How well a rule matches: the length of the longest substring it claims.
+ *
+ * Zero when nothing matches. Length is a crude proxy for specificity, but it is
+ * the right one here: these patterns are phrases, and a longer agreement with
+ * the message genuinely is stronger evidence than a shorter one. Anything more
+ * elaborate — weights per rule, hand-tuned scores — would be another table to
+ * keep in step with two files and a server.
+ */
+function specificity(text: string, patterns: readonly RegExp[]): number {
+  let longest = 0;
+  for (const pattern of patterns) {
+    const found = text.match(pattern);
+    if (found && found[0].length > longest) longest = found[0].length;
+  }
+  return longest;
 }
 
 /**

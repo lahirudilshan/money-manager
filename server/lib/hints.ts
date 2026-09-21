@@ -201,7 +201,7 @@ const HINT_KEYWORDS: [Hint, RegExp[]][] = [
   [
     'bank_charge',
     [
-      /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:charge|charges|fee|fees)\b/i,
+      /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:\w+\s+)?(?:charge|charges|fee|fees)\b/i,
       /\bstamp\s+duty\b/i,
       /\bcommission\b/i,
       /\bcharges?\s*(?:applied|debited)\b/i,
@@ -220,10 +220,35 @@ const HINT_KEYWORDS: [Hint, RegExp[]][] = [
  */
 export function inferHint(text: string): Hint | null {
   if (!text) return null;
+  /*
+   * The most SPECIFIC match wins, not the first declared.
+   *
+   * First-match-wins made correctness a property of list order: "debited ... as
+   * ATM Withdrawal Fee" matched the one-word `/\batm\b/` before reaching the
+   * fee patterns, so a bank charge was classified as a cash withdrawal. Scoring
+   * by the length of the matched phrase decides it on evidence instead, and
+   * list order survives only as the tiebreak.
+   *
+   * Must stay identical to `inferCategoryHint` in the app — a message has to
+   * classify the same way whether or not the network was up.
+   */
+  let best: Hint | null = null;
+  let bestScore = 0;
+
   for (const [hint, patterns] of HINT_KEYWORDS) {
-    if (patterns.some((pattern) => pattern.test(text))) return hint;
+    let longest = 0;
+    for (const pattern of patterns) {
+      const found = text.match(pattern);
+      if (found && found[0].length > longest) longest = found[0].length;
+    }
+    // Strictly greater, so an earlier entry wins a tie.
+    if (longest > bestScore) {
+      bestScore = longest;
+      best = hint;
+    }
   }
-  return null;
+
+  return best;
 }
 
 /**

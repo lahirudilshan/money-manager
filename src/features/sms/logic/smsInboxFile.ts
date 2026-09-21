@@ -386,9 +386,31 @@ export function drainInbox(
     );
 
     return { ...plan, ok: true };
-  } catch {
+  } catch (error) {
+    /*
+     * A swallowed error here is invisible by construction.
+     *
+     * This used to be a bare `catch { return empty; }`, which meant a throw
+     * anywhere in the drain — the commit callback, the rewrite — produced
+     * exactly the symptoms of "nothing happened": the file untouched, no log
+     * rows, no drafts, and no way to tell a failure from an empty queue. The
+     * reason is now recorded so the next failure names itself.
+     */
+    try {
+      lastDrainError = String(error);
+    } catch {
+      // Never let diagnostics themselves break the drain.
+    }
     return empty;
   }
+}
+
+/** The most recent drain failure, for diagnostics. Null when none. */
+let lastDrainError: string | null = null;
+
+/** What went wrong in the last drain, if anything. */
+export function drainError(): string | null {
+  return lastDrainError;
 }
 
 /**
@@ -481,3 +503,4 @@ export function isInboxAvailable(): boolean {
     return false;
   }
 }
+

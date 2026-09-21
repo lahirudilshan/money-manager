@@ -304,8 +304,41 @@ const DEBIT_PATTERNS: RegExp[] = [
  * qualify; a purchase at a shop called "Charges Ltd" does not, because the
  * words must appear as the transaction's own type.
  */
+/**
+ * Whether a debit is a bank fee rather than the transaction it sits beside.
+ *
+ * Extracted so the ATM-precedence check and the main fee branch cannot drift:
+ * both need the SAME plausibility guards, and duplicating them is how one gets
+ * a fix the other misses.
+ *
+ * Two signals, both about not mistaking a transaction for its own fee:
+ *
+ *  - an itemised fee differing from the amount read means the message itemises
+ *    a fee separately, so the amount belongs to the parent transaction;
+ *  - otherwise the amount must be small enough to be a plausible charge. This
+ *    is what stops a 4,500 ATM withdrawal from a network whose name contains
+ *    fee vocabulary being filed as a fee.
+ */
+function looksLikeBankCharge(text: string, amountMinor: number): boolean {
+  if (!BANK_CHARGE_PATTERNS.some((pattern) => pattern.test(text))) return false;
+
+  const itemised = extractItemisedFee(text);
+  const amountIsTheFee = !itemised || itemised.amountMinor === amountMinor;
+  return amountIsTheFee && amountMinor <= MAX_PLAUSIBLE_CHARGE_MINOR;
+}
+
 const BANK_CHARGE_PATTERNS: RegExp[] = [
-  /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:charge|charges|fee|fees)\b/i,
+  /*
+   * A fee noun, optionally with ONE qualifier in between.
+   *
+   * "ATM Withdrawal Fee" has a word between the network and the fee noun, so
+   * the original adjacency requirement missed it — and because the ATM rule
+   * runs first, a 30-rupee fee was classified as a cash withdrawal and offered
+   * as pocket money. One optional word covers the real wording ("ATM
+   * Withdrawal Fee", "Transfer Service Charge") without letting an ordinary
+   * purchase that merely mentions a fee become one.
+   */
+  /\b(?:transfer|txn|transaction|service|handling|processing|annual|monthly|late|overdraft|atm)\s+(?:\w+\s+)?(?:charge|charges|fee|fees)\b/i,
   /\bcharges?\s*(?:applied|debited)\b/i,
   /\bstamp\s+duty\b/i,
   /\bcommission\b/i,
@@ -1417,6 +1450,22 @@ function classifyKind(text: string, direction: SmsDirection, amountMinor: number
    */
   if (/\bATM\b[^.]*\bPOS\b/i.test(text) && !/cash\s+withdrawal/i.test(text)) {
     return 'purchase';
+  }
+  /*
+   * A FEE beats the ATM rule, and must be tested before it.
+   *
+   * "LKR 30.00 debited ... as ATM Withdrawal Fee" contains both `ATM` and
+   * `withdrawal`, so the rule below claimed it and a 30-rupee charge was filed
+   * as cash out of a machine — suggested to the user as pocket money. The
+   * message says what it is: the fee wording is the specific signal and the ATM
+   * wording is incidental to it.
+   *
+   * Guarded by the same plausibility rules the main fee branch uses, so a real
+   * 4,500 withdrawal from a machine whose name happens to contain fee
+   * vocabulary is not swept in.
+   */
+  if (direction === 'debit' && looksLikeBankCharge(text, amountMinor)) {
+    return 'bank_charge';
   }
   if (/\bATM\b|withdrawal/i.test(text)) return 'atm';
 
