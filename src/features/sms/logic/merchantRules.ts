@@ -150,11 +150,30 @@ export function matchMerchant(merchant: string, rules: readonly MerchantRule[]):
   const byContainment = (a: MerchantRule, b: MerchantRule) =>
     b.pattern.length - a.pattern.length || byStrength(a, b);
 
+  /*
+   * BOTH sides need a length floor, not just the pattern.
+   *
+   * The guard below used to cover `rule.pattern` alone, which left the reverse
+   * direction wide open: `rule.pattern.includes(key)` with a one-character key
+   * matches any rule containing that letter. A real message from
+   * "L.I.O.C.FILLING STATION" parsed its merchant as "L" (the parser stops at
+   * the first dot), and "L" is inside "nationa(l) water supply and drainage
+   * board" — so a 15,485 fuel purchase was suggested as a water bill, with
+   * `likely` confidence.
+   *
+   * Three characters is the same floor already applied to patterns, and it is
+   * the length below which containment stops meaning anything: every short
+   * string is a substring of something.
+   */
+  const MIN_CONTAINMENT = 3;
+
   let partial: MerchantRule | undefined;
-  for (const rule of rules) {
-    if (rule.pattern.length < 3) continue;
-    if (!key.includes(rule.pattern) && !rule.pattern.includes(key)) continue;
-    if (!partial || byContainment(rule, partial) < 0) partial = rule;
+  if (key.length >= MIN_CONTAINMENT) {
+    for (const rule of rules) {
+      if (rule.pattern.length < MIN_CONTAINMENT) continue;
+      if (!key.includes(rule.pattern) && !rule.pattern.includes(key)) continue;
+      if (!partial || byContainment(rule, partial) < 0) partial = rule;
+    }
   }
 
   if (partial) {

@@ -1184,8 +1184,15 @@ function extractMerchant(text: string): string {
    *
    * Stops at the sentence end, so the trailing "ATM POS Transaction" and the
    * bank's sign-off stay out of the name.
+   *
+   * A dot INSIDE an initialism is not a sentence end, though. "L.I.O.C.FILLING
+   * STATION PELIYAGODA" stopped at the very first one and yielded the merchant
+   * "L" — a single letter, which then matched a rule for "nationa(l) water
+   * supply and drainage board" by containment and suggested a water bill for a
+   * fuel purchase. So a dot that sits between two single letters, or directly
+   * after one, is consumed rather than treated as the terminator.
    */
-  const atSign = text.match(/@\s*([^.\n]+?)\s*(?:\.|$)/);
+  const atSign = text.match(/@\s*((?:[^.\n]|\.(?=[A-Za-z])(?<=\b[A-Za-z]\.))+?)\s*(?:\.\s|\.$|$)/);
   if (atSign) {
     const value = clean(atSign[1]);
     if (value && /[A-Za-z]/.test(value)) return value;
