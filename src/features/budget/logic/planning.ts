@@ -115,10 +115,22 @@ export function effectiveAmount(category: PlannedCategory): Minor {
  * that distinction has been resolved.
  */
 export function monthlyAmount(category: PlannedCategory): Minor {
-  const amount = effectiveAmount(category);
+  return monthlyAmountOf(category, effectiveAmount(category));
+}
+
+/**
+ * Spread an ARBITRARY figure over the year when the line is yearly.
+ *
+ * The same normalisation `monthlyAmount` applies, but to a figure the caller
+ * chooses rather than to the effective amount — so the plan-only and
+ * actual-only sums divide a yearly bill exactly as the blended total does.
+ * Three figures on one row that normalised differently would not add up.
+ *
+ * Rounded to the cent: twelve months summing back to the annual figure
+ * closely matters more than per-month exactness.
+ */
+export function monthlyAmountOf(category: PlannedCategory, amount: Minor): Minor {
   if (category.frequency !== 'yearly') return amount;
-  // Round to the cent so twelve months sum back to the annual figure closely;
-  // exactness per-month matters less than never overstating the monthly plan.
   return Math.round(amount / 12);
 }
 
@@ -179,6 +191,10 @@ export function isObligationMet(line: {
 export interface CategorySummary {
   /** Sum of every subcategory's effective amount. */
   totalMinor: Minor;
+  /** Sum of what was PLANNED, ignoring what has been logged. */
+  plannedTotalMinor: Minor;
+  /** Sum of what has actually been LOGGED, ignoring the plan. */
+  actualTotalMinor: Minor;
   /** Sum actually transferred onto the card for this period. */
   fundedMinor: Minor;
   /** Still to transfer; never negative. */
@@ -230,6 +246,25 @@ export function summariseCategory(
   // Monthly cost, not face value — a yearly bill is spread over the year it is
   // saved for rather than charged in full every month.
   const total = sumMinor(spend.map(monthlyAmount));
+
+  /*
+   * Plan and actual as SEPARATE sums, beside the blended one.
+   *
+   * `totalMinor` is each line's effective amount — the actual where one was
+   * logged, the plan where none was — which is the right figure for "what does
+   * this category cost this month" and a useless one for "am I over". A
+   * category planned at 50,000 that has spent 62,000 reports 62,000, and
+   * nothing on the row says whether that is the plan or the overspend.
+   *
+   * Both are monthly-normalised the same way `totalMinor` is, so a yearly bill
+   * contributes a twelfth to each and the two stay comparable.
+   */
+  const plannedTotal = sumMinor(
+    spend.map((s) => monthlyAmountOf(s, s.plannedMinor)),
+  );
+  const actualTotal = sumMinor(
+    spend.map((s) => monthlyAmountOf(s, s.actualMinor ?? 0)),
+  );
   const incomeMinor = sumMinor(
     applicable.filter((s) => !isSpend(s)).map(monthlyAmount),
   );
@@ -262,6 +297,8 @@ export function summariseCategory(
 
   return {
     totalMinor: total,
+    plannedTotalMinor: plannedTotal,
+    actualTotalMinor: actualTotal,
     fundedMinor,
     shortfallMinor: Math.max(0, -difference),
     surplusMinor: Math.max(0, difference),

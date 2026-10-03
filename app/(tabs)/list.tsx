@@ -1249,7 +1249,35 @@ function CategoryCard({
           </GHPressable>
 
           <View style={{ alignItems: 'flex-end', gap: 2 }}>
-            <Text variant="figureLarge">{formatMoney(summary.totalMinor, { compact: true })}</Text>
+            {/*
+              PLAN on top, SPENT underneath.
+
+              The row carried one blended figure — each line's actual where it
+              had one, its plan where it did not — which answers "what does
+              this cost" and cannot answer "am I over". A category planned at
+              50,000 that has spent 62,000 showed 62,000, with nothing saying
+              which of the two it was.
+
+              The plan leads because it is the fixed thing the month is judged
+              against; the spend sits under it in the smaller caption style,
+              coloured only once it exceeds the plan, so a category behaving
+              itself stays visually quiet.
+            */}
+            <Text variant="figureLarge">
+              {formatMoney(summary.plannedTotalMinor, { compact: true })}
+            </Text>
+            {summary.actualTotalMinor > 0 ? (
+              <Text
+                variant="caption"
+                color={
+                  summary.actualTotalMinor > summary.plannedTotalMinor
+                    ? colors.danger
+                    : colors.inkMuted
+                }
+              >
+                {formatMoney(summary.actualTotalMinor, { compact: true })} spent
+              </Text>
+            ) : null}
             <GHPressable
               onPress={onToggleCollapsed}
               hitSlop={8}
