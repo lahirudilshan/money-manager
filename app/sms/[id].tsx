@@ -25,6 +25,7 @@ import {
   Text,
 } from '~/shared/components/ui';
 import { DatePickerField } from '~/shared/components/DatePickerField';
+import { draftDate } from '~/features/sms/logic/smsCategoryHints';
 import { parseEnabled } from '~/shared/lib/miniApps';
 import { defaultDirection, offersLoanAction } from '~/features/buddyloans/logic/fromDraft';
 import { LoanFields, useLoanDraft } from '~/features/buddyloans/components/LoanFields';
@@ -123,6 +124,14 @@ export default function SmsDraftModal() {
   }, [destinations, state.categories]);
 
   const [subcategoryId, setSubcategoryId] = useState(draft?.subcategoryId ?? '');
+  /*
+   * WHEN the payment happened.
+   *
+   * Seeded from the message and editable, because the parser does not always
+   * find a date and the fallback used to be an invisible "now". See
+   * `draftDate` for the rule.
+   */
+  const [date, setDate] = useState(() => draftDate(draft?.parsed.date));
   /**
    * SPLIT MODE — one payment, several budget lines.
    *
@@ -218,6 +227,7 @@ export default function SmsDraftModal() {
     lastDraftId.current = id;
 
     setSubcategoryId(draft?.subcategoryId ?? '');
+    setDate(draftDate(draft?.parsed.date));
     setNameText(draft?.parsed.merchant ?? '');
     setLoanOpen(false);
     setHouseChoice(null);
@@ -367,6 +377,7 @@ export default function SmsDraftModal() {
       subcategoryId,
       amountMinor,
       name: nameText,
+      date,
       houseId: houseScoped ? effectiveHouseId : null,
       // Only when the split is complete — a half-filled editor logs as an
       // ordinary single-line entry rather than silently dropping the parts.
@@ -402,6 +413,7 @@ export default function SmsDraftModal() {
       subcategoryId: suggested.id,
       amountMinor,
       name: nameText,
+      date,
       houseId: houseScoped ? effectiveHouseId : null,
     });
     closeModal();
@@ -672,6 +684,11 @@ export default function SmsDraftModal() {
           onChangeText={setNameText}
           placeholder="e.g. Keells run"
         />
+
+        {/* When it happened. Read from the message where possible, today when
+            the message carried no usable date — either way it is on screen and
+            can be corrected before logging. */}
+        <DatePickerField label="Date" value={date} onChange={setDate} />
 
         {/* What the system detected, and how sure it is. Shown instead of the
             picker when there is a real suggestion, so the common case is read-

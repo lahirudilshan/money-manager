@@ -490,3 +490,38 @@ export const SEED_MERCHANT_PATTERNS: [CategoryHint, string[]][] = [
   ['transport', ['railway', 'pickme', 'uber']],
   ['health', ['pharmacy', 'nawaloka', 'asiri', 'durdans', 'hemas hospital']],
 ];
+
+/**
+ * The date a confirmed SMS should be logged under.
+ *
+ * The parser reads a date out of most messages, but not all — some banks omit
+ * it, and a truncated alert can lose it. Before this was editable the fallback
+ * was silent: an undated message was logged as "now", which is usually right
+ * (the alert arrives within seconds) and occasionally very wrong, with no way
+ * to tell which from the screen.
+ *
+ * So the rule is stated and the result is shown in a picker the user can
+ * change: the message's own date when there is a usable one, today otherwise.
+ *
+ * Validity is CHECKED rather than assumed. `new Date('')` and
+ * `new Date('not a date')` both yield an Invalid Date, which renders as
+ * "Invalid Date" in the field and writes NaN into the row — a far worse
+ * outcome than falling back to today.
+ */
+export function draftDate(parsedDate: string | null | undefined, now: Date = new Date()): Date {
+  if (typeof parsedDate === 'string' && parsedDate.length > 0) {
+    const parsed = new Date(parsedDate);
+    if (!Number.isNaN(parsed.getTime())) {
+      /*
+       * A FUTURE date is not trusted.
+       *
+       * A two-digit year read the wrong way round, or a device clock behind
+       * the bank's, can produce one — and a payment dated next month lands in
+       * a period the board is not showing, so it looks like the entry simply
+       * never saved.
+       */
+      if (parsed.getTime() <= now.getTime()) return parsed;
+    }
+  }
+  return now;
+}

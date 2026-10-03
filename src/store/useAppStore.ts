@@ -641,6 +641,15 @@ export interface AppState {
        */
       name?: string;
       note?: string | null;
+      /**
+       * WHEN the payment happened.
+       *
+       * The confirm screen seeds this from the message and lets the user
+       * correct it, so an undated alert no longer logs silently as "now" —
+       * see `draftDate`. Absent means "use the message's own date", which is
+       * what every caller that does not ask the user still wants.
+       */
+      date?: Date;
       /** Which property this payment was for — see core/houses.ts. */
       houseId?: string | null;
       /**

@@ -25,6 +25,7 @@ import { orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsRecon
 import { payeeAccountKey, planRuleUpsert } from '~/features/sms/logic/merchantRules';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { matchTransferToAccount } from '~/features/budget/logic/autoTransfer';
+import { periodKey } from '~/features/budget/logic/planning';
 import { isForeignAccountMessage } from '~/features/sms/logic/accountMasks';
 import { selectAccountTransfers } from '~/store/selectors';
 import {
@@ -1187,6 +1188,17 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const amountMinor = overrides?.amountMinor ?? draft.amountMinor;
 
     /*
+     * The date the user confirmed, falling back to the message's own.
+     *
+     * The confirm screen now shows this in a picker (see `draftDate`), so an
+     * override is the user having looked at it. Both the transaction's date
+     * and the PERIOD it counts toward are derived from the one value — they
+     * disagreed before only because each branch re-derived them separately.
+     */
+    const occurredAt = overrides?.date ?? (draft.parsed.date ? new Date(draft.parsed.date) : new Date());
+    const occurredPeriod = periodKey(occurredAt);
+
+    /*
      * Naming another household's house FILES the payment under that house.
      *
      * A bill paid for a parents' house is not this household's electricity —
@@ -1234,13 +1246,13 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     if (splits) {
       const created = transactionRepo.create({
         subcategoryId: splits[0].subcategoryId,
-        period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
+        period: occurredPeriod,
         // The user's own words win over the bank's merchant string, which is
         // often absent — an unnamed debit otherwise reads back as the useless
         // "SMS transaction".
         name: overrides?.name?.trim() || draft.parsed.merchant || 'SMS transaction',
         amountMinor,
-        date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
+        date: occurredAt,
         note: overrides?.note ?? draft.parsed.raw,
         houseId: overrides?.houseId ?? null,
       });
@@ -1271,18 +1283,28 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       // becomes one transaction rather than the month's single "actual".
       transactionRepo.create({
         subcategoryId,
-        period: draft.parsed.date ? draft.parsed.date.slice(0, 7) : period,
+        period: occurredPeriod,
         // The user's own words win over the bank's merchant string, which is
         // often absent — an unnamed debit otherwise reads back as the useless
         // "SMS transaction".
         name: overrides?.name?.trim() || draft.parsed.merchant || 'SMS transaction',
         amountMinor,
-        date: draft.parsed.date ? new Date(draft.parsed.date) : new Date(),
+        date: occurredAt,
         note: overrides?.note ?? draft.parsed.raw,
         houseId: overrides?.houseId ?? null,
       });
     } else {
-      stateRepo.logTransaction(subcategoryId, period, {
+      /*
+       * `occurredPeriod`, not the browsed `period`.
+       *
+       * This branch marks a dated bill paid for a month, and it used the month
+       * the user happened to be LOOKING at. Confirming a payment from the 28th
+       * while browsing next month therefore settled the wrong month's bill —
+       * and now that the date is editable, correcting it would have had no
+       * effect here at all. The other two branches already derive their month
+       * from the payment; this one now agrees with them.
+       */
+      stateRepo.logTransaction(subcategoryId, occurredPeriod, {
         status: 'paid',
         actualMinor: amountMinor,
         note: overrides?.note ?? `From SMS: ${draft.parsed.raw}`,
