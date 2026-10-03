@@ -6,6 +6,7 @@ import { ScrollView, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppLockGate } from '~/shared/components/AppLockGate';
+import { ComingSoonGate } from '~/shared/components/ComingSoonGate';
 import { SplashOverlay, SPLASH_THEME } from '~/shared/components/SplashOverlay';
 import { ThemeProvider, useTheme } from '~/shared/theme/ThemeProvider';
 import { extractSmsFromUrl, looksTruncated } from '~/features/sms/logic/smsIntakeUrl';
@@ -75,6 +76,8 @@ function RootNavigator() {
    * splash then leaves regardless — see the note on SPLASH_TIMEOUT_MS.
    */
   const [timedOut, setTimedOut] = useState(false);
+  /** Remains open only for this app process; a new launch shows the release page. */
+  const [releaseGateOpen, setReleaseGateOpen] = useState(false);
 
   const appLockEnabled = useAppStore((s) => s.appLockEnabled);
 
@@ -510,7 +513,11 @@ function RootNavigator() {
         second — the balances on show before the brand covers them, which is
         the opposite of what the lock is for.
       */}
-      <AppLockGate onUnlocked={handleUnlocked} onWaiting={handleWaiting}>
+      <AppLockGate
+        active={releaseGateOpen}
+        onUnlocked={handleUnlocked}
+        onWaiting={handleWaiting}
+      >
         {holdContent ? null : (
         <Stack
           screenOptions={{
@@ -622,6 +629,8 @@ function RootNavigator() {
           onFinished={handleSplashFinished}
         />
       ) : null}
+
+      {!releaseGateOpen ? <ComingSoonGate onUnlock={() => setReleaseGateOpen(true)} /> : null}
     </View>
   );
 }

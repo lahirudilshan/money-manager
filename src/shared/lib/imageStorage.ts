@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { parseImageRef } from './imageRef';
 
 const PHOTOS_DIR_NAME = 'transaction-photos';
 
@@ -18,8 +19,27 @@ export async function persistPickedImage(sourceUri: string): Promise<string> {
   return destination.uri;
 }
 
-/** Removes a previously persisted photo — used by the "remove photo" affordance. */
-export function deletePersistedImage(uri: string): void {
-  const file = new File(uri);
-  if (file.exists) file.delete();
+/**
+ * Removes a previously persisted photo — used by the "remove photo" affordance.
+ *
+ * Takes the STORED value rather than a path, because that value may be a
+ * reference carrying a Drive id as well ("drive:abc|file:///…"). Passing the
+ * whole string to `new File` would name a file that does not exist, so the
+ * delete would silently do nothing and leave the photo on disk forever.
+ *
+ * Only the local copy is removed. The Drive copy is deleted by the sync pass,
+ * which is the only place that holds a token.
+ */
+export function deletePersistedImage(stored: string): void {
+  const { localUri } = parseImageRef(stored);
+  if (!localUri) return;
+
+  try {
+    const file = new File(localUri);
+    if (file.exists) file.delete();
+  } catch {
+    // A file that cannot be deleted is a leaked photo, not a failed removal:
+    // the row has already let go of it, and throwing here would fail the edit
+    // the user was making.
+  }
 }

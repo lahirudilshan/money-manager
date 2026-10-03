@@ -666,3 +666,135 @@ export async function revokeMember(permissionId: string): Promise<InviteResult> 
   // indistinguishable from a failure, so the caller re-reads the member list.
   return { ok: result !== undefined };
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Attachments
+ * ---------------------------------------------------------------------------
+ */
+
+/** The attachments subfolder, created on first use. */
+async function attachmentsFolderId(token: string): Promise<string | null> {
+  const parent = await folderId(token);
+  if (!parent) return null;
+
+  const found = parseFolderId(await send(findAttachmentsFolderRequest(token, parent)));
+  if (found) return found;
+
+  const created = await send(createAttachmentsFolderRequest(token, parent));
+  return (created as { id?: string } | null)?.id ?? null;
+}
+
+/**
+ * Upload one photo, returning the Drive id it was given.
+ *
+ * Resumable rather than multipart: the multipart helper joins its parts as
+ * strings, which is lossless for JSON and not for a JPEG. Two round trips —
+ * one to get an upload URL, one to send the bytes.
+ *
+ * Returns a discriminated result rather than throwing, because the caller is a
+ * background pass that must keep going: one photo failing is a retry, not the
+ * end of the batch.
+ */
+export async function uploadAttachment(
+  localUri: string,
+  filename: string,
+): Promise<{ ok: true; id: string } | { ok: false; error: string; status?: number; code?: string }> {
+  const token = await accessToken();
+  if (!token) return { ok: false, error: 'Sign in to Google again.', status: 401 };
+
+  const folder = await attachmentsFolderId(token);
+  if (!folder) return { ok: false, error: 'Could not open the attachments folder.' };
+
+  let bytes: Blob;
+  try {
+    const file = await fetch(localUri);
+    if (!file.ok) return { ok: false, error: 'Photo file is missing.', code: 'FILE_MISSING' };
+    bytes = await file.blob();
+  } catch {
+    // The row still points at it, but the file is gone — a retry cannot help.
+    return { ok: false, error: 'Photo file could not be read.', code: 'FILE_MISSING' };
+  }
+
+  try {
+    const start = startImageUploadRequest(token, filename, folder, bytes.type || 'image/jpeg');
+    const startResponse = await fetch(start.url, {
+      method: start.method,
+      headers: start.headers,
+      body: start.body,
+    });
+
+    if (!startResponse.ok) {
+      return {
+        ok: false,
+        error: `Drive refused the upload (${startResponse.status}).`,
+        status: startResponse.status,
+      };
+    }
+
+    const uploadUrl = parseResumableUrl(startResponse.headers);
+    if (!uploadUrl) return { ok: false, error: 'Drive returned no upload URL.' };
+
+    const put = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': bytes.type || 'image/jpeg' },
+      body: bytes,
+    });
+
+    if (!put.ok) {
+      return { ok: false, error: `Upload failed (${put.status}).`, status: put.status };
+    }
+
+    const id = parseUploadedFileId(await put.json());
+    return id ? { ok: true, id } : { ok: false, error: 'Drive returned no file id.' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Upload failed.' };
+  }
+}
+
+/**
+ * Fetch an attachment into the local cache, returning the path to show.
+ *
+ * Null on any failure: the screen falls back to a placeholder, and the next
+ * render tries again. Nothing here is worth interrupting the user for.
+ */
+export async function downloadAttachment(driveId: string): Promise<string | null> {
+  const token = await accessToken();
+  if (!token) return null;
+
+  try {
+    const request = downloadImageRequest(token, driveId);
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+    });
+    if (!response.ok) return null;
+
+    ensureCacheDir();
+    const destination = cachedPathFor(driveId);
+    const buffer = await response.arrayBuffer();
+    const file = new File(destination);
+    if (!file.exists) file.create();
+    file.write(new Uint8Array(buffer));
+    return destination;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove an attachment from Drive, once its row is gone. */
+export async function deleteAttachment(driveId: string): Promise<boolean> {
+  const token = await accessToken();
+  if (!token) return false;
+
+  try {
+    const request = deleteImageRequest(token, driveId);
+    const response = await fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}

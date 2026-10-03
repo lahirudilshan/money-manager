@@ -45,10 +45,13 @@ import { Text } from './ui';
  */
 export function AppLockGate({
   children,
+  active = true,
   onUnlocked,
   onWaiting,
 }: {
   children: React.ReactNode;
+  /** Pause authentication until the release gate has been cleared. */
+  active?: boolean;
   /**
    * Fired when the gate opens — on a successful unlock, or immediately when the
    * lock is off. Lets the splash overlay outside this component know it may
@@ -176,6 +179,8 @@ export function AppLockGate({
    * lock switched on and no prompt ever fired.
    */
   React.useEffect(() => {
+    if (!active) return;
+
     // Nothing is known yet; decide nothing.
     if (!ready) return;
 
@@ -200,7 +205,7 @@ export function AppLockGate({
     // `prompting` is deliberately absent: including it would re-run this when
     // the prompt closes and immediately re-prompt on a cancelled attempt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, ready, unlocked, method, scanFailed, runBiometrics, setAppLockEnabled]);
+  }, [active, enabled, ready, unlocked, method, scanFailed, runBiometrics, setAppLockEnabled]);
 
   /**
    * Re-lock only after a real absence.
@@ -210,7 +215,7 @@ export function AppLockGate({
    * is ignored entirely — see the note on the component.
    */
   React.useEffect(() => {
-    if (!enabled) return;
+    if (!active || !enabled) return;
 
     const subscription = AppState.addEventListener('change', (next) => {
       // The biometric sheet backgrounds the app on iOS. That is the lock doing
@@ -249,7 +254,7 @@ export function AppLockGate({
     });
 
     return () => subscription.remove();
-  }, [enabled]);
+  }, [active, enabled]);
 
   /*
    * Report the gate being open, from one place rather than from each of the
@@ -263,7 +268,7 @@ export function AppLockGate({
    * first render — before prompting — and the splash mounted over the Face ID
    * sheet instead of after it.
    */
-  const gateOpen = ready && (!enabled || unlocked);
+  const gateOpen = active && ready && (!enabled || unlocked);
   React.useEffect(() => {
     if (gateOpen) onUnlocked?.();
   }, [gateOpen, onUnlocked]);
@@ -272,7 +277,7 @@ export function AppLockGate({
    * Publish whether this gate is holding the screen. The surface above draws
    * nothing while true, so the system sheet is the only thing the user sees.
    */
-  const waitingOnBiometric = ready && enabled && !unlocked && method === 'biometric';
+  const waitingOnBiometric = active && ready && enabled && !unlocked && method === 'biometric';
   React.useEffect(() => {
     onWaiting?.(waitingOnBiometric);
   }, [waitingOnBiometric, onWaiting]);
@@ -297,6 +302,8 @@ export function AppLockGate({
    * appeared — showing the balances the lock exists to hide. Waiting costs a
    * frame of background colour and is the whole point of the component.
    */
+  if (!active) return <>{children}</>;
+
   if (!ready) return <View style={{ flex: 1, backgroundColor: splashCanvas }} />;
 
   if (!enabled || unlocked) return <>{children}</>;

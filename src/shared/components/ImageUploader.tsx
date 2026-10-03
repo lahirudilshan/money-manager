@@ -3,6 +3,8 @@ import * as ImagePicker from 'expo-image-picker';
 import React from 'react';
 import { ActivityIndicator, Image, Pressable, View } from 'react-native';
 import { deletePersistedImage, persistPickedImage } from '~/shared/lib/imageStorage';
+import { localRef } from '~/shared/lib/imageRef';
+import { resolveImageUri } from '~/shared/lib/imageCache';
 import { useTheme } from '../theme/ThemeProvider';
 import { Glyph, Label, Text } from './ui';
 
@@ -52,10 +54,18 @@ export function ImageUploader({
 
     setBusy(true);
     try {
-      const stored = await persistPickedImage(result.assets[0].uri);
+      const copied = await persistPickedImage(result.assets[0].uri);
       // Replacing leaves the old file orphaned on disk unless it is cleaned up.
       if (value && deleteOnReplace) deletePersistedImage(value);
-      onChange(stored);
+      /*
+       * Stored as a REFERENCE, not a bare path.
+       *
+       * The upload to Drive happens afterwards, in the background — see
+       * `imageSync.ts`. Writing the reference form here is what lets that pass
+       * find this row later and record the id it gets back, without the form
+       * ever waiting on a network call.
+       */
+      onChange(localRef(copied));
     } finally {
       setBusy(false);
     }
@@ -80,7 +90,9 @@ export function ImageUploader({
             style={({ pressed }) => ({ opacity: pressed && onViewFullScreen ? 0.8 : 1 })}
           >
             <Image
-              source={{ uri: value }}
+              /* The stored value may name a local file, a Drive id, or both —
+                 `resolveImageUri` picks whichever needs no network. */
+              source={{ uri: resolveImageUri(value) ?? undefined }}
               style={{ width: size, height: size, borderRadius: radius.md }}
             />
           </Pressable>

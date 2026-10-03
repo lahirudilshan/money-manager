@@ -489,3 +489,120 @@ export function formatSize(size: string | undefined): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * Attachments
+ *
+ * Receipts and slips are BINARY, and the multipart helper above joins its
+ * parts with string concatenation — fine for JSON, lossy for a JPEG. These
+ * use Drive's resumable upload instead: a metadata request that returns a URL,
+ * then the bytes sent to that URL. Two round trips, but nothing has to encode
+ * image data as a string on the way.
+ *
+ * They live in their own subfolder so the sync file and the backups stay
+ * legible in Drive next to what could be hundreds of photos.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Subfolder holding every attachment, inside the app's own folder. */
+export const ATTACHMENTS_FOLDER_NAME = 'attachments';
+
+/** Find the attachments subfolder within the app folder. */
+export function findAttachmentsFolderRequest(token: string, parentId: string): DriveRequest {
+  const query =
+    `name='${ATTACHMENTS_FOLDER_NAME}' and mimeType='${FOLDER_MIME}' ` +
+    `and trashed=false and '${parentId}' in parents`;
+  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '1' });
+
+  return { url: `${DRIVE_FILES}?${params}`, method: 'GET', headers: auth(token) };
+}
+
+/** Create the attachments subfolder. Only when the find above returned none. */
+export function createAttachmentsFolderRequest(token: string, parentId: string): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}?fields=id,name`,
+    method: 'POST',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: ATTACHMENTS_FOLDER_NAME,
+      mimeType: FOLDER_MIME,
+      parents: [parentId],
+    }),
+  };
+}
+
+/**
+ * Step one of an upload: declare the file, get back a URL to send bytes to.
+ *
+ * The response carries no body worth reading — what matters is the `Location`
+ * header, which `parseResumableUrl` pulls out.
+ */
+export function startImageUploadRequest(
+  token: string,
+  filename: string,
+  folderId: string,
+  mimeType = 'image/jpeg',
+): DriveRequest {
+  return {
+    url: `${DRIVE_UPLOAD}?uploadType=resumable&fields=id,name`,
+    method: 'POST',
+    headers: {
+      ...auth(token),
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': mimeType,
+    },
+    body: JSON.stringify({ name: filename, parents: [folderId] }),
+  };
+}
+
+/**
+ * The upload URL Drive issued, or null when the response did not carry one.
+ *
+ * Case-insensitive because header casing is not guaranteed across fetch
+ * implementations, and a `Location` that arrives as `location` would otherwise
+ * read as a refused upload.
+ */
+export function parseResumableUrl(headers: Record<string, string> | Headers): string | null {
+  const get = (name: string): string | null => {
+    if (typeof (headers as Headers).get === 'function') {
+      return (headers as Headers).get(name);
+    }
+    const bag = headers as Record<string, string>;
+    const key = Object.keys(bag).find((k) => k.toLowerCase() === name.toLowerCase());
+    return key ? bag[key] : null;
+  };
+
+  const location = get('location');
+  return location && location.length > 0 ? location : null;
+}
+
+/**
+ * Fetch one attachment's bytes.
+ *
+ * `alt=media` for the same reason the backup download needs it: without it
+ * Drive returns metadata as JSON, which would render as a broken image rather
+ * than as an error.
+ */
+export function downloadImageRequest(token: string, fileId: string): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}/${encodeURIComponent(fileId)}?alt=media`,
+    method: 'GET',
+    headers: auth(token),
+  };
+}
+
+/** Remove an attachment whose row was deleted. */
+export function deleteImageRequest(token: string, fileId: string): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}/${encodeURIComponent(fileId)}`,
+    method: 'DELETE',
+    headers: auth(token),
+  };
+}
+
+/** The id out of an upload response, for storing against the row. */
+export function parseUploadedFileId(payload: unknown): string | null {
+  const id = (payload as { id?: unknown } | null)?.id;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
