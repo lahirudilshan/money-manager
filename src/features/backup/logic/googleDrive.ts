@@ -42,9 +42,18 @@ import {
   parseFileList,
   parseFolderId,
   uploadBackupRequest,
+  createAttachmentsFolderRequest,
+  deleteImageRequest,
+  downloadImageRequest,
+  findAttachmentsFolderRequest,
+  parseResumableUrl,
+  parseUploadedFileId,
+  startImageUploadRequest,
   type DriveFile,
   type DriveRequest,
 } from '~/features/backup/logic/driveSync';
+import { File } from 'expo-file-system';
+import { cachedPathFor, ensureCacheDir } from '~/shared/lib/imageCache';
 
 type WebBrowser = typeof import('expo-web-browser');
 type SecureStore = typeof import('expo-secure-store');

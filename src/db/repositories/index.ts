@@ -14,3 +14,4 @@ export * from './fuel';
 export * from './health';
 export * from './utility';
 export * from './settings';
+export * from './attachments';

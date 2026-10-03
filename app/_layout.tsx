@@ -297,6 +297,24 @@ function RootNavigator() {
           if (fetched) useAppStore.getState().refreshSettings();
         });
 
+        /*
+         * Push any photo that is not in Drive yet.
+         *
+         * Un-awaited and failure-swallowing, like the rate refresh above: the
+         * photo is already saved locally and visible, so this is catch-up
+         * work, not something the launch should wait on or report. A pass
+         * uploads a bounded batch (see `UPLOAD_BATCH`), so a backlog clears
+         * over several launches rather than in one burst on whatever
+         * connection the phone happens to have.
+         */
+        void useAppStore
+          .getState()
+          .uploadPendingImages()
+          .catch(() => {
+            // Offline is the common case and is not worth a log line: the
+            // same rows are still pending, and the next launch tries again.
+          });
+
         const primary = salaryRateCurrency(useAppStore.getState());
 
         void refreshBankRates({

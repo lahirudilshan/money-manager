@@ -115,7 +115,8 @@ export function ComingSoonGate({ onUnlock }: { onUnlock: () => void }) {
 }
 
 const styles = StyleSheet.create({
-  overlay: { ...StyleSheet.absoluteFillObject, zIndex: 1000, elevation: 1000 },
+  // `absoluteFillObject` does not exist on this RN version's StyleSheet type.
+  overlay: { ...StyleSheet.absoluteFill, zIndex: 1000, elevation: 1000 },
   safeArea: {
     flex: 1,
     justifyContent: 'space-between',

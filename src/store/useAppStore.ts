@@ -13,6 +13,17 @@ import { isFullyRepaid } from '~/features/buddyloans/logic/buddyLoans';
 import { buddyLoanRepo, buddyRepaymentRepo } from '~/db/repositories/buddyLoans';
 import { refillRepo, trackedItemRepo } from '~/db/repositories/trackers';
 import { runSync, type SyncResult } from '~/features/sync/logic/syncDrive';
+import {
+  applyUpload,
+  attachmentFilename,
+  describeImageSync,
+  isRetryable,
+  nextBatch,
+  pendingUploads,
+  type ImageSyncReport,
+  type UploadOutcome,
+} from '~/features/backup/logic/imageSync';
+import { uploadAttachment } from '~/features/backup/logic/googleDrive';
 import { driveGateway } from '~/features/backup/logic/googleDrive';
 import { deletePersistedImage } from '~/shared/lib/imageStorage';
 
@@ -109,6 +120,7 @@ import {
   settingsRepo,
   smsInboxRepo,
   smsLogRepo,
+  attachmentRepo,
   stateRepo,
   subcategoryRepo,
   vehicleRepo,
@@ -333,6 +345,14 @@ export interface AppState {
    * a failure needs a message the user can act on.
    */
   runDriveSync: () => Promise<SyncResult>;
+  /**
+   * Push any photo not yet in Drive, a batch at a time.
+   *
+   * Separate from `runDriveSync` because attachments are binary files rather
+   * than rows in the shared JSON, and because this runs unattended: the photo
+   * is already saved locally and the user is not waiting on it.
+   */
+  uploadPendingImages: () => Promise<ImageSyncReport>;
   addTrackedItem: (input: Omit<NewTrackedItem, 'id'>) => TrackedItem;
   updateTrackedItem: (id: string, patch: Partial<NewTrackedItem>) => void;
   /** Archive keeps the price history; only an explicit delete discards it. */
@@ -1070,6 +1090,41 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     const created = buddyLoanRepo.create(input);
     get().refreshMiniAppData();
     return created;
+  },
+
+  async uploadPendingImages() {
+    const pending = pendingUploads(attachmentRepo.withImages());
+    const batch = nextBatch(pending);
+    if (batch.length === 0) return { uploaded: 0, failed: 0, remaining: 0 };
+
+    const outcomes: UploadOutcome[] = [];
+    for (const item of batch) {
+      const result = await uploadAttachment(item.localUri, attachmentFilename(item));
+
+      if (!result.ok) {
+        outcomes.push({
+          ok: false,
+          table: item.table,
+          rowId: item.rowId,
+          error: result.error,
+          retryable: isRetryable(result),
+        });
+        continue;
+      }
+
+      const outcome = applyUpload(item, result.id);
+      if (outcome.ok) attachmentRepo.setImageRef(item.table, item.rowId, outcome.nextStored);
+      outcomes.push(outcome);
+    }
+
+    /*
+     * No refresh unless something was written. The rows that changed hold a
+     * new reference to the SAME photo, so nothing on screen looks different —
+     * re-reading every slice to redraw identical pixels is work for nothing.
+     */
+    const report = describeImageSync(outcomes, pending.length);
+    if (report.uploaded > 0) get().refreshBoard();
+    return report;
   },
 
   async runDriveSync() {
