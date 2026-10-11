@@ -21,7 +21,7 @@ import {
   splitItemisedFee,
   type ParsedSms,
 } from '~/features/sms/logic/smsParser';
-import { orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsReconcile';
+import { cardForAccount, orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsReconcile';
 import { payeeAccountKey, planRuleUpsert } from '~/features/sms/logic/merchantRules';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { matchTransferToAccount } from '~/features/budget/logic/autoTransfer';
@@ -1228,6 +1228,31 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const target = get().subcategories.find((s) => s.id === subcategoryId);
 
     /*
+     * Which way the money went, as the LINE sees it.
+     *
+     * A credit confirmed against a spending line is a REFUND: it comes off the
+     * line's total and goes back into the account. Stored as it arrived — a
+     * positive figure — it was counted as more spending, so a 2,000 Keells
+     * refund read as 2,000 more groceries. Likewise a debit on an income line
+     * is that income reversing. Either way the amount is stored negative.
+     */
+    const lineIsIncome = target?.type === 'income';
+    const reversed = lineIsIncome
+      ? draft.parsed.direction === 'debit'
+      : draft.parsed.direction === 'credit';
+    const signedAmount = reversed ? -amountMinor : amountMinor;
+
+    /*
+     * The account the bank says the money moved through, recorded on the
+     * payment when it is not the line's own — so the right balance moves.
+     * Null (the line's account) when the message names no account we know.
+     */
+    const category = target && get().categories.find((c) => c.id === target.categoryId);
+    const lineCardId = target?.cardId ?? category?.cardId ?? null;
+    const messageCardId = cardForAccount(draft.parsed.account ?? '', get().cards)?.id ?? null;
+    const paymentCardId = messageCardId && messageCardId !== lineCardId ? messageCardId : null;
+
+    /*
      * A SPLIT is always recorded as a transaction, whatever its lines are.
      *
      * The other branch below writes a month-level "actual" onto a dated bill,
@@ -1251,23 +1276,30 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         // often absent — an unnamed debit otherwise reads back as the useless
         // "SMS transaction".
         name: overrides?.name?.trim() || draft.parsed.merchant || 'SMS transaction',
-        amountMinor,
+        amountMinor: signedAmount,
         date: occurredAt,
         note: overrides?.note ?? draft.parsed.raw,
         houseId: overrides?.houseId ?? null,
+        cardId: paymentCardId,
       });
 
       transactionSplitRepo.replace(
         created.id,
         splits.map((part) => ({
           subcategoryId: part.subcategoryId,
-          amountMinor: part.amountMinor,
+          // A refunded split comes off every line it was charged to.
+          amountMinor: reversed ? -part.amountMinor : part.amountMinor,
           note: part.note ?? null,
         })),
       );
     } else if (
       target &&
-      (target.frequency === 'ongoing' ||
+      // A refund, or a payment from an account other than the line's, needs an
+      // entry: the month's single status row can hold neither a sign nor an
+      // account.
+      (reversed ||
+        paymentCardId !== null ||
+        target.frequency === 'ongoing' ||
         /*
          * A house-scoped bill on a multi-house board accumulates too.
          *
@@ -1288,10 +1320,11 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         // often absent — an unnamed debit otherwise reads back as the useless
         // "SMS transaction".
         name: overrides?.name?.trim() || draft.parsed.merchant || 'SMS transaction',
-        amountMinor,
+        amountMinor: signedAmount,
         date: occurredAt,
         note: overrides?.note ?? draft.parsed.raw,
         houseId: overrides?.houseId ?? null,
+        cardId: paymentCardId,
       });
     } else {
       /*

@@ -28,6 +28,7 @@ import {
   type Minor,
 } from '~/shared/lib/money';
 import {
+  appliesToPeriod,
   billActual,
   billStatus,
   calculateRatios,
@@ -53,7 +54,21 @@ import {
   type Ratios,
   type SubcategoryStatus,
 } from '~/features/budget/logic/planning';
-import { accountCurrency, fromHomeMinor, isForeignAccount } from '~/features/accounts/logic/accountCurrency';
+import {
+  accountCurrency,
+  fromHomeMinor,
+  isForeignAccount,
+  toHomeMinor,
+} from '~/features/accounts/logic/accountCurrency';
+import {
+  buildLedgers,
+  monthlyPlanOf,
+  periodFlow,
+  resolveSourceCardId,
+  toLedgerLines,
+  type AccountLedger,
+  type PeriodFlow,
+} from '~/features/accounts/logic/accountLedger';
 import { rateBetween } from '~/features/rates/logic/rateTable';
 import { stateRepo, transactionRepo, transactionSplitRepo } from '~/db/repositories';
 import { isOngoing } from '~/db/schema';
@@ -327,7 +342,8 @@ export function selectTransactionEntries(
     const share = splits
       .filter((part) => part.subcategoryId === subcategoryId)
       .reduce((sum, part) => sum + part.amountMinor, 0);
-    if (share > 0) entries.push({ txn, shareMinor: share, splits });
+    // `!== 0`, not `> 0`: a refunded split carries negative parts.
+    if (share !== 0) entries.push({ txn, shareMinor: share, splits });
   }
 
   return entries.sort((a, b) => new Date(b.txn.date).getTime() - new Date(a.txn.date).getTime());
@@ -473,27 +489,105 @@ export function selectRatios(state: AppState): Ratios {
 /** Per-card view: what it holds and which categories draw from it. */
 export interface CardView {
   card: Card;
-  /** Opening balance, plus what was funded in, minus what has been paid out. */
+  /**
+   * What the account holds NOW, in its own currency — a running balance over
+   * every month on record. Independent of the month on screen, as a bank
+   * balance is. See `features/accounts/logic/accountLedger`.
+   */
   balanceMinor: Minor;
+  /** Arrived in the VIEWED month: income, credits and transfers in. */
   fundedInMinor: Minor;
-  /** Value of bills drawing on this card already marked paid this period. */
+  /** Left in the viewed month: bills, spending and transfers out. */
   spentMinor: Minor;
-  /** Total every leaf resolved to this card still plans to spend. */
+  /** Still to pay from this account in the viewed month. */
   committedMinor: Minor;
+  /** The viewed month as a statement: opening, in, out, closing, movements. */
+  flow: PeriodFlow;
   categoryNames: string[];
+}
+
+/**
+ * Cache for `selectAccountLedgers` — a scan of every month on record, so it
+ * is built once per data change rather than once per render. Same reference-
+ * equality scheme as `categoryViewsCache`: the store replaces these on every
+ * refresh, so an unchanged reference means unchanged data.
+ */
+let ledgerCache: { deps: unknown[]; value: Map<string, AccountLedger> } | null = null;
+
+/** Every account's running ledger. */
+export function selectAccountLedgers(state: AppState): Map<string, AccountLedger> {
+  const history = state.history ?? { states: [], transactions: [], transfers: [], chosenSourceCardId: null };
+  const today = periodKey(new Date());
+  const deps = [
+    state.cards,
+    state.categories,
+    state.subcategories,
+    state.incomes,
+    history,
+    state.currency,
+    state.rates,
+    today,
+  ];
+  if (
+    ledgerCache &&
+    ledgerCache.deps.length === deps.length &&
+    ledgerCache.deps.every((dep, i) => dep === deps[i])
+  ) {
+    return ledgerCache.value;
+  }
+
+  const lines = toLedgerLines(state.subcategories, state.categories);
+  const cardById = new Map(state.cards.map((c) => [c.id, c]));
+  const incomes = state.incomes.map((income) => ({
+    id: income.id,
+    name: income.name,
+    amountMinor: income.amountMinor,
+    cardId: income.cardId,
+    isActive: income.isActive,
+  }));
+
+  const value = buildLedgers({
+    accounts: state.cards.map((card) => ({
+      id: card.id,
+      openingBalanceMinor: card.openingBalanceMinor,
+      startPeriod: periodKey(new Date(card.createdAt)),
+    })),
+    lines,
+    states: history.states,
+    transactions: history.transactions,
+    transfers: history.transfers,
+    incomes,
+    sourceCardId: resolveSourceCardId({
+      accountIds: state.cards.filter((c) => !c.isCard).map((c) => c.id),
+      incomes,
+      incomeLines: lines,
+      chosenCardId: history.chosenSourceCardId,
+    }),
+    currentPeriod: today,
+    toAccount: (minor, cardId) => {
+      const card = cardById.get(cardId);
+      return card ? fromHomeMinor(minor, card, state.currency, state.rates) : minor;
+    },
+    toHome: (minor, cardId) => {
+      const card = cardById.get(cardId);
+      return card ? toHomeMinor(minor, card, state.currency, state.rates) : minor;
+    },
+  });
+
+  ledgerCache = { deps, value };
+  return value;
 }
 
 export function selectCardViews(state: AppState): CardView[] {
   const views = selectCategoryViews(state);
+  const ledgers = selectAccountLedgers(state);
 
   return state.cards.map((card) => {
-    const attachedCategories = views.filter((view) => view.category.cardId === card.id);
-    const fundedIn = sumMinor(attachedCategories.map((view) => view.summary.fundedMinor));
+    const categoryNames = new Set<string>();
 
-    // Committed and spent are resolved per-leaf, since a subcategory can
-    // override its category's default funding card.
+    // Committed is resolved per-leaf, since a subcategory can override its
+    // category's default funding card.
     let committed = 0;
-    let spent = 0;
     for (const view of views) {
       for (const sub of view.rawSubcategories) {
         const resolved = resolveCardId(sub.cardId, view.category.cardId);
@@ -503,47 +597,33 @@ export function selectCardViews(state: AppState): CardView[] {
         // Income arrives in the account; it is neither a bill to pay nor a
         // deduction from the balance, so it takes no part in either figure.
         if (sub.type === 'income') continue;
+        // A one-time cost from another month is not owed this month.
+        if (!appliesToPeriod(planned, state.period)) continue;
+        categoryNames.add(view.category.name);
 
         /*
-         * An ONGOING line is committed, never "spent", and asks for its budget.
-         *
-         * Two things went wrong here, both from treating a budget like a bill:
-         *
-         *   - `actualMinor ?? plannedMinor` took the `0` an untouched budget
-         *     reports (a dated bill reports `null` — see `billActual`), so a
-         *     Rs 50,000 grocery budget contributed nothing and an account funded
-         *     only by budgets showed "0 to pay";
-         *   - `toPlanned` marks a budget `paid` as soon as ANY money is logged
-         *     against it, so a single Rs 100 receipt moved the whole line into
-         *     `spent` and out of the commitment — the card then claimed nothing
-         *     was left to pay on a budget with Rs 49,900 still to go.
-         *
-         * A budget is never settled: it accumulates until the month ends. So it
-         * always counts as committed, at `effectiveAmount` — the budget, or the
-         * overspend when that is larger. Matches `selectAccountTransfers`.
+         * An ONGOING budget is never settled: what is still to pay is what is
+         * left of it. A dated bill is owed in full until it is paid.
          */
         if (isOngoing(sub.frequency)) {
-          committed += effectiveAmount(planned);
-          spent += planned.actualMinor ?? 0;
+          committed += Math.max(0, planned.plannedMinor - (planned.actualMinor ?? 0));
           continue;
         }
-
-        const amount = planned.actualMinor ?? planned.plannedMinor;
-        if (planned.status === 'paid') spent += amount;
-        else committed += amount;
+        if (planned.status !== 'paid') committed += monthlyAmount(planned);
       }
     }
 
+    const ledger = ledgers.get(card.id) ?? { cardId: card.id, balanceMinor: card.openingBalanceMinor, movements: [] };
+    const flow = periodFlow(ledger, state.period);
+
     return {
       card,
-      // A balance is money in *minus money out*. Funding moves money onto the
-      // card and paying a bill takes it off again; without the subtraction the
-      // figure only ever grows and overstates what the account actually holds.
-      balanceMinor: card.openingBalanceMinor + fundedIn - spent,
-      fundedInMinor: fundedIn,
-      spentMinor: spent,
-      committedMinor: committed,
-      categoryNames: attachedCategories.map((view) => view.category.name),
+      balanceMinor: ledger.balanceMinor,
+      fundedInMinor: flow.inMinor,
+      spentMinor: flow.outMinor,
+      committedMinor: fromHomeMinor(committed, card, state.currency, state.rates),
+      flow,
+      categoryNames: [...categoryNames],
     };
   });
 }
@@ -661,7 +741,15 @@ export function selectAccountTransfers(state: AppState): AccountTransferView[] {
            * ongoing budget contributes its plan even before its first receipt:
            * the money still has to be on the card to be spent.
            */
-          const amount = line.plannedMinor;
+          /*
+           * The line's plan for THIS month: a one-time cost only in its own
+           * month, a yearly bill as its monthly twelfth. Taking `plannedMinor`
+           * raw asked for every one-time cost on record every month, and for a
+           * whole year's insurance each month. Shared with the ledger so the
+           * figure moved and the figure recorded are the same.
+           */
+          if (!appliesToPeriod(line, state.period)) continue;
+          const amount = monthlyPlanOf(sub, state.period);
           planned += amount;
           categoryNames.add(view.category.name);
 

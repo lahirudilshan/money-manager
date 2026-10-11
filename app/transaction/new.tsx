@@ -86,6 +86,15 @@ export default function NewTransactionScreen() {
    * separate feature with its own rules.
    */
   const [entryMode, setEntryMode] = useState<'manual' | 'paste'>('manual');
+  /*
+   * Which way the money went: OUT of the account (a payment) or IN to it (a
+   * refund on a spending line, or money received on an income line).
+   *
+   * Null until the user or a pasted message says, so it can follow the line:
+   * an income line defaults to "in", everything else to "out". A refund used to
+   * have no way in at all — the only option recorded it as more spending.
+   */
+  const [directionChoice, setDirectionChoice] = useState<'out' | 'in' | null>(null);
   const [messageText, setMessageText] = useState('');
 
   const creatingNew = subcategoryId === '__new__';
@@ -102,6 +111,8 @@ export default function NewTransactionScreen() {
    */
   const applyParsed = useCallback((result: ParsedSms | null) => {
     if (!result) return;
+    // A credit message is money arriving: a refund, or income.
+    setDirectionChoice(result.direction === 'credit' ? 'in' : 'out');
 
     setAmount((current) => (current ? current : formatAmountInput(toMajor(result.amountMinor).toFixed(2))));
     /*
@@ -161,8 +172,16 @@ export default function NewTransactionScreen() {
 
   // The account defaults to whatever the chosen line (or its category) funds
   // from, so the common case needs no tap; the picker only overrides it.
-  const effectiveCardId =
-    cardId ?? resolveCardId(selected?.line.cardId, selected?.category.cardId);
+  const lineCardId = resolveCardId(selected?.line.cardId, selected?.category.cardId);
+  const effectiveCardId = cardId ?? lineCardId;
+  const isIncomeLine = selected?.line.type === 'income';
+  const direction = directionChoice ?? (isIncomeLine ? 'in' : 'out');
+  /*
+   * Signed as the LINE sees it: a payment on a spending line and money received
+   * on an income line are positive; the reverse of either is negative, which
+   * is what takes a refund OFF the line's total and puts it back in the account.
+   */
+  const reversed = isIncomeLine ? direction === 'out' : direction === 'in';
 
   // Only lines that opt in ask which property they were for — see core/houses.ts.
   const houseScoped = selected?.line.houseScoped ?? false;
@@ -202,26 +221,39 @@ export default function NewTransactionScreen() {
       targetId = created.id;
     } else if (subcategoryId) {
       targetId = subcategoryId;
-      if (cardId) state.updateSubcategory(targetId, { cardId });
     } else {
       return;
     }
 
+    /*
+     * The account goes on THIS payment, never on the line.
+     *
+     * Picking "paid from" used to re-point the whole line, which moved every
+     * earlier payment on it to the newly picked account — rewriting both
+     * accounts' history to record one card swipe.
+     */
+    const paymentCardId = !creatingNew && cardId && cardId !== lineCardId ? cardId : null;
+
     // An ongoing line holds many individual dated entries rather than one
     // status per month, so it takes a transaction row; everything else records
     // the month's status. Both carry the chosen date, which decides the period.
+    // A refund, or a bill paid from another account, is an entry too: the
+    // month's single status row can carry neither a sign nor an account.
     const target = state.subcategories.find((s) => s.id === targetId);
-    if (target && isOngoing(target.frequency)) {
+    if ((target && isOngoing(target.frequency)) || reversed || paymentCardId) {
       state.addTransaction({
         subcategoryId: targetId,
-        name: (selected?.line.name ?? newName.trim()) || 'Transaction',
-        amountMinor: parsed,
+        name: `${(selected?.line.name ?? newName.trim()) || 'Transaction'}${
+          reversed && !isIncomeLine ? ' refund' : ''
+        }`,
+        amountMinor: reversed ? -parsed : parsed,
         date,
         note: note.trim() || null,
         imageUri,
         // Only recorded on a house-scoped line; elsewhere the question was
         // never asked and an attribution would be invented.
         houseId: houseScoped ? effectiveHouseId : null,
+        cardId: paymentCardId,
       });
     } else {
       state.logTransaction(targetId, {
@@ -328,6 +360,17 @@ export default function NewTransactionScreen() {
         <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} />
       </View>
 
+      {/* Which way it went. Labelled by what happens to the ACCOUNT, which is
+          the question the user can always answer, rather than "debit/credit". */}
+      <Segmented
+        options={[
+          { key: 'out', label: isIncomeLine ? 'Money out (reversal)' : 'Money out', icon: 'remove-circle-outline' },
+          { key: 'in', label: isIncomeLine ? 'Money in' : 'Money in (refund)', icon: 'add-circle-outline' },
+        ]}
+        selectedKey={direction}
+        onSelect={(key) => setDirectionChoice(key === 'in' ? 'in' : 'out')}
+      />
+
       {/* When it happened. Sits with the amount rather than under "More
           details" because it decides which month the entry counts toward —
           it is part of the record, not an optional extra. */}
@@ -431,7 +474,7 @@ export default function NewTransactionScreen() {
       {/* Account it moved through — the shared picker, so "paid from" looks
           identical to "funded account" everywhere. */}
       <AccountField
-        label="Paid from"
+        label={direction === 'in' ? 'Received into' : 'Paid from'}
         cards={state.cards}
         selectedId={effectiveCardId}
         onSelect={setCardId}
@@ -444,7 +487,11 @@ export default function NewTransactionScreen() {
         onSelect={setHouseId}
       />
 
-      <StatusToggle value={status} onChange={setStatus} />
+      {/* Paid/pending is the month's tick on a dated bill; an entry (budget
+          line, refund, or a payment from another account) has no such tick. */}
+      {selected && !isOngoing(selected.line.frequency) && !reversed && !(cardId && cardId !== lineCardId) ? (
+        <StatusToggle value={status} onChange={setStatus} />
+      ) : null}
 
       <LabeledField label="NOTE (OPTIONAL)">
         <TextInput

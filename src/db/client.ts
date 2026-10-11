@@ -230,6 +230,8 @@ const DDL = [
     period TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     actual_minor INTEGER,
+    -- What a tick cost, frozen at the time. See schema.ts.
+    paid_amount_minor INTEGER,
     transferred_at INTEGER,
     completed_at INTEGER,
     note TEXT,
@@ -282,6 +284,8 @@ const DDL = [
     -- What a bank message confirmed, when the tick was automatic. Null for a
     -- manual one. See the accountTransfers table in schema.ts.
     matched_amount_minor INTEGER,
+    -- What was moved, in the receiving account's currency. See schema.ts.
+    amount_minor INTEGER,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
@@ -1188,6 +1192,12 @@ function ensureAdditiveColumns(): void {
   );
   if (hasTransactions) {
     ensureColumn('transactions', 'house_id', 'house_id TEXT REFERENCES houses(id)');
+    // The account this payment actually left — see `transactions` in schema.ts.
+    ensureColumn(
+      'transactions',
+      'card_id',
+      'card_id TEXT REFERENCES cards(id) ON DELETE SET NULL',
+    );
     expoDb.execSync(
       `CREATE INDEX IF NOT EXISTS transactions_house_idx ON transactions(house_id, period)`,
     );
@@ -1208,12 +1218,20 @@ function ensureAdditiveColumns(): void {
   );
   if (hasSubcategoryStates) {
     ensureColumn('subcategory_states', 'image_uri', 'image_uri TEXT');
+    // What a tick cost, frozen at the time — see `subcategoryStates` in schema.ts.
+    ensureColumn('subcategory_states', 'paid_amount_minor', 'paid_amount_minor INTEGER');
     // Which house this month's payment was for — see `houses` in schema.ts.
     ensureColumn('subcategory_states', 'house_id', 'house_id TEXT REFERENCES houses(id)');
     expoDb.execSync(
       `CREATE INDEX IF NOT EXISTS subcategory_states_house_idx ON subcategory_states(house_id, period)`,
     );
   }
+
+  const hasAccountTransfers = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='account_transfers'`,
+  );
+  // The amount a tick moved — see `accountTransfers` in schema.ts.
+  if (hasAccountTransfers) ensureColumn('account_transfers', 'amount_minor', 'amount_minor INTEGER');
 
   ensureTombstoneColumns();
 }

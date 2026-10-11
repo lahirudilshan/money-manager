@@ -1278,7 +1278,10 @@ function OngoingTransactions({
                   </Text>
                 ) : null}
               </View>
-              <Text variant="figure">{formatMoney(shareMinor)}</Text>
+              {/* A refund (negative) reads as money back, not as a spend. */}
+              <Text variant="figure" color={shareMinor < 0 ? colors.completed : undefined}>
+                {shareMinor < 0 ? `+${formatMoney(-shareMinor)} back` : formatMoney(shareMinor)}
+              </Text>
               <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
               <Pressable
                 onPress={() => onRemove(txn.id, txn.name, splits.length)}

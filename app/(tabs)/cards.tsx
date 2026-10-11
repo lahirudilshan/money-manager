@@ -32,7 +32,14 @@ import { effectiveAmount, resolveCardId } from '~/features/budget/logic/planning
 import { groupAccounts, isPaired } from '~/features/accounts/logic/accountGroups';
 import { accountLabel, accountName, BANKS, resolveBrand } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
-import { selectCardViews, selectCategoryViews, useAppStore, type CardView } from '../../src/store/useAppStore';
+import {
+  selectAccountLedgers,
+  selectCardViews,
+  selectCategoryViews,
+  useAppStore,
+  type CardView,
+} from '../../src/store/useAppStore';
+import { openingForTarget } from '~/features/accounts/logic/accountLedger';
 import type { Card } from '../../src/db/schema';
 import { smsLogRepo } from '../../src/db/repositories';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -154,8 +161,8 @@ export default function CardsScreen() {
               {formatMoney(totalHeld)}
             </Text>
             <Text variant="caption" color="rgba(255,255,255,0.65)">
-              {accountViews.length} account{accountViews.length === 1 ? '' : 's'} · opening balances
-              plus transfers in
+              {accountViews.length} account{accountViews.length === 1 ? '' : 's'} · what they hold
+              today
             </Text>
             {/*
               Said out loud when the total cannot include everything.
@@ -325,7 +332,9 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
         }
         trailing={
           <View style={{ alignItems: 'flex-end' }}>
-            <Text variant="figureLarge">
+            {/* Overdrawn reads as a warning — usually a balance not yet set to
+                match the bank, or spending recorded before the money moved. */}
+            <Text variant="figureLarge" color={view.balanceMinor < 0 ? colors.danger : undefined}>
               {formatMoney(view.balanceMinor, { compact: true, currency: heldIn })}
             </Text>
             {view.committedMinor > 0 ? (
@@ -763,9 +772,28 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   const [currency, setCurrency] = useState(
     (existing?.currency ?? homeCurrency).toUpperCase(),
   );
-  // What was already in the account before the app started tracking it. The
-  // schema has always had this and the balance calculation reads it, but nothing
-  // ever set it, so every account opened at zero.
+  /*
+   * What the account holds TODAY, as the banking app shows it.
+   *
+   * Asked as today's figure rather than an "opening balance", because nobody
+   * knows what an account held on the day they started using the app — but
+   * everyone can open their bank app and read what it holds now. The stored
+   * opening is worked backwards from it through everything already recorded
+   * (`openingForTarget`), so history is untouched and today reads true.
+   *
+   * Left exactly as prefilled, nothing is rewritten: re-deriving on every save
+   * would round away a cent each time the form was opened.
+   */
+  const ledger = useMemo(
+    () => (existing ? selectAccountLedgers(state).get(existing.id) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [existing?.id],
+  );
+  const initialBalanceText = useMemo(() => {
+    const minor = ledger?.balanceMinor ?? existing?.openingBalanceMinor ?? 0;
+    return minor === 0 ? '' : String(toMajor(minor));
+  }, [ledger, existing?.openingBalanceMinor]);
+  const [balanceText, setBalanceText] = useState(initialBalanceText);
 
   const brand = bankId ? BANKS.find((b) => b.id === bankId) : undefined;
   /*
@@ -903,15 +931,21 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
        * rather than two that must agree.
        */
       currency: currency && currency !== homeCurrency.toUpperCase() ? currency : null,
-      // Preserved, not edited here: the field was removed from this form, and
-      // writing a parsed-from-nothing 0 would silently wipe a real balance on
-      // every save.
-      openingBalanceMinor: existing?.openingBalanceMinor ?? 0,
+      openingBalanceMinor: nextOpeningBalance(),
     };
 
     if (editId) state.updateCard(editId, patch);
     else state.addCard({ ...patch, sortOrder: state.cards.length });
     onClose();
+  }
+
+  /** The opening that makes today's balance read what the user typed. */
+  function nextOpeningBalance(): number {
+    const current = existing?.openingBalanceMinor ?? 0;
+    // Untouched (or a card, which has no balance field): keep what is stored.
+    if (isCard || balanceText.trim() === initialBalanceText.trim()) return current;
+    const target = parseAmount(balanceText) ?? 0;
+    return ledger ? openingForTarget(ledger, current, target) : target;
   }
 
   /*
@@ -1183,6 +1217,20 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
                 <Field label="Branch" value={branch} onChangeText={setBranch} placeholder="e.g. Kelaniya" style={{ flex: 1 }} />
                 <Field label="Bank code" value={bankCode} onChangeText={setBankCode} placeholder="e.g. 7010" style={{ flex: 1 }} />
               </Row>
+              <View style={{ gap: space.xs }}>
+                <Field
+                  label={`Current balance (${currency})`}
+                  value={balanceText}
+                  onChangeText={(text) => setBalanceText(text.replace(/[^0-9.\-]/g, ''))}
+                  placeholder="As your banking app shows it"
+                  keyboardType="decimal-pad"
+                />
+                <Text variant="caption" tone="muted">
+                  {existing
+                    ? 'Change this to match your bank. Past months stay as recorded.'
+                    : 'What the account holds today. Payments and transfers you record move it from here.'}
+                </Text>
+              </View>
             </>
           )}
 

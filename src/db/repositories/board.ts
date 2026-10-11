@@ -38,7 +38,7 @@ import {
   type Transaction,
   type TransactionSplit,
 } from '~/db/schema';
-import { createId, now, readSubState } from './internal';
+import { createId, liveOnly, now, readSubState } from './internal';
 
 export const cardRepo = {
   all(): Card[] {
@@ -254,6 +254,11 @@ export const subcategoryRepo = {
  * is the SUM of these rows, so there is no single planned amount to store.
  */
 export const transactionRepo = {
+  /** Every entry on record — the running account balance reads them all. */
+  all(): Transaction[] {
+    return db.select().from(transactions).where(liveOnly(transactions)).all();
+  },
+
   /** All entries for one subcategory across every period, newest first. */
   bySubcategory(subcategoryId: string): Transaction[] {
     return db
@@ -585,6 +590,11 @@ export const stateRepo = {
     return new Map(rows.map((row) => [row.subcategoryId, readSubState(row)]));
   },
 
+  /** Every month's bill state, for the running account balance. */
+  all(): SubcategoryState[] {
+    return db.select().from(subcategoryStates).where(liveOnly(subcategoryStates)).all().map(readSubState);
+  },
+
   /**
    * How many months this subcategory has been marked paid, across every
    * period. Drives saving-plan progress, which is derived from the checklist
@@ -605,15 +615,25 @@ export const stateRepo = {
    * Set a bill's status for a period, creating the row on first touch. Upsert
    * keyed on (subcategoryId, period), which has a unique index.
    */
-  setStatus(subcategoryId: string, period: string, status: SubcategoryStatus): void {
+  /**
+   * `paidAmountMinor` freezes what the tick cost — see the column in schema.ts.
+   * Cleared when the bill goes back to pending.
+   */
+  setStatus(
+    subcategoryId: string,
+    period: string,
+    status: SubcategoryStatus,
+    paidAmountMinor: number | null = null,
+  ): void {
     // `completedAt` records when the bill was paid, reused for the 2-state model.
     const timestamps = { completedAt: status === 'paid' ? now() : null };
+    const paidAmount = status === 'paid' ? paidAmountMinor : null;
 
     db.insert(subcategoryStates)
-      .values({ id: createId(), subcategoryId, period, status, ...timestamps })
+      .values({ id: createId(), subcategoryId, period, status, ...timestamps, paidAmountMinor: paidAmount })
       .onConflictDoUpdate({
         target: [subcategoryStates.subcategoryId, subcategoryStates.period],
-        set: { status, ...timestamps, updatedAt: now() },
+        set: { status, ...timestamps, paidAmountMinor: paidAmount, updatedAt: now() },
       })
       .run();
   },
@@ -644,13 +664,17 @@ export const stateRepo = {
       imageUri?: string | null;
       /** Which property this month's payment was for — see `houses`. */
       houseId?: string | null;
+      /** What the tick cost when no actual is typed — see `setStatus`. */
+      paidAmountMinor?: number | null;
     },
   ): void {
     const statusTimestamps = { completedAt: input.status === 'paid' ? now() : null };
+    const paidAmountMinor = input.status === 'paid' ? (input.paidAmountMinor ?? null) : null;
 
     const patch: Partial<typeof subcategoryStates.$inferInsert> = {
       status: input.status,
       ...statusTimestamps,
+      paidAmountMinor,
       updatedAt: now(),
     };
     if (input.actualMinor !== undefined) patch.actualMinor = input.actualMinor;
@@ -666,6 +690,7 @@ export const stateRepo = {
         status: input.status,
         ...statusTimestamps,
         actualMinor: input.actualMinor ?? null,
+        paidAmountMinor,
         note: input.note ?? null,
         imageUri: input.imageUri ?? null,
         houseId: input.houseId ?? null,
@@ -682,9 +707,10 @@ export const stateRepo = {
     subcategoryIds: readonly string[],
     period: string,
     status: SubcategoryStatus,
+    paidAmountOf: (subcategoryId: string) => number | null = () => null,
   ): void {
     for (const subcategoryId of subcategoryIds) {
-      stateRepo.setStatus(subcategoryId, period, status);
+      stateRepo.setStatus(subcategoryId, period, status, paidAmountOf(subcategoryId));
     }
   },
 };
@@ -749,8 +775,10 @@ export const accountTransferRepo = {
     period: string,
     status: CategoryFundingStatus,
     matchedAmountMinor: number | null = null,
+    amountMinor: number | null = null,
   ): void {
     const transferredAt = status === 'transferred' ? now() : null;
+    const moved = status === 'transferred';
     db.insert(accountTransfers)
       .values({
         id: createId(),
@@ -758,18 +786,29 @@ export const accountTransferRepo = {
         period,
         status,
         transferredAt,
-        matchedAmountMinor: status === 'transferred' ? matchedAmountMinor : null,
+        matchedAmountMinor: moved ? matchedAmountMinor : null,
+        amountMinor: moved ? amountMinor : null,
       })
       .onConflictDoUpdate({
         target: [accountTransfers.cardId, accountTransfers.period],
         set: {
           status,
           transferredAt,
-          matchedAmountMinor: status === 'transferred' ? matchedAmountMinor : null,
+          matchedAmountMinor: moved ? matchedAmountMinor : null,
+          amountMinor: moved ? amountMinor : null,
           updatedAt: now(),
         },
       })
       .run();
+  },
+
+  /** Every month's row, for the running account balance. */
+  all(): AccountTransfer[] {
+    try {
+      return db.select().from(accountTransfers).all();
+    } catch {
+      return [];
+    }
   },
 };
 

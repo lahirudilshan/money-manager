@@ -4,6 +4,8 @@ import { createActionsSelector, type ActionsOf } from '~/store/selectActions';
 import { buildSchedule, paymentsElapsed, remainingBalance } from '~/features/loans/logic/amortization';
 import { setDisplayCurrency, sumMinor, type Minor } from '~/shared/lib/money';
 import type { AccountTransfer } from '~/db/schema';
+import { faceValue, plannedForAccount, toLedgerLines } from '~/features/accounts/logic/accountLedger';
+import { fromHomeMinor } from '~/features/accounts/logic/accountCurrency';
 import type { PlanId } from '~/features/budget/logic/plans';
 import {
   hasSiblingTie,
@@ -220,6 +222,21 @@ export interface AppState {
    * under Living and were counted nowhere against the house.
    */
   houseTotals: Map<string, Minor>;
+  /**
+   * Every month's money movements — what the running account balances are
+   * built from (see `features/accounts/logic/accountLedger`).
+   *
+   * The fields above are the VIEWED month only, which is right for the board
+   * and wrong for a balance: an account holds the sum of every month, not the
+   * one on screen.
+   */
+  history: {
+    states: SubcategoryState[];
+    transactions: Transaction[];
+    transfers: AccountTransfer[];
+    /** The user's explicit salary-account pick, when they made one. */
+    chosenSourceCardId: string | null;
+  };
   incomes: Income[];
   loans: Loan[];
   currency: string;
@@ -543,6 +560,8 @@ export interface AppState {
     imageUri?: string | null;
     /** Which property this spend was for — see core/houses.ts. */
     houseId?: string | null;
+    /** The account it moved through, when not the line's own. */
+    cardId?: string | null;
   }) => void;
   updateTransaction: (id: string, patch: Partial<NewTransaction>) => void;
   /**
@@ -845,6 +864,30 @@ function nextColor(existingCount: number): string {
  * for the life of the process, and clearing it on drain would defeat the point.
  */
 
+/**
+ * What the dashboard is asking the user to move onto one account this month,
+ * in that account's own currency — the figure a manual tick records.
+ *
+ * The same `plannedForAccount` that `selectAccountTransfers` shows, so the
+ * amount recorded is the amount that was on screen when the user tapped.
+ */
+function plannedTransferFor(state: AppState, cardId: string): Minor {
+  const card = state.cards.find((c) => c.id === cardId);
+  if (!card) return 0;
+  const lines = toLedgerLines(state.subcategories, state.categories);
+  return fromHomeMinor(plannedForAccount(lines, cardId, state.period), card, state.currency, state.rates);
+}
+
+/**
+ * What ticking a bill paid costs when no figure is typed: its face value as the
+ * plan stands NOW, frozen onto the month so a later plan edit cannot rewrite it.
+ */
+function paidAmountFor(state: AppState, subcategoryId: string): Minor | null {
+  const line = state.subcategories.find((s) => s.id === subcategoryId);
+  if (!line || isOngoing(line.frequency)) return null;
+  return faceValue(line);
+}
+
 export const useAppStore = create<AppState>((set, get, api) => ({
   ready: false,
   needsOnboarding: false,
@@ -859,6 +902,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   fundingTotals: new Map(),
   transactionTotals: new Map(),
   houseTotals: new Map(),
+  history: { states: [], transactions: [], transfers: [], chosenSourceCardId: null },
   incomes: [],
   loans: [],
   currency: 'LKR',
@@ -998,6 +1042,12 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       fundingTotals: fundingRepo.totalsByPeriod(period),
       transactionTotals: transactionRepo.totalsByPeriod(period),
       houseTotals: transactionRepo.houseTotalsByPeriod(period),
+      history: {
+        states: stateRepo.all(),
+        transactions: transactionRepo.all(),
+        transfers: accountTransferRepo.all(),
+        chosenSourceCardId: settingsRepo.get(SETTINGS_KEYS.salaryCardId) ?? null,
+      },
       incomes: incomeRepo.all(),
       loans: loanRepo.all(),
     });
@@ -1683,12 +1733,12 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     const { period, states } = get();
     // Repo already normalises to pending/paid, so the cast is a formality.
     const current = (states.get(subcategoryId)?.status as SubcategoryStatus) ?? 'pending';
-    stateRepo.setStatus(subcategoryId, period, nextStatus(current));
+    stateRepo.setStatus(subcategoryId, period, nextStatus(current), paidAmountFor(get(), subcategoryId));
     get().refreshBoard();
   },
 
   setStatus(subcategoryId, status) {
-    stateRepo.setStatus(subcategoryId, get().period, status);
+    stateRepo.setStatus(subcategoryId, get().period, status, paidAmountFor(get(), subcategoryId));
     get().refreshBoard();
   },
 
@@ -1728,14 +1778,17 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       return;
     }
 
-    stateRepo.logTransaction(subcategoryId, period, input);
+    stateRepo.logTransaction(subcategoryId, period, {
+      ...input,
+      paidAmountMinor: paidAmountFor(get(), subcategoryId),
+    });
     get().refreshBoard();
   },
 
   markCategory(categoryId, status) {
     const { period, subcategories } = get();
     const ids = subcategories.filter((s) => s.categoryId === categoryId).map((s) => s.id);
-    stateRepo.setStatusForSubcategories(ids, period, status);
+    stateRepo.setStatusForSubcategories(ids, period, status, (id) => paidAmountFor(get(), id));
     get().refreshBoard();
   },
 
@@ -1796,7 +1849,13 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       return false;
     }
 
-    accountTransferRepo.setStatus(cardId, period, 'transferred', matchedAmountMinor);
+    accountTransferRepo.setStatus(
+      cardId,
+      period,
+      'transferred',
+      matchedAmountMinor,
+      matchedAmountMinor ?? plannedTransferFor(get(), cardId),
+    );
     get().refreshBoard();
     return true;
   },
@@ -1812,10 +1871,14 @@ export const useAppStore = create<AppState>((set, get, api) => ({
      * `markAccountTransferred` and the `accountTransfers` table.
      */
     const current = accountTransferStates.get(cardId)?.status ?? 'pending';
+    const next = current === 'transferred' ? 'pending' : 'transferred';
     accountTransferRepo.setStatus(
       cardId,
       period,
-      current === 'transferred' ? 'pending' : 'transferred',
+      next,
+      null,
+      // Frozen now, so a later plan edit cannot rewrite what this month moved.
+      next === 'transferred' ? plannedTransferFor(get(), cardId) : null,
     );
 
     get().refreshBoard();
@@ -2149,9 +2212,14 @@ export const useAppStore = create<AppState>((set, get, api) => ({
      * An ongoing line accumulates instead, which is the whole point of it.
      */
     const line = get().subcategories.find((s) => s.id === input.subcategoryId);
-    if (line && !isOngoing(line.frequency)) {
+    /*
+     * A refund (negative) is not a correction of the month's payment — it sits
+     * beside it. Replacing the rent entry with its 2,000 refund would erase the
+     * 60,000 that was actually paid.
+     */
+    if (line && !isOngoing(line.frequency) && input.amountMinor > 0) {
       for (const existing of transactionRepo.bySubcategoryPeriod(input.subcategoryId, period)) {
-        transactionRepo.remove(existing.id);
+        if (existing.amountMinor > 0) transactionRepo.remove(existing.id);
       }
     }
 
@@ -2164,6 +2232,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       note: input.note ?? null,
       imageUri: input.imageUri ?? null,
       houseId: input.houseId ?? null,
+      cardId: input.cardId ?? null,
     });
     get().refreshBoard();
   },

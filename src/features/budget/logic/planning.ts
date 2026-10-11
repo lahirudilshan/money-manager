@@ -290,7 +290,17 @@ export function summariseCategory(
     });
 
     counts[met ? 'paid' : 'pending'] += 1;
-    if (met) paid += monthlyAmount(subcategory);
+    /*
+     * An ongoing line has PAID whatever has been spent from it, met or not.
+     *
+     * Counting it only once the budget was met made "Paid so far" (and the
+     * dashboard's SPENT) read 0 for a grocery budget with 30,000 of 50,000
+     * already gone, while "Still to pay" claimed the whole 50,000 was owed.
+     * Its effective amount is max(plan, spent), so paid never exceeds it and
+     * `outstanding` is exactly what is left of the budget.
+     */
+    if (subcategory.frequency === 'ongoing') paid += subcategory.actualMinor ?? 0;
+    else if (met) paid += monthlyAmount(subcategory);
   }
 
   const difference = fundedMinor - total;

@@ -6,7 +6,14 @@ import { BottomSheet, Button, DetailRow, Divider, GradientButton, Label, Row, Su
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { formatMoney } from '~/shared/lib/money';
-import { effectiveAmount, resolveCardId } from '~/features/budget/logic/planning';
+import {
+  appliesToPeriod,
+  effectiveAmount,
+  formatPeriod,
+  periodKey,
+  resolveCardId,
+} from '~/features/budget/logic/planning';
+import type { MovementKind } from '~/features/accounts/logic/accountLedger';
 import { accountLabel } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
 import { selectCardViews, selectCategoryViews, useAppStore } from '../../src/store/useAppStore';
@@ -35,6 +42,13 @@ export default function AccountDetailScreen() {
     [state, id],
   );
   const [revealed, setRevealed] = useState(false);
+  const period = state.period;
+  const currentPeriod = periodKey(new Date());
+  /** Line names for the movement list's second row. */
+  const lineNames = useMemo(
+    () => new Map(state.subcategories.map((s) => [s.id, s.name])),
+    [state.subcategories],
+  );
 
   /*
    * `card` and everything derived from it are resolved BEFORE the `!view`
@@ -78,6 +92,8 @@ export default function AccountDetailScreen() {
       .map((cv) => {
         const lines = cv.subcategories.filter((s) => {
           const raw = cv.rawSubcategories.find((r) => r.id === s.id);
+          // A one-time cost from another month draws nothing this month.
+          if (!appliesToPeriod(s, state.period)) return false;
           return resolveCardId(raw?.cardId, cv.category.cardId) === card.id;
         });
 
@@ -261,6 +277,7 @@ export default function AccountDetailScreen() {
   }
 
   const label = accountLabel(card);
+  const heldIn = accountCurrency(card, homeCurrency);
   // Bound here rather than read as `card.id` inside the closure: `card` is
   // optional until the guard above, and a hoisted `function` body is not
   // covered by that narrowing.
@@ -334,6 +351,80 @@ export default function AccountDetailScreen() {
         />
       }
     >
+        {/* What it holds, and the viewed month as a bank statement would read.
+            Accounts only: a payment card's limit is not money the user has. */}
+        {!card.isCard ? (
+          <View style={{ gap: space.sm }}>
+            <Label>BALANCE</Label>
+            <Surface style={{ gap: space.md }}>
+              <View style={{ gap: 2 }}>
+                <Text variant="caption" tone="muted">
+                  Holds now
+                </Text>
+                <Text
+                  variant="display"
+                  color={view.balanceMinor < 0 ? colors.danger : colors.ink}
+                >
+                  {formatMoney(view.balanceMinor, { currency: heldIn })}
+                </Text>
+              </View>
+              <Divider />
+              <Text variant="caption" tone="muted">
+                {formatPeriod(period)}
+              </Text>
+              <StatementRow label="Start of month" amount={view.flow.openingMinor} currency={heldIn} />
+              <StatementRow label="Money in" amount={view.flow.inMinor} currency={heldIn} sign="+" color={colors.completed} />
+              <StatementRow label="Money out" amount={view.flow.outMinor} currency={heldIn} sign="−" color={colors.danger} />
+              <Divider />
+              <StatementRow
+                label={period >= currentPeriod ? 'Now' : 'End of month'}
+                amount={view.flow.closingMinor}
+                currency={heldIn}
+                strong
+              />
+              {view.committedMinor > 0 ? (
+                <Text variant="caption" color={colors.pending}>
+                  {formatMoney(view.committedMinor, { compact: true, currency: heldIn })} still to pay
+                  from this account this month
+                </Text>
+              ) : null}
+            </Surface>
+
+            {view.flow.movements.length > 0 ? (
+              <Surface padded={false}>
+                {view.flow.movements.map((m, i) => (
+                  <View key={`${m.kind}-${m.subcategoryId ?? ''}-${i}`}>
+                    {i > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
+                    <Row
+                      justify="space-between"
+                      style={{ paddingHorizontal: space.lg, paddingVertical: space.sm, gap: space.md }}
+                    >
+                      <View style={{ flex: 1, gap: 1 }}>
+                        <Text variant="small" numberOfLines={1}>
+                          {m.label}
+                        </Text>
+                        <Text variant="caption" tone="muted" numberOfLines={1}>
+                          {MOVEMENT_LABEL[m.kind]}
+                          {m.subcategoryId ? ` · ${lineNames.get(m.subcategoryId) ?? ''}` : ''}
+                          {m.date ? ` · ${new Date(m.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : ''}
+                        </Text>
+                      </View>
+                      <Text variant="small" color={m.amountMinor >= 0 ? colors.completed : colors.ink}>
+                        {m.amountMinor >= 0 ? '+' : '−'}
+                        {formatMoney(Math.abs(m.amountMinor), { currency: heldIn })}
+                      </Text>
+                    </Row>
+                  </View>
+                ))}
+              </Surface>
+            ) : (
+              <Text variant="caption" tone="muted">
+                Nothing moved in or out of this account in {formatPeriod(period)}.
+              </Text>
+            )}
+          </View>
+        ) : null}
+
         {/* Stored details — every field, with the unset ones marked. */}
         <View style={{ gap: space.sm }}>
           <Label>{card.isCard ? 'CARD DETAILS' : 'ACCOUNT DETAILS'}</Label>
@@ -410,3 +501,42 @@ export default function AccountDetailScreen() {
   );
 }
 
+/** What each kind of movement is, in the words the movement list uses. */
+const MOVEMENT_LABEL: Record<MovementKind, string> = {
+  opening: 'Opening balance',
+  income: 'Income',
+  transfer_in: 'Transfer in',
+  transfer_out: 'Transfer out',
+  bill: 'Bill paid',
+  spend: 'Spending',
+  credit: 'Money received',
+};
+
+/** One line of the month's statement: a label and a signed figure. */
+function StatementRow({
+  label,
+  amount,
+  currency,
+  sign,
+  color,
+  strong,
+}: {
+  label: string;
+  amount: number;
+  currency: string;
+  sign?: '+' | '−';
+  color?: string;
+  strong?: boolean;
+}) {
+  return (
+    <Row justify="space-between">
+      <Text variant={strong ? 'bodyStrong' : 'small'} tone={strong ? undefined : 'secondary'}>
+        {label}
+      </Text>
+      <Text variant={strong ? 'bodyStrong' : 'small'} color={color}>
+        {sign && amount !== 0 ? `${sign} ` : ''}
+        {formatMoney(amount, { currency })}
+      </Text>
+    </Row>
+  );
+}

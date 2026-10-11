@@ -311,6 +311,16 @@ export const transactions = sqliteTable(
      * and the UI never asks). See `houses`.
      */
     houseId: text('house_id').references(() => houses.id, { onDelete: 'set null' }),
+    /**
+     * The account this payment actually LEFT (or, for a refund or income,
+     * arrived in), when that differs from the line's own account.
+     *
+     * Null — every row before this column, and the common case — means the
+     * line's account. Picking a different account for one payment used to
+     * re-point the whole LINE, which silently moved every earlier payment on it
+     * to the new account and rewrote both balances' history.
+     */
+    cardId: text('card_id').references(() => cards.id, { onDelete: 'set null' }),
     ...timestamps,
   },
   (t) => [
@@ -403,6 +413,17 @@ export const subcategoryStates = sqliteTable(
       .default('pending'),
     /** Actual amount if it differed from the plan; null means "as planned". */
     actualMinor: integer('actual_minor'),
+    /**
+     * What a tick cost, frozen when the bill was marked paid with no figure
+     * typed — the plan as it stood THAT month.
+     *
+     * Not shown anywhere: `actualMinor` stays the user's own figure. It exists
+     * so the account ledger can value a past payment without reading today's
+     * plan, which would let raising the rent in October rewrite what July cost
+     * and every balance since. Null on rows written before it; the ledger then
+     * falls back to the plan.
+     */
+    paidAmountMinor: integer('paid_amount_minor'),
     transferredAt: integer('transferred_at', { mode: 'timestamp_ms' }),
     completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
     note: text('note'),
@@ -472,6 +493,17 @@ export const accountTransfers = sqliteTable(
      * so" is exactly what a user wants when a row ticks itself.
      */
     matchedAmountMinor: integer('matched_amount_minor'),
+    /**
+     * What was moved, in the RECEIVING account's currency.
+     *
+     * Frozen at the moment of the tick — the bank's figure when a message
+     * confirmed it, else the plan the dashboard was asking for. Without it a
+     * past month's transfer would be re-derived from TODAY's plan, so editing a
+     * bill in October would rewrite what an account received in August, and
+     * every balance after it. Null on rows written before this column; the
+     * ledger falls back to the plan for those.
+     */
+    amountMinor: integer('amount_minor'),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },

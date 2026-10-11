@@ -459,9 +459,14 @@ describe('board figures once money has been spent', () => {
       (view) => view.card.nickname === 'Household',
     )!;
 
-    // The budget is still owed in full even though 12,000 of it has gone.
-    expect(household.committedMinor).toBe(70_000_00);
-    expect(household.spentMinor).toBe(12_000_00);
+    /*
+     * What is LEFT of the budget is still to pay: 70,000 planned, 12,000 gone.
+     *
+     * Not the full 70,000 any more — the balance now deducts the 12,000 already
+     * spent, so also counting it as still owed would ask for it twice. Never
+     * zero either, which was the original bug.
+     */
+    expect(household.committedMinor).toBe(58_000_00);
   });
 
   /** No figure goes negative or NaN once real money is in play. */
