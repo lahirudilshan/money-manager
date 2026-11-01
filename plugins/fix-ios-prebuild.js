@@ -9,14 +9,14 @@
  * both of these are guaranteed to work.
  *
  * 1. Removes the `aps-environment` entitlement that `expo-notifications`
- *    adds to moneymanager.entitlements. This app only schedules local
+ *    adds to <Project>.entitlements. This app only schedules local
  *    notifications (funding reminders) — it never calls
  *    getExpoPushTokenAsync or any remote-push API. But Apple's free/
  *    personal development teams cannot create a provisioning profile with
  *    the Push Notifications capability at all, so this entitlement blocks
  *    signing for anyone without a paid Apple Developer account.
  *
- * 2. Disables ENABLE_USER_SCRIPT_SANDBOXING on the moneymanager app target
+ * 2. Disables ENABLE_USER_SCRIPT_SANDBOXING on the app target
  *    in project.pbxproj. CocoaPods already disables this on every Pods
  *    target (see ios/Pods/Pods.xcodeproj), but `expo prebuild` leaves it
  *    enabled on the main app target, where Expo's own Run Script build
@@ -31,13 +31,18 @@ const fs = require('fs');
 const path = require('path');
 
 const iosDir = path.join(__dirname, '..', 'ios');
-const entitlementsPath = path.join(iosDir, 'moneymanager', 'moneymanager.entitlements');
-const pbxprojPath = path.join(iosDir, 'moneymanager.xcodeproj', 'project.pbxproj');
 
 if (!fs.existsSync(iosDir)) {
   console.log('[fix-ios-prebuild] No ios/ directory yet — nothing to do.');
   process.exit(0);
 }
+
+// The Xcode project is named after `expo.name` ("Dayly" now, "moneymanager"
+// before the rename), so it is found rather than hard-coded.
+const xcodeproj = fs.readdirSync(iosDir).find((entry) => entry.endsWith('.xcodeproj'));
+const projectName = xcodeproj ? xcodeproj.replace(/\.xcodeproj$/, '') : 'moneymanager';
+const entitlementsPath = path.join(iosDir, projectName, `${projectName}.entitlements`);
+const pbxprojPath = path.join(iosDir, `${projectName}.xcodeproj`, 'project.pbxproj');
 
 if (fs.existsSync(entitlementsPath)) {
   const contents = fs.readFileSync(entitlementsPath, 'utf8');

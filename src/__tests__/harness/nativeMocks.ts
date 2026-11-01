@@ -37,14 +37,21 @@ vi.mock('expo-file-system', () => {
       return true;
     }
     create() {}
+    /** The files directly inside this folder (the mock has no sub-folders). */
     list() {
-      return [];
+      const prefix = `${this.uri.replace(/\/$/, '')}/`;
+      return [...files.keys()]
+        .filter((uri) => uri.startsWith(prefix) && !uri.slice(prefix.length).includes('/'))
+        .map((uri) => new File(uri));
     }
   }
   class File {
     uri: string;
     constructor(base?: unknown, name?: string) {
       this.uri = join(base, name);
+    }
+    get name() {
+      return this.uri.split('/').pop() ?? '';
     }
     get exists() {
       return files.has(this.uri);

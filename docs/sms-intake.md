@@ -1,103 +1,134 @@
-# SMS → transaction intake
+# SMS → transaction intake (Smart Detect)
 
-Money Manager reads bank / utility SMS alerts, extracts the amount, payee and
-date, and drops a **draft transaction** on the dashboard for you to confirm with
-**Yes / Edit / No**. Nothing is ever logged silently — you always get the last
-word.
+Dayly reads bank and utility SMS alerts. It pulls out the amount, payee, account
+and date, and adds a **draft transaction** for you to confirm. Nothing is ever
+logged silently: you always have the last word.
 
 ## Why it works this way (iOS reality)
 
-**iOS gives no app permission to read your SMS inbox.** There is no API for it —
-not for this app, not for any App Store app. So instead of the app *pulling*
-messages, the message is *pushed into* the app as a link:
+**iOS gives no app permission to read your SMS inbox.** No App Store app has
+that API. So the app never *pulls* messages. A Shortcuts automation *hands*
+each alert to the app.
+
+| Intake | How automatic | Setup |
+|--------|---------------|-------|
+| **Shortcuts automation → "Send Message to Dayly"** | Automatic: runs in the background for every matching SMS | One time, below |
+| **Paste** | Manual: Add transaction → **Paste message**, or Dashboard → Paste SMS | None |
+
+The parser, draft queue and confirm screen are the same for both.
+
+## Set up the automation (one tap)
+
+Dayly adds its own action to the Shortcuts app, **Send Message to Dayly**.
+A ready-made shortcut, **Dayly App Automation**, holds the Message trigger
+and that action:
+
+**https://www.icloud.com/shortcuts/c44cb7ae629b4993996723f8e07fdfe7**
+
+Open that link on the iPhone, or tap **Add shortcut** in Dayly (**Settings →
+Auto-detect transactions**). The Shortcuts app opens; follow its on-screen
+steps to add it.
+
+Then run it **once by hand**: on the **Dayly App Automation** tile, tap the
+play button and choose **Allow**. An added automation asks for permission the
+first time it runs, and it can't ask when a message triggers it, so without
+this step it never runs. The in-app setup card shows the tile with the button
+highlighted (`assets/images/shortcut-run-once.png`).
+
+To test, tap **Send test alert** in the same screen and send it to your own
+number. A draft for *LKR 1,250.00 at KEELLS SUPER (TEST)* appears within
+seconds. Each test alert is stamped with its minute, so a repeat test is never
+swallowed as a duplicate.
+
+The trigger has no keyword, because no single word catches every bank. On the
+author's phone, `LKR` caught 141 of 146 real transactions; it missed USD
+salary/interest alerts and a CEB receipt written "Rs.". The action filters
+instead: a text with no digit, or with neither a currency, `Rs`, a currency
+symbol nor a money word, is dropped before it is written anywhere
+(`DaylyMoneySignal` in the Swift file). Checked against the real corpus: 146/146
+transactions kept, while chats and OTPs are dropped. Promos that mention a price
+get through, and the app's classifier rejects them.
+
+To change the shared shortcut, edit it in Shortcuts, share a new iCloud link,
+and update `DAYLY_SHORTCUT_URL` in `app/settings/sms-automation.tsx`.
+
+### Moving from the old setup
+
+Earlier versions taught two other automations. Both still work, so nothing
+breaks, but they are no longer documented:
+
+- **Open URLs** with `moneymanager://sms?text=<URL-encoded message>`. It
+  opens the app every time, and a missed **URL Encode** step cuts the message at
+  its first space.
+- **Append to Text File** into `temp-sms-inbox.txt`, with each message wrapped
+  in `{…}`. A reinstall leaves the Shortcut writing to the old app folder.
+
+To upgrade, delete the old automation and add **Dayly App Automation** using
+the steps above.
+
+## How the action reaches the app
 
 ```
-moneymanager://sms?text=<the SMS text, URL-encoded>
+Message arrives ─► Shortcuts automation ─► Send Message to Dayly (App Intent, background)
+                                              │ writes one file per message
+                                              ▼
+                              Documents/.sms-intake/<epoch-ms>-<uuid>.txt
+                                              │ read on launch, on foreground,
+                                              │ and every 2 s while open
+                                              ▼
+                     drainInbox → parser → sms_inbox table → draft on the dashboard
 ```
 
-Anything that can open that link creates a draft. There are three ways to feed
-it, from most to least automatic:
-
-| Path | How automatic | Setup |
-|------|---------------|-------|
-| **iOS Shortcuts automation** | Near-automatic — fires when a matching SMS arrives | One-time, below |
-| **Share sheet** *(optional future)* | One tap on a message | — |
-| **Paste** | Manual: Dashboard → **Paste SMS** | None |
-
-The parser, the draft queue and the confirm UI are identical for all three, so
-start with **Paste** to try it today, then add the Shortcut for hands-off use.
-
-## Set up the iOS Shortcuts automation (near-automatic)
-
-Do this once on the iPhone. It watches for incoming texts that look like bank /
-utility alerts and opens a draft for each.
-
-1. Open the **Shortcuts** app → **Automation** tab → **+** → **Create Personal
-   Automation**.
-2. Choose **Message**.
-   - **Message Contains** → add the words your alerts always include. Good
-     starters for Sri Lankan banks/utilities:
-     `debited`, `credited`, `withdrawal`, `Rs.`, `LKR`, `CEB`, `NWSDB`.
-     (You can create several automations, one per keyword, or use one with the
-     most common word like `Rs.`.)
-   - **Foreign-currency alerts** (an inward SWIFT salary, a card used abroad)
-     do not contain `LKR`, so they need their own automation on the code the
-     bank prints — usually `USD`. The parser reads any ISO code it recognises
-     and the app converts the amount to your currency using the USD rate saved
-     in Settings, keeping the original figure on the draft for reference.
-   - Set it to **Run Immediately** (not "Run After Confirmation") so it's
-     hands-off. iOS may still show a brief banner.
-3. Tap **Next** → **New Blank Automation** → **Add Action**.
-4. Add **URL** action. Set the URL to:
-   ```
-   moneymanager://sms?text=
-   ```
-5. Add a **Text** action *(optional but tidy)* — actually simpler: use
-   **Get Contents of URL** is *not* needed. Instead build the URL with the
-   message:
-   - Add action **URL Encode** → input: the **Shortcut Input** (the message
-     text). This is the magic variable that holds the SMS body.
-   - Add action **Text** → value: `moneymanager://sms?text=` followed by the
-     **URL Encoded Text** variable from the previous step.
-   - Add action **Open URLs** → input: that **Text**.
-6. **Done.**
-
-Now when a matching SMS arrives, the Shortcut opens Money Manager, which parses
-the message and shows a draft under **FROM YOUR MESSAGES** on the dashboard.
-
-> **Note:** iOS message automations only fire for **SMS** you actually receive,
-> and Apple sometimes requires the phone unlocked. RCS/iMessage bank alerts are
-> rarer but the same keywords apply. If a bank sends from a saved contact, the
-> automation still sees it (unlike the spam-filter API, which cannot).
+- **Money pre-filter:** `DaylyMoneySignal` in the Swift file. It is lenient
+  on purpose, because a false negative loses a transaction while a false
+  positive costs nothing.
+- **Native side:** [`plugins/ios/SendMessageToDaylyIntent.swift`](../plugins/ios/SendMessageToDaylyIntent.swift).
+  It is an `AppIntent` with `openAppWhenRun = false`, and an `AppShortcutsProvider`
+  lists it under Dayly. The config plugin
+  [`plugins/withSmsAppIntent.js`](../plugins/withSmsAppIntent.js) copies it into
+  the app target on every `expo prebuild`. **A native rebuild is needed** before
+  the action shows up in Shortcuts.
+- **One atomic file per message.** Nothing is appended to a shared file, so the
+  app's drain can never race the automation. One file is one message, so there
+  is no separator to get wrong. The leading dot hides the folder from the Files
+  app.
+- **JS side:** [`smsIntentQueue.ts`](../src/features/sms/logic/smsIntentQueue.ts)
+  reads the folder. [`drainInbox`](../src/features/sms/logic/smsInboxFile.ts)
+  feeds those messages, then any legacy file messages, through the store's
+  commit. A queue file is deleted only **after** its message is stored, so a
+  crash replays the message instead of losing it. The `sms_inbox.fingerprint`
+  unique index absorbs the repeat.
+- A message the parser can't read is parked in `temp-sms-inbox.txt`, like
+  every other leftover. That file is the corpus of parser gaps you can pull
+  off the device.
 
 ## The message samples file
 
-The parser is driven and tested against [`src/data/sms-samples.json`](../src/data/sms-samples.json).
-Each entry is one real-world alert shape with the fields the parser must pull
-out (or `expect: null` for messages to ignore, like OTPs).
+The parser is tested against
+[`src/features/sms/logic/sms-samples.json`](../src/features/sms/logic/sms-samples.json).
+Each entry is one real alert shape. It lists the fields the parser must pull
+out, or uses `expect: null` for messages to ignore, such as OTPs.
 
-**To teach the parser your real bank's format:**
+To teach the parser a new bank format:
 
-1. Replace a sample's `raw` with a real message (redact digits with `X` if you
-   like), and update its `expect` to the correct values.
-2. Add new entries for formats not yet covered.
-3. Run `yarn test src/core/__tests__/smsParser.test.ts`. Any mismatch fails
-   loudly and names the sample, so you know exactly what to adjust in
-   [`src/core/smsParser.ts`](../src/core/smsParser.ts).
+1. Add the real message as `raw` (redact digits with `X` if you like), plus
+   the correct `expect`.
+2. Run `yarn test src/features/sms/logic/__tests__/smsParser.test.ts`. A
+   mismatch fails loudly and names the sample.
 
 ## How a draft maps onto the board
 
-This app is a **funding board**, not a ledger — a spend is recorded as *"this
-bill got paid this month."* So a parsed SMS is matched to one of your budget
-lines (subcategories):
+A parsed SMS is matched to one of your budget lines:
 
-- **Debit / bill** messages match **expense** lines; **credit** messages match
+- Debit and bill messages match **expense** lines. Credit messages match
   **income** lines.
-- Matching uses the merchant text, the amount (within ±15 %), and the account's
-  last-4 vs. the card. The best guess is pre-selected when confident; otherwise
-  the draft opens in edit mode and you pick the line.
-- Confirming logs it against that line for the current month via the same
-  `logTransaction` path the manual "+" uses, with the SMS kept as the note.
+- Matching uses the learned merchant rules, the category hint, the amount and
+  the account's last digits.
+- A confident match offers a one-tap **Yes, that's right**. Otherwise you pick
+  the line.
+- Confirming logs the payment through the same path as a manual entry. An
+  "Avl Bal" in the message also anchors that account's balance.
 
-Reconciliation lives in [`src/core/smsReconcile.ts`](../src/core/smsReconcile.ts);
-the confirm card is [`src/components/SmsDraftCard.tsx`](../src/components/SmsDraftCard.tsx).
+Reconciliation lives in
+[`smsReconcile.ts`](../src/features/sms/logic/smsReconcile.ts). The draft
+card is [`SmsDraftCard.tsx`](../src/features/sms/components/SmsDraftCard.tsx).

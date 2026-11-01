@@ -568,8 +568,8 @@ function kindLabel(kind: string): string {
  * How the message reached the app.
  *
  * Worth showing because the two paths fail differently: a `file` message came
- * through the Shortcut's handoff file (where truncation happens), while a
- * `link` arrived by deep link. When something goes wrong, which route it took
+ * from the Shortcuts automation (the "Send Message to Dayly" action, or the
+ * older handoff file), while a `link` arrived by deep link. When something goes wrong, which route it took
  * is the first thing that narrows it down.
  */
 function sourceLabel(source: string): string {

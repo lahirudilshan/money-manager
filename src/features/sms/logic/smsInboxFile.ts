@@ -24,6 +24,11 @@ import {
   RECORD_SEPARATOR,
   type DrainPlan,
 } from '~/features/sms/logic/smsInbox';
+import {
+  clearIntentMessages,
+  countIntentQueue,
+  readIntentQueue,
+} from '~/features/sms/logic/smsIntentQueue';
 
 /**
  * The folder holding the inbox file: the app's Documents root.
@@ -239,8 +244,10 @@ export function inboxExists(): boolean {
 export function countWaiting(): number {
   try {
     const file = inboxFile();
-    if (!file.exists) return 0;
-    return planDrain(file.textSync(), Number.MAX_SAFE_INTEGER).messages.length;
+    const inFile = file.exists
+      ? planDrain(file.textSync(), Number.MAX_SAFE_INTEGER).messages.length
+      : 0;
+    return inFile + countIntentQueue();
   } catch {
     return 0;
   }
@@ -353,13 +360,26 @@ export function drainInbox(
 
   try {
     const file = inboxFile();
-    if (!file.exists) return { ...empty, ok: true };
+    /*
+     * The "Send Message to Dayly" action's queue comes first: it is the intake
+     * the setup guide teaches, one file per message (see smsIntentQueue.ts).
+     * The text file below is the older Shortcuts path, still drained so an
+     * automation set up before the action existed keeps working.
+     */
+    const queued = readIntentQueue();
+    const plan = file.exists ? planDrain(file.textSync()) : { ...empty };
+    if (plan.messages.length === 0 && queued.length === 0) return { ...empty, ok: true };
 
-    const plan = planDrain(file.textSync());
-    if (plan.messages.length === 0) return { ...empty, ok: true };
+    // Durably stored first — see above. A throw here leaves both queues intact.
+    const messages = [...queued.map((entry) => entry.text), ...plan.messages];
+    const unconsumed = commit(messages) ?? [];
+    clearIntentMessages(queued);
 
-    // Durably stored first — see above. A throw here leaves the file intact.
-    const unconsumed = commit(plan.messages) ?? [];
+    // Nothing to rewrite: no legacy file, and every message was stored.
+    if (!file.exists && unconsumed.length === 0) return { ...plan, messages, ok: true };
+    // A message the parser could not read is parked in the file, like any
+    // other leftover, so it stays visible and is retried once the parser learns it.
+    if (!file.exists) file.create();
 
     /*
      * Rewrite in place: the header, anything the cap deferred, and anything
@@ -385,7 +405,7 @@ export function drainInbox(
         : SEED_HEADER,
     );
 
-    return { ...plan, ok: true };
+    return { ...plan, messages, ok: true };
   } catch (error) {
     /*
      * A swallowed error here is invisible by construction.

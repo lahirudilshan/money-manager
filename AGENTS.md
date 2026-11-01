@@ -11,7 +11,7 @@ See [docs/architecture.md](docs/architecture.md). The short version:
 - **Feature code goes in `src/features/<name>/`**, split `logic/` (pure TS, tested)
   and `components/`. Shared-by-two-or-more goes in `src/shared/`.
 - **`app/` is expo-router**: the directory layout IS the routing. Don't move files
-  there — `/sms/new` is the Shortcuts deep link.
+  there — `/sms` is the deep link older Shortcuts automations still open.
 - **Subscribe narrowly**: `useAppActions()` to dispatch, `useAppSelector(fn)` for a
   slice. Bare `useAppStore()` re-renders on every mutation.
 - **Reload narrowly after a write**: `refreshBoard()` / `refreshSettings()` /

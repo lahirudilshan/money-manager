@@ -79,6 +79,12 @@ export const SETTINGS_KEYS = {
    * on a working setup — which made the toggle appear to switch itself off.
    */
   smsInboxEnabled: 'sms_inbox_enabled',
+  /**
+   * The user's own mobile number, typed once for the Smart Detect test alert.
+   * iOS never tells an app its own number, so this is the only way to address
+   * the test message to the user without them picking themselves every time.
+   */
+  ownPhoneNumber: 'own_phone_number',
   /** Cursor for incremental catalog pulls — the last row's `updated_at`|`id`. */
   catalogCursor: 'catalog_cursor',
   /** When the catalog last synced, for the Settings status line. */

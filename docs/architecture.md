@@ -34,8 +34,9 @@ and is the one place screens get application state.
 ### `app/` is not reorganised, deliberately
 
 expo-router derives routes from the directory layout, so moving a file there
-changes a URL. `/sms/new` in particular is the deep link the iOS Shortcuts
-automation posts into, and `/settings/backup` and the `/onboarding/*` flow are
+changes a URL. `/sms` (`moneymanager://sms?text=`) is the deep link older iOS
+Shortcuts automations still open — new ones use the native "Send Message to
+Dayly" action instead (see [sms-intake.md](sms-intake.md)) — and `/settings/backup` and the `/onboarding/*` flow are
 navigated to by path. Screens stay where routing needs them; their logic lives
 in the matching feature.
 
