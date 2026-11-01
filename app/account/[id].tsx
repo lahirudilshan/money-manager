@@ -345,13 +345,20 @@ export default function AccountDetailScreen() {
           label="Edit details"
           icon="create-outline"
           onPress={() => {
-            closeModal();
-            router.push(`/(tabs)/cards?edit=${card.id}`);
+            /*
+             * Straight to the Accounts screen's form, replacing this sheet —
+             * not "close, then push": the close pops back onto an Accounts
+             * screen that is already mounted, and the push then landed on it
+             * without opening anything. The token makes a repeat request for
+             * the same account count as new (see `req` in (tabs)/cards.tsx).
+             */
+            router.navigate(`/(tabs)/cards?edit=${card.id}&req=${Date.now()}`);
           }}
         />
       }
     >
-        {/* What it holds, and the viewed month as a bank statement would read.
+        {/* What it holds, and the viewed month as a bank statement would read —
+            to the cent, so it can be checked against the banking app.
             Accounts only: a payment card's limit is not money the user has. */}
         {!card.isCard ? (
           <View style={{ gap: space.sm }}>
@@ -365,8 +372,30 @@ export default function AccountDetailScreen() {
                   variant="display"
                   color={view.balanceMinor < 0 ? colors.danger : colors.ink}
                 >
-                  {formatMoney(view.balanceMinor, { currency: heldIn })}
+                  {formatMoney(view.balanceMinor, { currency: heldIn, showDecimals: true })}
                 </Text>
+                {view.estimated ? (
+                  /*
+                   * Said out loud: no bank alert has ever stated this account's
+                   * balance and none was typed, so the figure is worked out from
+                   * the plan alone and can be well off.
+                   */
+                  <View style={{ gap: space.sm, paddingTop: space.xs }}>
+                    <Text variant="caption" color={colors.pending}>
+                      Estimated — your bank hasn't reported this balance. Set it to what
+                      your banking app shows to make it exact.
+                    </Text>
+                    <Button
+                      label="Set current balance"
+                      icon="create-outline"
+                      variant="secondary"
+                      size="sm"
+                      onPress={() =>
+                        router.navigate(`/(tabs)/cards?edit=${card.id}&req=${Date.now()}`)
+                      }
+                    />
+                  </View>
+                ) : null}
               </View>
               <Divider />
               <Text variant="caption" tone="muted">
@@ -411,7 +440,7 @@ export default function AccountDetailScreen() {
                       </View>
                       <Text variant="small" color={m.amountMinor >= 0 ? colors.completed : colors.ink}>
                         {m.amountMinor >= 0 ? '+' : '−'}
-                        {formatMoney(Math.abs(m.amountMinor), { currency: heldIn })}
+                        {formatMoney(Math.abs(m.amountMinor), { currency: heldIn, showDecimals: true })}
                       </Text>
                     </Row>
                   </View>
@@ -510,6 +539,7 @@ const MOVEMENT_LABEL: Record<MovementKind, string> = {
   bill: 'Bill paid',
   spend: 'Spending',
   credit: 'Money received',
+  adjustment: 'Bank balance',
 };
 
 /** One line of the month's statement: a label and a signed figure. */
@@ -535,7 +565,7 @@ function StatementRow({
       </Text>
       <Text variant={strong ? 'bodyStrong' : 'small'} color={color}>
         {sign && amount !== 0 ? `${sign} ` : ''}
-        {formatMoney(amount, { currency })}
+        {formatMoney(amount, { currency, showDecimals: true })}
       </Text>
     </Row>
   );

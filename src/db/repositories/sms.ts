@@ -159,6 +159,45 @@ function toMerchantRule(row: MerchantRuleRow): MerchantRule {
  */
 export const smsInboxRepo = {
   /**
+   * The text of every bank message this device has kept — the review queue
+   * and the intake log together, de-duplicated. What the balance backfill
+   * reads: each one may state what an account held at that moment.
+   */
+  /** Text of every message received in the last `days` days, whatever became of it. */
+  recentRawMessages(days: number): string[] {
+    const since = Date.now() - days * 86_400_000;
+    return (
+      expoDb.getAllSync(`SELECT raw FROM sms_inbox WHERE received_at >= ?`, since) as { raw: string }[]
+    ).map((row) => row.raw);
+  },
+
+  everyRawMessage(): string[] {
+    return (
+      expoDb.getAllSync(`SELECT raw FROM sms_inbox UNION SELECT raw FROM sms_log`) as { raw: string }[]
+    ).map((row) => row.raw);
+  },
+
+  /**
+   * Every confirmed message with the line the user filed it under.
+   *
+   * The line is recovered from what the confirmation wrote: a transaction
+   * carries the message as its note, a dated bill's month carries
+   * "From SMS: <message>". Messages whose record has since been deleted come
+   * back with no line and are skipped by callers.
+   */
+  confirmedWithLine(): { raw: string; subcategoryId: string | null }[] {
+    return expoDb.getAllSync(
+      `SELECT i.raw AS raw,
+              COALESCE(
+                (SELECT t.subcategory_id FROM transactions t WHERE t.note = i.raw LIMIT 1),
+                (SELECT s.subcategory_id FROM subcategory_states s WHERE s.note = 'From SMS: ' || i.raw LIMIT 1)
+              ) AS subcategoryId
+         FROM sms_inbox i
+        WHERE i.status = 'confirmed'`,
+    ) as { raw: string; subcategoryId: string | null }[];
+  },
+
+  /**
    * Queue a message, or do nothing if it is already known.
    *
    * Returns whether a new row was created, which is what the drain reports back

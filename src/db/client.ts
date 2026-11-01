@@ -597,6 +597,39 @@ CREATE TABLE IF NOT EXISTS category_states (
    */
   `CREATE UNIQUE INDEX IF NOT EXISTS account_transfers_lookup_idx
      ON account_transfers(card_id, period)`,
+  // Bank-confirmed moves between the user's own accounts — see schema.ts.
+  `
+  CREATE TABLE IF NOT EXISTS account_moves (
+    id TEXT PRIMARY KEY NOT NULL,
+    from_card_id TEXT REFERENCES cards(id) ON DELETE SET NULL,
+    to_card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    period TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    sent_minor INTEGER,
+    date INTEGER NOT NULL,
+    fingerprint TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS account_moves_to_idx ON account_moves(to_card_id, period)`,
+  // Bank-reported balances the account ledger is anchored to — see schema.ts.
+  `
+  CREATE TABLE IF NOT EXISTS balance_checkpoints (
+    id TEXT PRIMARY KEY NOT NULL,
+    card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    balance_minor INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'sms',
+    note TEXT,
+    fingerprint TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS balance_checkpoints_card_idx ON balance_checkpoints(card_id, at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS balance_checkpoints_fingerprint_idx ON balance_checkpoints(fingerprint)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS account_moves_fingerprint_idx ON account_moves(fingerprint)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS category_states_lookup_idx
      ON category_states(category_id, period)`,
   `CREATE INDEX IF NOT EXISTS fundings_lookup_idx ON fundings(category_id, period)`,
@@ -1233,6 +1266,12 @@ function ensureAdditiveColumns(): void {
   // The amount a tick moved — see `accountTransfers` in schema.ts.
   if (hasAccountTransfers) ensureColumn('account_transfers', 'amount_minor', 'amount_minor INTEGER');
 
+  const hasCheckpoints = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='balance_checkpoints'`,
+  );
+  // The message a checkpoint came from — see `balanceCheckpoints` in schema.ts.
+  if (hasCheckpoints) ensureColumn('balance_checkpoints', 'note', 'note TEXT');
+
   ensureTombstoneColumns();
 }
 
@@ -1277,6 +1316,8 @@ const SYNCED_TABLES = [
   'category_states',
   'fundings',
   'account_transfers',
+  'account_moves',
+  'balance_checkpoints',
   'merchant_rules',
   'vehicles',
   'fuel_entries',
@@ -2049,8 +2090,14 @@ export function initialiseDatabase(): void {
  */
 export function resetDatabase(): void {
   const tables = [
+    // Children before the rows they reference.
+    'transaction_splits',
     'transactions',
     'subcategory_states',
+    'category_states',
+    'account_transfers',
+    'account_moves',
+    'balance_checkpoints',
     'fundings',
     // Before `subcategories`, which it references.
     'merchant_rules',

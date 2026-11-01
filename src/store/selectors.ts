@@ -72,6 +72,9 @@ import {
 import { rateBetween } from '~/features/rates/logic/rateTable';
 import { stateRepo, transactionRepo, transactionSplitRepo } from '~/db/repositories';
 import { isOngoing } from '~/db/schema';
+import { accountFragmentOf, ownerOfAccount } from '~/features/sms/logic/accountMasks';
+import { parseSms } from '~/features/sms/logic/smsParser';
+import { alertMoment } from '~/features/accounts/logic/balanceCheckpoints';
 import type {
   Subcategory,
   Transaction,
@@ -503,6 +506,13 @@ export interface CardView {
   committedMinor: Minor;
   /** The viewed month as a statement: opening, in, out, closing, movements. */
   flow: PeriodFlow;
+  /**
+   * True when no bank alert and no typed figure has ever stated this
+   * account's balance — so what it shows is worked out from the plan alone.
+   * The user's Household and Savings accounts were like this: their banks send
+   * no SMS, and nothing on screen said the figure was a guess.
+   */
+  estimated: boolean;
   categoryNames: string[];
 }
 
@@ -514,9 +524,29 @@ export interface CardView {
  */
 let ledgerCache: { deps: unknown[]; value: Map<string, AccountLedger> } | null = null;
 
+/**
+ * When a bill confirmed from a bank SMS was really paid: the message's own
+ * date and time, recovered from the "From SMS: <message>" note the confirm
+ * wrote. Null for a bill ticked by hand.
+ */
+function smsMomentOf(note: string | null | undefined): Date | null {
+  if (!note || !note.startsWith('From SMS: ')) return null;
+  const parsed = parseSms(note.slice('From SMS: '.length));
+  return parsed ? alertMoment(parsed.date, parsed.time) : null;
+}
+
 /** Every account's running ledger. */
 export function selectAccountLedgers(state: AppState): Map<string, AccountLedger> {
-  const history = state.history ?? { states: [], transactions: [], transfers: [], chosenSourceCardId: null };
+  const history = state.history ?? {
+    states: [],
+    transactions: [],
+    transfers: [],
+    moves: [],
+    lines: [],
+    categories: [],
+    checkpoints: [],
+    chosenSourceCardId: null,
+  };
   const today = periodKey(new Date());
   const deps = [
     state.cards,
@@ -536,7 +566,11 @@ export function selectAccountLedgers(state: AppState): Map<string, AccountLedger
     return ledgerCache.value;
   }
 
-  const lines = toLedgerLines(state.subcategories, state.categories);
+  // Archived lines too: a line removed from the plan still paid what it paid.
+  const lines = toLedgerLines(
+    history.lines?.length ? history.lines : state.subcategories,
+    history.categories?.length ? history.categories : state.categories,
+  );
   const cardById = new Map(state.cards.map((c) => [c.id, c]));
   const incomes = state.incomes.map((income) => ({
     id: income.id,
@@ -553,9 +587,27 @@ export function selectAccountLedgers(state: AppState): Map<string, AccountLedger
       startPeriod: periodKey(new Date(card.createdAt)),
     })),
     lines,
-    states: history.states,
+    states: history.states.map((state) => ({
+      ...state,
+      eventAt: smsMomentOf(state.note),
+    })),
     transactions: history.transactions,
     transfers: history.transfers,
+    moves: (history.moves ?? []).map((move) => ({
+      fromCardId: move.fromCardId,
+      toCardId: move.toCardId,
+      period: move.period,
+      amountMinor: move.amountMinor,
+      sentMinor: move.sentMinor,
+      date: move.date,
+    })),
+    checkpoints: (history.checkpoints ?? []).map((cp) => ({
+      cardId: cp.cardId,
+      balanceMinor: cp.balanceMinor,
+      at: cp.at,
+      source: cp.source,
+      note: cp.note,
+    })),
     incomes,
     sourceCardId: resolveSourceCardId({
       accountIds: state.cards.filter((c) => !c.isCard).map((c) => c.id),
@@ -581,6 +633,7 @@ export function selectAccountLedgers(state: AppState): Map<string, AccountLedger
 export function selectCardViews(state: AppState): CardView[] {
   const views = selectCategoryViews(state);
   const ledgers = selectAccountLedgers(state);
+  const anchored = new Set((state.history?.checkpoints ?? []).map((cp) => cp.cardId));
 
   return state.cards.map((card) => {
     const categoryNames = new Set<string>();
@@ -618,6 +671,7 @@ export function selectCardViews(state: AppState): CardView[] {
 
     return {
       card,
+      estimated: !anchored.has(card.id),
       balanceMinor: ledger.balanceMinor,
       fundedInMinor: flow.inMinor,
       spentMinor: flow.outMinor,
@@ -1129,4 +1183,40 @@ export function selectTrackerReminders(
   if (state.trackedItems.length === 0) return [];
 
   return trackerReminders(state.trackedItems, refillsByItem, today);
+}
+
+/** An account the bank keeps texting about that the app does not know. */
+export interface UnknownAccount {
+  /** The last four digits, as the messages show them. */
+  tail: string;
+  /** How many recent messages name it. */
+  count: number;
+}
+
+/**
+ * Accounts named by recent bank messages (60 days) that are not the user's.
+ *
+ * On the user's phone four real accounts were missing — the one the salary
+ * lands in among them — so every move through them sat in the queue as an
+ * unexplained debit or credit, and an own-account transfer could never be
+ * recognised. Naming them is the fix the user can make in one tap.
+ * Only fragments that identify an account (four digits or a bank mask) count.
+ */
+export function selectUnknownAccounts(state: AppState): UnknownAccount[] {
+  const counts = new Map<string, number>();
+  const fragments = state.recentAccountFragments?.length
+    ? state.recentAccountFragments
+    : (state.smsDrafts ?? []).map((draft) => accountFragmentOf(draft.parsed));
+  for (const fragment of fragments) {
+    const digits = fragment.replace(/\D/g, '');
+    if (digits.length < 4 && !/[X*•x]/.test(fragment)) continue;
+    if (ownerOfAccount(state.cards, fragment)) continue;
+    // A bank mask keeps only its suffix as the recognisable end: "13802XXXXX40" → "…40".
+    const masked = fragment.match(/[X*•x]+(\d+)$/);
+    const tail = masked ? `…${masked[1]}` : digits.slice(-4);
+    counts.set(tail, (counts.get(tail) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([tail, count]) => ({ tail, count }))
+    .sort((a, b) => b.count - a.count);
 }

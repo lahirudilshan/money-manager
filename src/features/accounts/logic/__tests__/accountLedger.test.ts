@@ -220,3 +220,48 @@ describe('periodFlow and openingForTarget', () => {
     expect(openingForTarget(ledger, 100, 80)).toBe(130);
   });
 });
+
+describe('bank-confirmed moves between own accounts', () => {
+  const accounts = [
+    { id: 'pay', openingBalanceMinor: 1_000, startPeriod: '2026-09' },
+    { id: 'home', openingBalanceMinor: 0, startPeriod: '2026-09' },
+  ];
+  const move = (amountMinor: number) => ({
+    fromCardId: 'pay',
+    toCardId: 'home',
+    period: '2026-10',
+    amountMinor,
+    sentMinor: amountMinor,
+    date: new Date('2026-10-05'),
+  });
+  const tick = (matchedAmountMinor: number | null) => ({
+    cardId: 'home',
+    period: '2026-10',
+    status: 'transferred',
+    amountMinor: 300,
+    matchedAmountMinor,
+    transferredAt: null,
+  });
+
+  it('moves money out of one account and into the other', () => {
+    const ledgers = buildLedgers(input({ accounts, moves: [move(250)] }));
+    expect(ledgers.get('pay')!.balanceMinor).toBe(750);
+    expect(ledgers.get('home')!.balanceMinor).toBe(250);
+  });
+
+  it('counts a move that confirmed the tick once, at the bank figure', () => {
+    const ledgers = buildLedgers(
+      input({ accounts, sourceCardId: 'pay', moves: [move(320)], transfers: [tick(320)] }),
+    );
+    expect(ledgers.get('home')!.balanceMinor).toBe(320);
+    expect(ledgers.get('pay')!.balanceMinor).toBe(680);
+  });
+
+  it('counts a smaller top-up beside a hand tick, not instead of it', () => {
+    const ledgers = buildLedgers(
+      input({ accounts, sourceCardId: 'pay', moves: [move(50)], transfers: [tick(null)] }),
+    );
+    expect(ledgers.get('home')!.balanceMinor).toBe(350);
+    expect(ledgers.get('pay')!.balanceMinor).toBe(650);
+  });
+});

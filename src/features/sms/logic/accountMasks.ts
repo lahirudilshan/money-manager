@@ -82,19 +82,58 @@ export function ownerOfAccount<T extends OwnedAccount>(
   accounts: readonly T[],
   fragment: string | null | undefined,
 ): T | null {
-  const f = digitsOf(fragment);
-  if (f.length < MIN_IDENTIFYING_DIGITS) return null;
+  return matchAccountLeg(accounts, fragment)?.account ?? null;
+}
 
+/**
+ * Whether a MASKED fragment — "13802XXXXX50", "1380***4150" — fits a number.
+ *
+ * HNB keeps the first five digits and the last two, masking the middle, so
+ * stripping the mask leaves "1380250", which matches nothing: the user's
+ * Expenses account 138020174150 never recognised its own messages. A mask is
+ * read as what it is — a known prefix, unknown middle, known suffix — and fits
+ * when the number starts and ends with those, with room for the middle.
+ */
+export function maskedFragmentFits(fragment: string, fullNumber: string): boolean {
+  const m = fragment.replace(/\s/g, '').match(/^(\d*)[X*•x]+(\d+)$/);
+  if (!m) return false;
+  const [, prefix, suffix] = m;
+  if (prefix.length + suffix.length < MIN_IDENTIFYING_DIGITS) return false;
+  const n = digitsOf(fullNumber);
+  if (n.length <= prefix.length + suffix.length) return false;
+  return n.startsWith(prefix) && n.endsWith(suffix);
+}
+
+/**
+ * Which of the user's accounts a message is about, and which LEG of it.
+ *
+ * A dual-currency relationship holds two balances behind two numbers: DFCC's
+ * LKR ...5584 and USD ...7427 are one card in the app. Knowing the leg is what
+ * keeps a "Your bal is USD5,912.67" from being read as the rupee balance.
+ * Full account numbers are tried before stored tails, because a tail can be
+ * stale (the user's Salary card held the USD leg's 7427 as its own last 4).
+ */
+export function matchAccountLeg<T extends OwnedAccount>(
+  accounts: readonly T[],
+  fragment: string | null | undefined,
+): { account: T; leg: 'primary' | 'foreign' } | null {
+  const raw = (fragment ?? '').trim();
+  const f = digitsOf(raw);
+  const masked = /[X*•x]/.test(raw);
+  if (!masked && f.length < MIN_IDENTIFYING_DIGITS) return null;
+
+  const fits = (candidate: string | null | undefined) =>
+    Boolean(candidate) &&
+    (masked ? maskedFragmentFits(raw, candidate!) || (f.length >= MIN_IDENTIFYING_DIGITS && fragmentIdentifies(f, candidate!) && !/^\d{5}[X*•x]/.test(raw)) : fragmentIdentifies(f, candidate!));
+
+  // Full numbers first, both legs; stored tails only as a fallback.
   for (const account of accounts) {
-    const candidates = [
-      account.accountNumber,
-      account.last4,
-      account.foreignAccountNumber,
-      account.foreignLast4,
-    ];
-    if (candidates.some((candidate) => candidate && fragmentIdentifies(f, candidate))) {
-      return account;
-    }
+    if (fits(account.accountNumber)) return { account, leg: 'primary' };
+    if (fits(account.foreignAccountNumber)) return { account, leg: 'foreign' };
+  }
+  for (const account of accounts) {
+    if (!account.accountNumber && fits(account.last4)) return { account, leg: 'primary' };
+    if (!account.foreignAccountNumber && fits(account.foreignLast4)) return { account, leg: 'foreign' };
   }
   return null;
 }
@@ -194,4 +233,16 @@ export function isForeignAccountMessage(options: {
 
 
   return ownerOfAccount(accounts, f) === null;
+}
+
+/**
+ * The most identifying form of a message's account: the parser's fragment,
+ * or — when that is too short to identify anything, as HNB's "50" is — the
+ * masked number as the message printed it ("13802XXXXX50"), which keeps the
+ * bank's prefix and so still names one account.
+ */
+export function accountFragmentOf(parsed: { account: string; raw: string }): string {
+  if (digitsOf(parsed.account).length >= MIN_IDENTIFYING_DIGITS) return parsed.account;
+  const masked = parsed.raw.match(/\b\d{3,}[X*•x]{2,}\d{2,}\b/);
+  return masked ? masked[0] : parsed.account;
 }

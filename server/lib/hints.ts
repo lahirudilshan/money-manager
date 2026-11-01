@@ -304,6 +304,7 @@ const HINT_SELF_WORDS: Record<Hint, RegExp[]> = {
   // "home" must not swallow "Groceries (home food)" — mirrors the client.
   household: [/\bhousehold\b/i, /\bhome\b(?!\s*food)/i, /\bfurniture\b/i, /\bappliance/i],
   insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpremium\b/i],
+  pet: [/\bpets?\b/i, /\bvet\b/i, /\banimal\b/i, /\bpaw\b/i],
 };
 
 /**

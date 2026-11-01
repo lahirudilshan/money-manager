@@ -1,3 +1,5 @@
+import { isGenericTypeLabel } from './merchantRules';
+
 /**
  * The drop-file bridge between the Shortcuts app and this one.
  *
@@ -623,9 +625,27 @@ export function cancelInternalTransfers<T extends PairableEntry>(
   /** Last-4 (or visible tail) of every account the user owns. */
   ownAccounts: readonly string[],
 ): T[] {
+  const paired = new Set(pairInternalTransfers(entries, ownAccounts).flatMap((p) => [p.debit, p.credit]));
+  return entries.filter((entry) => !paired.has(entry));
+}
+
+/**
+ * The own-account transfers in a batch, as pairs: the money LEFT one of the
+ * user's accounts (`debit`) and ARRIVED in another (`credit`).
+ *
+ * Same rules as `cancelInternalTransfers`, which is built on this; the pairs
+ * are what let the drain record the move itself — dropping both halves as "not
+ * spending" is right, but the money still changed accounts, and a balance that
+ * never hears about it is wrong on both sides.
+ */
+export function pairInternalTransfers<T extends PairableEntry>(
+  entries: readonly T[],
+  ownAccounts: readonly string[],
+): { debit: T; credit: T }[] {
+  const pairs: { debit: T; credit: T }[] = [];
   // With fewer than two known accounts an internal transfer is impossible: the
   // money would have nowhere of the user's to land.
-  if (ownAccounts.length < 2) return [...entries];
+  if (ownAccounts.length < 2) return pairs;
 
   /** Whether a message's account fragment belongs to one of the user's cards. */
   const owned = (account: string): string | null => {
@@ -696,11 +716,14 @@ export function cancelInternalTransfers<T extends PairableEntry>(
 
       dropped.add(index);
       dropped.add(i);
+      pairs.push(
+        entry.direction === 'debit' ? { debit: entry, credit: other } : { debit: other, credit: entry },
+      );
       break;
     }
   });
 
-  return entries.filter((_, index) => !dropped.has(index));
+  return pairs;
 }
 
 /** The outcome of draining the inbox, for the UI to report. */
@@ -806,4 +829,45 @@ export function describeDrain(summary: DrainSummary): string {
 
   if (parts.length === 0) return 'No new messages.';
   return parts.join(' · ');
+}
+
+/**
+ * Bank debits that are the SAME payment as a card issuer's confirmation.
+ *
+ * Paying a credit card produces two messages: the bank's "LKR 36,667.00
+ * debited … as CEFTS Outward Transfer" and the card's "Thank you for your
+ * payment of LKR 36,667.00 made to Card # 3766…". Both sat in the queue on the
+ * user's phone; confirming both counted the card bill twice. The card's message
+ * is the one worth keeping — it says what the payment was FOR — so the bank's
+ * bare transfer is the duplicate.
+ *
+ * A twin must be a payee-less transfer debit (a named purchase is never one),
+ * for the exact amount, within three days. Each confirmation retires at most
+ * one twin.
+ */
+export function cardPaymentTwins<
+  T extends { direction: string; kind: string; amountMinor: number; merchant: string; date: string | null; raw: string },
+>(entries: readonly T[]): Set<T> {
+  const twins = new Set<T>();
+  const confirmations = entries.filter((e) => /\bpayment of\b.{0,40}?\bmade to card\b/i.test(e.raw));
+  for (const card of confirmations) {
+    const twin = entries.find(
+      (e) =>
+        e !== card &&
+        !twins.has(e) &&
+        e.direction === 'debit' &&
+        e.kind === 'transfer_out' &&
+        isGenericTypeLabel(e.merchant) &&
+        e.amountMinor === card.amountMinor &&
+        withinDays(e.date, card.date, 3),
+    );
+    if (twin) twins.add(twin);
+  }
+  return twins;
+}
+
+function withinDays(a: string | null, b: string | null, days: number): boolean {
+  if (!a || !b) return false;
+  const gap = Math.abs(new Date(`${a}T00:00:00`).getTime() - new Date(`${b}T00:00:00`).getTime());
+  return gap <= days * 86_400_000;
 }

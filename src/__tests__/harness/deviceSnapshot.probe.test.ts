@@ -20,9 +20,14 @@ describe.skipIf(!process.env.MM_TEST_DB)('device snapshot', () => {
     const { useAppStore } = await import('~/store/useAppStore');
     const selectors = await import('~/store/selectors');
     const S = () => useAppStore.getState();
+    const launch = await import('~/store/useAppStore');
+    // What launch does: learn from history, then load.
+    launch.learnTransferAmountsFromHistory();
+    S().refresh();
+    launch.learnBalancesFromHistory(S);
     S().refresh();
     const out: unknown[] = [];
-    for (const period of ['2026-08', '2026-09', '2026-10']) {
+    for (const period of (process.env.MM_PERIODS ?? '2026-08,2026-09,2026-10').split(',')) {
       S().setPeriod(period);
       const totals = selectors.selectBoardTotals(S());
       out.push({

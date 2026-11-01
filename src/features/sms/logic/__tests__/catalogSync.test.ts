@@ -183,3 +183,14 @@ describe('observationsFrom', () => {
     expect(observations[0].hint).toBe('groceries');
   });
 });
+
+describe('observationsFrom keeps private keys on the device', () => {
+  it('never shares a payee-account or transfer-amount rule', async () => {
+    const { observationsFrom } = await import('../catalogSync');
+    const rule = (pattern: string) => ({
+      rule: { id: pattern, pattern, subcategoryId: 's', hint: 'transfer' as const, source: 'learned' as const, hitCount: 3, updatedAt: 1 },
+    });
+    const shared = observationsFrom([rule('acct:13802xxxxx50'), rule('xfer:6796:1100000'), rule('keells super')]);
+    expect(shared.map((o) => o.merchant)).toEqual(['keells super']);
+  });
+});

@@ -117,8 +117,42 @@ export interface ParsedSms {
    * time, and the review UI shows whichever it actually has.
    */
   time: string | null;
+  /**
+   * The account's balance AFTER this transaction, as the bank reported it —
+   * "Avl Bal 285,825.28", "Your bal is LKR0.62", "Bal:LKR 22,249.13". The
+   * strongest fact a message carries: the account balance the app shows is
+   * anchored to it (see `balance_checkpoints`). Absent when the bank sent none.
+   */
+  balance?: { amountMinor: Minor; currency: string | null } | null;
   /** The original text, kept so the confirm UI can show what it came from. */
   raw: string;
+}
+
+/**
+ * The balance a bank alert reports after the transaction, if any.
+ *
+ * Every Sri Lankan format seen on the user's phone, each anchored on its own
+ * balance wording so the transaction amount is never mistaken for it:
+ *   NDB   "Avl Bal 285,825.28"
+ *   HNB   "AvlBal LKR 375,922.96" · "Bal:LKR 22,249.13" · "Avl Bal: 640099.67 LKR"
+ *   DFCC  "Your bal is LKR0.62" · "Your bal is USD5,912.67"
+ */
+export function extractBalance(text: string): { amountMinor: Minor; currency: string | null } | null {
+  const patterns: RegExp[] = [
+    /\bAvl\.?\s*Bal(?:ance)?\s*:?\s*(?:(LKR|USD|EUR|GBP|AUD|Rs\.?)\s*)?(-?[\d,]+(?:\.\d+)?)(?:\s*(LKR|USD|EUR|GBP|AUD))?/i,
+    /\bAvlBal\s*(?:(LKR|USD|EUR|GBP|AUD|Rs\.?)\s*)?(-?[\d,]+(?:\.\d+)?)(?:\s*(LKR|USD|EUR|GBP|AUD))?/i,
+    /\bYour\s+bal(?:ance)?\s+is\s*(?:(LKR|USD|EUR|GBP|AUD|Rs\.?)\s*)?(-?[\d,]+(?:\.\d+)?)(?:\s*(LKR|USD|EUR|GBP|AUD))?/i,
+    /\bBal(?:ance)?\s*:\s*(?:(LKR|USD|EUR|GBP|AUD|Rs\.?)\s*)?(-?[\d,]+(?:\.\d+)?)(?:\s*(LKR|USD|EUR|GBP|AUD))?/i,
+  ];
+  for (const pattern of patterns) {
+    const m = text.match(pattern);
+    if (!m) continue;
+    const value = Number.parseFloat(m[2].replace(/,/g, ''));
+    if (!Number.isFinite(value)) continue;
+    const code = (m[1] ?? m[3] ?? '').toUpperCase().replace(/^RS\.?$/, 'LKR');
+    return { amountMinor: Math.round(value * 100), currency: code || null };
+  }
+  return null;
 }
 
 /**
@@ -343,6 +377,17 @@ const BANK_CHARGE_PATTERNS: RegExp[] = [
   /\bstamp\s+duty\b/i,
   /\bcommission\b/i,
   /\bas\s+(?:[A-Za-z]+\s+)*(?:charges|fees)\b/i,
+  /*
+   * Tax the bank withholds on interest — "ref: Advance Income Tax", "WHT".
+   * Bank-initiated and tiny, like a fee, and it belongs on the same line:
+   * the user dismissed every one of these on the device because nothing on
+   * the board would take it.
+   */
+  /\b(?:advance\s+income|withholding)\s+tax\b/i,
+  // NDB's name for the same withholding: "as Debit Arrangement." (10% of the
+  // interest credited in the same minute).
+  /\bdebit\s+arrangement\b/i,
+  /\bWHT\b/,
   /*
    * The NETWORK's own name followed by fee wording.
    *
@@ -1022,6 +1067,13 @@ const EMPTY_REASON_MARKERS = /^(?:ref|n\/?a|nil|none|self|own|transfer|fund\s*tr
  * never recur.
  */
 function transferReason(text: string): string {
+  /*
+   * HNB's interest credit: "Reason:13802XXXXX40:Int.Pd:31-08-2026 to ...". The
+   * account number leads, so the clause below read "13802XXXXX40:Int" — an
+   * account fragment, not a description. It is interest, and says so.
+   */
+  if (/Reason\s*:\s*[\dX*]+\s*:\s*Int\.?\s*Pd\b/i.test(text)) return 'Interest';
+
   const match = text.match(
     /Reason\s*:\s*(?:MB\s*:)?\s*([^\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|(?:transfer|txn|transaction|service|handling|processing|atm)\s+(?:charge|charges|fee|fees)\b|charges?\s*(?:applied|debited)\b)|[.\n]|$)/i,
   );
@@ -1219,6 +1271,16 @@ function extractMerchant(text: string): string {
   if (asType) return clean(asType[1]);
 
   /*
+   * NDB's other "as <Label>." wordings, which name no keyword above:
+   * "as Interest - Capitalise." (an interest credit) and "as Debit
+   * Arrangement." (the tax withheld on it). Both came through with NO
+   * description, so neither could ever be categorised. Anchored on the
+   * sentence's full stop so "as POS TXN on 24 Oct…" is never taken.
+   */
+  const asLabel = text.match(/\bas\s+([A-Z][A-Za-z]*(?:\s*-\s*[A-Z][A-Za-z]*|\s+[A-Z][A-Za-z]*)+)\.(?:\s|$)/);
+  if (asLabel) return clean(asLabel[1]);
+
+  /*
    * "ref: Inward SWIFT Payment." — the reference names what the money was, and
    * is the only description a SWIFT/remittance credit carries.
    *
@@ -1241,7 +1303,7 @@ function extractMerchant(text: string): string {
    * 25" — the fee described as if it were the payee.
    */
   const ref = text.match(
-    /\bref\s*[:.]?\s*([^.\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|(?:transfer|txn|transaction|service|handling|processing|atm)\s+(?:charge|charges|fee|fees)\b|charges?\s*(?:applied|debited)\b|$)|[.\n])/i,
+    /\bref\b\s*[:.]?\s*([^.\n]*?)(?=\s*(?:Bal(?:ance)?\s*[:.]|Av\.?\s*Bal|Protect\s+from|Hot\s?line|Call\s+\d|DO\s+NOT\s+SHARE|(?:transfer|txn|transaction|service|handling|processing|atm)\s+(?:charge|charges|fee|fees)\b|charges?\s*(?:applied|debited)\b|$)|[.\n])/i,
   );
   if (ref) {
     const value = clean(ref[1]);
@@ -1456,6 +1518,10 @@ function classifyKind(text: string, direction: SmsDirection, amountMinor: number
    * match it. Only an explicit cash withdrawal is `atm`.
    */
   if (/\bATM\b[^.]*\bPOS\b/i.test(text) && !/cash\s+withdrawal/i.test(text)) {
+    return 'purchase';
+  }
+  // The same card payment without the ATM prefix: "@ KEELLS SUPER. POS Transaction."
+  if (/\bPOS\s+Transaction\b/i.test(text) && !/cash\s+withdrawal/i.test(text)) {
     return 'purchase';
   }
   /*
@@ -1756,6 +1822,7 @@ export function parseSms(input: string): ParsedSms | null {
      */
     date: statement?.readingDate ?? extractDate(text),
     time: statement ? null : extractTime(text),
+    balance: statement ? null : extractBalance(text),
     raw: text,
   };
 

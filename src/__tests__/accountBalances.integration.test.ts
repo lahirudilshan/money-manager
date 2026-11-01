@@ -484,13 +484,18 @@ describe('money in, money out, and which account it went through', () => {
     S().updateCard(ids.household, { last4: '4321' });
     S().updateCard(ids.bills, { last4: '9999' });
 
-    // A Keells shop paid from the BILLS account, filed under groceries.
-    const debitId = S().ingestSmsText(
-      'LKR 3,450.00 debited from AC XXXXXXXX9999 on 12 Oct 2026 10:03 at KEELLS SUPER. Avl Bal 86,488.43',
-    );
-    expect(typeof debitId).toBe('string');
+    // The bank's own balance after each message, as a real alert reports it —
+    // the app anchors accounts to that figure.
+    const figure = (minor: number) =>
+      (minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const bills = view('Bills').balanceMinor;
     const household = view('Household').balanceMinor;
+
+    // A Keells shop paid from the BILLS account, filed under groceries.
+    const debitId = S().ingestSmsText(
+      `LKR 3,450.00 debited from AC XXXXXXXX9999 on 12 Oct 2026 10:03 at KEELLS SUPER. Avl Bal ${figure(bills - rs(3_450))} Call 94112448888 for info`,
+    );
+    expect(typeof debitId).toBe('string');
     const draft = S().smsDrafts.find((d) => d.id === debitId) ?? S().smsDrafts[S().smsDrafts.length - 1];
     S().confirmDraft(draft.id, { subcategoryId: ids.groceries });
     expect(view('Bills').balanceMinor).toBe(bills - rs(3_450));
@@ -499,7 +504,7 @@ describe('money in, money out, and which account it went through', () => {
     // Keells refunds 2,000 into Household: money back, budget down.
     const spent = groceriesActual();
     const creditId = S().ingestSmsText(
-      'Your A/C No: ********4321 is credited with LKR2,000.00 on 12 OCT 2026 ref: REFUND KEELLS. Your bal is LKR5,002.26.',
+      `Your A/C No: ********4321 is credited with LKR2,000.00 on 12 OCT 2026 ref: REFUND KEELLS. Your bal is LKR${figure(household + rs(2_000))}.`,
     );
     expect(typeof creditId).toBe('string');
     const credit = S().smsDrafts.find((d) => d.id === creditId) ?? S().smsDrafts[S().smsDrafts.length - 1];

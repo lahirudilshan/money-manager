@@ -360,16 +360,63 @@ export default function NewTransactionScreen() {
         <AmountField label="Amount" value={amount} onChangeText={setAmount} currency={state.currency} />
       </View>
 
-      {/* Which way it went. Labelled by what happens to the ACCOUNT, which is
-          the question the user can always answer, rather than "debit/credit". */}
-      <Segmented
-        options={[
-          { key: 'out', label: isIncomeLine ? 'Money out (reversal)' : 'Money out', icon: 'remove-circle-outline' },
-          { key: 'in', label: isIncomeLine ? 'Money in' : 'Money in (refund)', icon: 'add-circle-outline' },
-        ]}
-        selectedKey={direction}
-        onSelect={(key) => setDirectionChoice(key === 'in' ? 'in' : 'out')}
-      />
+      {/* Which way it went — two tinted chips under the amount, NOT a second
+          segmented control. The Fill in / Paste switch above already looks like
+          one; drawn the same way, this read as another way of entering the form
+          rather than as a fact about the money. Tinted by meaning (out in the
+          danger tint, in in the paid green) and signed, so the choice reads
+          at a glance and never by colour alone. */}
+      <View
+        accessibilityRole="radiogroup"
+        accessibilityLabel="Which way the money went"
+        style={{ flexDirection: 'row', justifyContent: 'center', gap: space.sm, marginTop: -space.sm }}
+      >
+        {(
+          [
+            { key: 'out', sign: '−', label: isIncomeLine ? 'Money out (reversal)' : 'Money out', fg: colors.danger, bg: colors.dangerSoft },
+            { key: 'in', sign: '+', label: isIncomeLine ? 'Money in' : 'Money in (refund)', fg: colors.completed, bg: colors.completedSoft },
+          ] as const
+        ).map((option) => {
+          const selected = direction === option.key;
+          return (
+            <Pressable
+              key={option.key}
+              onPress={() => setDirectionChoice(option.key)}
+              accessibilityRole="radio"
+              accessibilityState={{ selected }}
+              accessibilityLabel={option.label}
+              hitSlop={6}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                paddingVertical: 7,
+                paddingHorizontal: space.md,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: selected ? option.fg : colors.hairlineStrong,
+                backgroundColor: selected ? option.bg : 'transparent',
+                opacity: pressed ? 0.8 : 1,
+              })}
+            >
+              <Text
+                variant="bodyStrong"
+                color={selected ? option.fg : colors.inkMuted}
+                style={{ fontSize: 15, lineHeight: 17 }}
+              >
+                {option.sign}
+              </Text>
+              <Text
+                variant="small"
+                color={selected ? option.fg : colors.inkSecondary}
+                style={{ fontWeight: selected ? '700' : '500' }}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       {/* When it happened. Sits with the amount rather than under "More
           details" because it decides which month the entry counts toward —

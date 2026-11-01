@@ -39,6 +39,7 @@ export const HINTS = [
   'entertainment',
   'household',
   'insurance',
+  'pet',
 ] as const;
 
 export type Hint = (typeof HINTS)[number];

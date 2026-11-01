@@ -121,9 +121,19 @@ const NO_MATCH: MerchantMatch = {
  * candidates the most-confirmed rule wins, then the most recent, so repeated
  * user corrections genuinely improve accuracy over time.
  */
-export function matchMerchant(merchant: string, rules: readonly MerchantRule[]): MerchantMatch {
-  const key = merchantKey(merchant);
+export function matchMerchant(merchantIn: string, rulesIn: readonly MerchantRule[]): MerchantMatch {
+  const key = merchantKey(merchantIn);
   if (!key) return NO_MATCH;
+  /*
+   * A mechanism label matches nothing, and a rule LEARNED from one (before
+   * `planRuleUpsert` refused them) is ignored rather than trusted — that is
+   * what neutralises the "cefts outward transfer" rule already on devices.
+   * Payee-account rules (`acct:…`) are keys, not labels, and stay.
+   */
+  if (isGenericTypeLabel(merchantIn)) return NO_MATCH;
+  const rules = rulesIn.filter(
+    (rule) => rule.pattern.startsWith('acct:') || !isGenericTypeLabel(rule.pattern),
+  );
 
   const byStrength = (a: MerchantRule, b: MerchantRule) =>
     b.hitCount - a.hitCount || b.updatedAt - a.updatedAt;
@@ -213,6 +223,54 @@ export type RuleUpsert =
  * shared by every account ending in those digits — see
  * MIN_MATCHABLE_ACCOUNT_DIGITS in smsParser.ts.
  */
+/**
+ * Whether a "merchant" is really the bank's name for the MECHANISM — "CEFTS
+ * Outward Transfer", "Outward CEFT Transfer", "Transfer Out", "Credit Transfer".
+ *
+ * Every outgoing transfer carries one, whoever it paid, so it identifies
+ * nothing. Learning from it is actively harmful: on the user's device ten
+ * confirmations taught "cefts outward transfer → Weligama home" at `exact`
+ * confidence, and from then on rent, a sister's allowance and a vehicle payment
+ * were all offered as Weligama home with a one-tap confirm.
+ *
+ * Every word must come from the mechanism vocabulary and at least one must be a
+ * core movement word, in ANY order — banks vary the order ("Outward CEFT
+ * Transfer" vs "CEFTS Outward Transfer"). A shop that merely contains one of
+ * these words ("Transfer House") has a word outside the set and still counts.
+ */
+export function isGenericTypeLabel(merchant: string): boolean {
+  const words = merchant.toLowerCase().match(/[a-z]+/g);
+  if (!words || words.length === 0) return false;
+  return (
+    words.every((word) => MECHANISM_WORDS.has(word)) && words.some((word) => CORE_MOVEMENT_WORDS.has(word))
+  );
+}
+
+const CORE_MOVEMENT_WORDS = new Set([
+  'transfer', 'transfers', 'payment', 'withdrawal', 'deposit', 'credit', 'debit', 'transaction', 'txn',
+]);
+
+const MECHANISM_WORDS = new Set([
+  ...CORE_MOVEMENT_WORDS,
+  'cefts', 'ceft', 'slips', 'ctb', 'mb', 'ib', 'atm', 'pos', 'eft', 'rtgs', 'swift', 'lankapay',
+  'inward', 'outward', 'online', 'mobile', 'internet', 'fund', 'funds', 'own', 'account', 'ac',
+  'in', 'out', 'charge', 'charges', 'fee', 'fees', 'to', 'from', 'via', 'deposit',
+]);
+
+/**
+ * The learned key for a payee-less transfer: its AMOUNT from its ACCOUNT.
+ *
+ * "CEFTS Outward Transfer, 11,000.00, from ••6796" names nobody, so it can't be
+ * learned by merchant (see `isGenericTypeLabel`). But a recurring transfer is
+ * recurring in exactly this sense — a sister's 11,000 allowance, a 35,000 rent
+ * — and the same sum leaving the same account is the best evidence there is.
+ * Suggested at `likely`, never `exact`: two different payees can share a sum.
+ */
+export function transferAmountKey(account: string, amountMinor: number): string {
+  const digits = account.replace(/\D/g, '').slice(-4);
+  return digits && amountMinor > 0 ? `xfer:${digits}:${amountMinor}` : '';
+}
+
 export function payeeAccountKey(payeeAccount: string): string {
   const normalised = payeeAccount.trim().toLowerCase().replace(/\s+/g, '');
   return normalised ? `acct:${normalised}` : '';
@@ -235,6 +293,8 @@ export function planRuleUpsert(
 ): RuleUpsert | null {
   const key = preNormalised ? merchant : merchantKey(merchant);
   if (!key || !subcategoryId) return null;
+  // A mechanism label names no payee — see `isGenericTypeLabel`.
+  if (!preNormalised && isGenericTypeLabel(merchant)) return null;
 
   // An existing rule on this exact merchant is updated in place: confirming it
   // strengthens it, correcting it re-points it at the line the user chose.

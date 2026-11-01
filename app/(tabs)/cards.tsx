@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, TextInput, View } from 'react-native';
 import { BankCardTile } from '~/features/accounts/components/BankCardTile';
 import { BankLogo } from '~/features/accounts/components/BankLogo';
 import { Field, PillSelect } from '~/shared/components/forms';
@@ -23,23 +23,21 @@ const CURRENCY_OPTIONS = (home: string) => {
   const rest = ['USD', 'EUR', 'GBP', 'AUD'].filter((c) => c !== code);
   return [code, ...rest].map((c) => ({ key: c, label: c }));
 };
-import { AppHeader, BottomSheet, Button, DetailRow, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Segmented, Surface, Text } from '~/shared/components/ui';
+import { AppHeader, BottomSheet, Button, Divider, Empty, FundingBar, GradientButton, GradientCard, Label, ListRow, Row, Segmented, Surface, Text } from '~/shared/components/ui';
 import { useTabBarClearance } from '~/shared/components/TabBar';
 import { formatMoney, parseAmount, toMajor } from '~/shared/lib/money';
 import { accountCurrency, sumInHome } from '~/features/accounts/logic/accountCurrency';
 import { accountTailSeen, validateAccountNumber } from '~/features/accounts/logic/dualCurrency';
-import { effectiveAmount, resolveCardId } from '~/features/budget/logic/planning';
+import { resolveCardId } from '~/features/budget/logic/planning';
 import { groupAccounts, isPaired } from '~/features/accounts/logic/accountGroups';
-import { accountLabel, accountName, BANKS, resolveBrand } from '~/shared/data/banks';
+import { accountLabel, BANKS, resolveBrand } from '~/shared/data/banks';
 import { useBrand } from '~/shared/hooks/useBrand';
 import {
   selectAccountLedgers,
   selectCardViews,
-  selectCategoryViews,
   useAppStore,
   type CardView,
 } from '../../src/store/useAppStore';
-import { openingForTarget } from '~/features/accounts/logic/accountLedger';
 import type { Card } from '../../src/db/schema';
 import { smsLogRepo } from '../../src/db/repositories';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -90,7 +88,7 @@ export default function CardsScreen() {
    * form lives here, so "Edit details" from there navigates in with this param
    * rather than the form being duplicated in two places.
    */
-  const { edit, add } = useLocalSearchParams<{ edit?: string; add?: string }>();
+  const { edit, add, req } = useLocalSearchParams<{ edit?: string; add?: string; req?: string }>();
 
   // `formId` null = closed; '' = creating new; an id = editing that entry.
   const [formId, setFormId] = useState<string | null>(add ? '' : (edit ?? null));
@@ -102,9 +100,15 @@ export default function CardsScreen() {
    * here from the account detail — a tab the user has usually already visited —
    * set the param but left the form closed, and "Edit" appeared to do nothing.
    */
+  /*
+   * `req` is a one-off token sent with every "Edit details" request: arriving
+   * back on this already-open screen with the SAME `edit` value (editing the
+   * same account twice, or the param left over from last time) changes
+   * nothing React can see, so the form stayed shut and the button looked dead.
+   */
   React.useEffect(() => {
     if (edit) setFormId(edit);
-  }, [edit]);
+  }, [edit, req]);
 
   /*
    * `?add=1` opens the form ready to create.
@@ -117,8 +121,13 @@ export default function CardsScreen() {
   React.useEffect(() => {
     if (add) setFormId('');
   }, [add]);
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const detailCard = detailId ? state.cards.find((c) => c.id === detailId) : undefined;
+  /*
+   * One account page for the whole app — the same sheet the dashboard opens,
+   * with the balance, the month's statement and what the account funds. This
+   * screen used to open its own older sheet, which showed none of that, so the
+   * same account read differently depending on where it was tapped.
+   */
+  const openAccount = (id: string) => router.push(`/account/${id}`);
 
   /*
    * CONVERTED before summing.
@@ -201,7 +210,7 @@ export default function CardsScreen() {
                 >
                   {cardEntries.map((card) => (
                     <View key={card.id} style={{ width: 260 }}>
-                      <BankCardTile card={card} onPress={() => setDetailId(card.id)} compact />
+                      <BankCardTile card={card} onPress={() => openAccount(card.id)} compact />
                     </View>
                   ))}
                 </ScrollView>
@@ -258,7 +267,7 @@ export default function CardsScreen() {
                           {index > 0 ? (
                             <Divider style={{ marginLeft: 62, marginRight: space.lg }} />
                           ) : null}
-                          <AccountRow view={entry.view} onOpen={() => setDetailId(entry.id)} />
+                          <AccountRow view={entry.view} onOpen={() => openAccount(entry.id)} />
                         </View>
                       ))}
                     </View>
@@ -274,17 +283,6 @@ export default function CardsScreen() {
         <CardFormModal editId={formId || null} onClose={() => setFormId(null)} />
       ) : null}
 
-      {detailCard ? (
-        <DetailModal
-          card={detailCard}
-          view={views.find((v) => v.card.id === detailCard.id)}
-          onClose={() => setDetailId(null)}
-          onEdit={() => {
-            setDetailId(null);
-            setFormId(detailCard.id);
-          }}
-        />
-      ) : null}
     </View>
   );
 }
@@ -335,13 +333,24 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
             {/* Overdrawn reads as a warning — usually a balance not yet set to
                 match the bank, or spending recorded before the money moved. */}
             <Text variant="figureLarge" color={view.balanceMinor < 0 ? colors.danger : undefined}>
-              {formatMoney(view.balanceMinor, { compact: true, currency: heldIn })}
+              {/* Compact rounds 0.62 to "LKR 1"; a small balance shows its cents. */}
+              {formatMoney(view.balanceMinor, {
+                compact: Math.abs(view.balanceMinor) >= 100_000,
+                showDecimals: Math.abs(view.balanceMinor) < 100_000,
+                currency: heldIn,
+              })}
             </Text>
+            {/* An estimate is said so: no bank figure has confirmed it. */}
+            {view.estimated ? (
+              <Text variant="caption" tone="muted">
+                estimated
+              </Text>
+            ) : null}
             {view.committedMinor > 0 ? (
               <Text variant="caption" color={colors.pending}>
                 {formatMoney(view.committedMinor, { compact: true })} to pay
               </Text>
-            ) : (
+            ) : view.estimated ? null : (
               <Text variant="caption" tone="muted">
                 balance
               </Text>
@@ -362,8 +371,8 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
          */
         accessibilityLabel={
           view.committedMinor > 0
-            ? `${label.primary}, ${formatMoney(view.balanceMinor)}, ${formatMoney(view.committedMinor)} to pay. Open details.`
-            : `${label.primary}, ${formatMoney(view.balanceMinor)}. Open details.`
+            ? `${label.primary}, ${formatMoney(view.balanceMinor)}${view.estimated ? ' estimated' : ''}, ${formatMoney(view.committedMinor)} to pay. Open details.`
+            : `${label.primary}, ${formatMoney(view.balanceMinor)}${view.estimated ? ' estimated' : ''}. Open details.`
         }
       />
 
@@ -391,282 +400,6 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
     </View>
   );
 }
-
-/**
- * Detail modal for one entry. A *card* shows its number, CVV and expiry (with
- * the number tap-to-reveal, since it's sensitive); an *account* shows its
- * number, branch, code, and — at the bottom — the categories funded from it.
- */
-function DetailModal({
-  card,
-  view,
-  onClose,
-  onEdit,
-}: {
-  card: Card;
-  view: CardView | undefined;
-  onClose: () => void;
-  onEdit: () => void;
-}) {
-  const { colors, space } = useTheme();
-  const state = useAppStore();
-  const [revealed, setRevealed] = useState(false);
-  const brand = useBrand({ bankId: card.bankId, bankName: card.bankName });
-
-  /**
-   * The categories drawing on this account, each with what it costs a month.
-   *
-   * `view.categoryNames` carries only names, which was all the old list showed.
-   * Resolving the categories properly gives the icon, colour and total that make
-   * the section answer "how much of this account is already spoken for".
-   */
-  /*
-   * Resolved per LINE, not per category.
-   *
-   * Filtering on `category.cardId` was wrong in both directions, because a bill
-   * can override the account its category names:
-   *
-   *   - it MISSED a category reached only by an override. Observed on the
-   *     user's board: a LKR 50,000 grocery budget inside "Living" points at
-   *     Household, so Household funded it — but this listed only "Pet" and the
-   *     grocery money appeared to belong to no account at all.
-   *   - it INVENTED categories for the account named at category level even
-   *     when every line inside had been pointed somewhere else.
-   *
-   * So each category is reduced to the lines that actually resolve here, and
-   * dropped when none do. The total and the count follow those lines rather
-   * than the category's whole summary, which would otherwise report money
-   * belonging to a different account.
-   *
-   * This is the same rule `selectAccountTransfers` and the account detail page
-   * use — three places had to agree and only two did.
-   */
-  // The account's own currency labels the number rows below.
-  const homeCurrency = state.currency;
-
-  const funded = useMemo(
-    () =>
-      selectCategoryViews(state)
-        .map((cv) => {
-          const lines = cv.subcategories.filter((sub) => {
-            const raw = cv.rawSubcategories.find((r) => r.id === sub.id);
-            return resolveCardId(raw?.cardId, cv.category.cardId) === card.id;
-          });
-
-          return {
-            id: cv.category.id,
-            name: cv.category.name,
-            color: cv.category.color,
-            icon: cv.category.icon,
-            totalMinor: lines.reduce((sum, line) => sum + effectiveAmount(line), 0),
-            count: lines.length,
-          };
-        })
-        .filter((cat) => cat.count > 0),
-    [state, card.id],
-  );
-
-  function confirmDelete() {
-    Alert.alert(
-      `Delete ${accountName(card)}?`,
-      'Categories pointing at it will need a new account.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            state.deleteCard(card.id);
-            onClose();
-          },
-        },
-      ],
-    );
-  }
-
-  return (
-    <BottomSheet
-      visible
-      onClose={onClose}
-      title={card.isCard ? 'Card details' : 'Account details'}
-      icon={card.isCard ? 'card-outline' : 'wallet-outline'}
-      iconColor={brand.color}
-      scroll
-      footer={<GradientButton label="Edit details" icon="create-outline" onPress={onEdit} />}
-    >
-          <Row gap={space.md}>
-            <BankLogo brand={brand} size={48} />
-            <View style={{ flex: 1 }}>
-              <Text variant="heading" numberOfLines={1}>
-                {accountLabel(card).primary}
-              </Text>
-              <Text variant="caption" tone="muted">
-                {accountLabel(card).secondary ?? (card.isCard ? 'Card' : 'Account')}
-              </Text>
-            </View>
-          </Row>
-
-          <Surface padded={false}>
-            {card.isCard ? (
-              <>
-                <DetailRow
-                  label="Card number"
-                  value={
-                    card.cardNumber
-                      ? revealed
-                        ? card.cardNumber
-                        : `•••• •••• •••• ${card.cardNumber.slice(-4)}`
-                      : 'Not set'
-                  }
-                  muted={!card.cardNumber}
-                  action={
-                    card.cardNumber
-                      ? { icon: revealed ? 'eye-off-outline' : 'eye-outline', onPress: () => setRevealed((v) => !v) }
-                      : undefined
-                  }
-                />
-                <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="Expiry" value={card.expiry || 'Not set'} muted={!card.expiry} />
-                <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow
-                  label="CVV"
-                  value={card.cvv ? (revealed ? card.cvv : '•••') : 'Not set'}
-                  muted={!card.cvv}
-                />
-              </>
-            ) : (
-              <>
-                {/*
-                  A dual-currency relationship names BOTH numbers, each with its
-                  currency.
-
-                  One row labelled "Account number" is right for the ordinary
-                  account and actively misleading for a relationship holding
-                  two: it shows one of the numbers with nothing to say which
-                  currency it is, while the other — the one a foreign salary
-                  lands in — is invisible.
-
-                  A bank that puts both currencies behind ONE number leaves the
-                  second blank and correctly falls back to the single row:
-                  labelling it by currency would imply a second exists.
-                */}
-                {card.foreignCurrency && card.foreignAccountNumber ? (
-                  <>
-                    <DetailRow
-                      label={`${accountCurrency(card, homeCurrency)} account`}
-                      value={card.accountNumber || 'Not set'}
-                      muted={!card.accountNumber}
-                    />
-                    <Divider style={{ marginHorizontal: space.lg }} />
-                    <DetailRow
-                      label={`${card.foreignCurrency.toUpperCase()} account`}
-                      value={card.foreignAccountNumber}
-                    />
-                  </>
-                ) : card.foreignCurrency ? (
-                  <>
-                    <DetailRow
-                      label="Account number"
-                      value={card.accountNumber || 'Not set'}
-                      muted={!card.accountNumber}
-                    />
-                    <Divider style={{ marginHorizontal: space.lg }} />
-                    <DetailRow
-                      label="Also holds"
-                      value={`${card.foreignCurrency.toUpperCase()} under the same number`}
-                    />
-                  </>
-                ) : (
-                  <DetailRow
-                    label="Account number"
-                    value={card.accountNumber || 'Not set'}
-                    muted={!card.accountNumber}
-                  />
-                )}
-                <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="Bank" value={card.bankName ?? brand.name} />
-                <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow label="Branch" value={card.branch || 'Not set'} muted={!card.branch} />
-                <Divider style={{ marginHorizontal: space.lg }} />
-                <DetailRow
-                  label="Bank code"
-                  value={card.bankCode || 'Not set'}
-                  muted={!card.bankCode}
-                />
-              </>
-            )}
-          </Surface>
-
-          {/* Categories funded from this account — accounts only. */}
-          {!card.isCard ? (
-            <View style={{ gap: space.sm }}>
-              <Label>WHAT THIS FUNDS</Label>
-              {/*
-                Each category with its own icon, colour and monthly total.
-
-                It used to be a list of bare names against one grey glyph, which
-                answered "which categories" but not the question actually being
-                asked here — how much of this account is spoken for, and by what.
-                The figure is what makes the list worth reading.
-              */}
-              {funded.length > 0 ? (
-                <Surface padded={false}>
-                  {funded.map((cat, i) => (
-                    <View key={cat.id}>
-                      {i > 0 ? <Divider style={{ marginHorizontal: space.lg }} /> : null}
-                      <Row
-                        gap={space.md}
-                        style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}
-                      >
-                        <View
-                          style={{
-                            width: 32,
-                            height: 32,
-                            borderRadius: 10,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            backgroundColor: `${cat.color}1A`,
-                          }}
-                        >
-                          <Ionicons
-                            name={(cat.icon as never) ?? 'albums-outline'}
-                            size={16}
-                            color={cat.color}
-                          />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text variant="body" numberOfLines={1}>
-                            {cat.name}
-                          </Text>
-                          <Text variant="caption" tone="muted">
-                            {cat.count} bill{cat.count === 1 ? '' : 's'}
-                          </Text>
-                        </View>
-                        <Text variant="figure" color={cat.color}>
-                          {formatMoney(cat.totalMinor)}
-                        </Text>
-                      </Row>
-                    </View>
-                  ))}
-                </Surface>
-              ) : (
-                <Surface>
-                  <Text variant="caption" tone="muted">
-                    No categories draw from this account yet.
-                  </Text>
-                </Surface>
-              )}
-            </View>
-          ) : null}
-
-          {/* Delete stays in the scroll body, deliberately. A destructive action
-              pinned under the thumb beside the primary one is how accidents
-              happen — reaching it should take a scroll. */}
-          <Button label="Delete" icon="trash-outline" variant="danger" onPress={confirmDelete} />
-    </BottomSheet>
-  );
-}
-
 
 /**
  * Add / edit an account or card. The flow: choose card vs. account, pick the
@@ -931,22 +664,30 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
        * rather than two that must agree.
        */
       currency: currency && currency !== homeCurrency.toUpperCase() ? currency : null,
-      openingBalanceMinor: nextOpeningBalance(),
+      openingBalanceMinor: existing?.openingBalanceMinor ?? 0,
     };
 
-    if (editId) state.updateCard(editId, patch);
-    else state.addCard({ ...patch, sortOrder: state.cards.length });
+    const typed = typedBalance();
+    const savedId = editId
+      ? (state.updateCard(editId, patch), editId)
+      : state.addCard({ ...patch, sortOrder: state.cards.length }).id;
+    if (typed !== null) state.setAccountBalance(savedId, typed);
     onClose();
   }
 
-  /** The opening that makes today's balance read what the user typed. */
-  function nextOpeningBalance(): number {
-    const current = existing?.openingBalanceMinor ?? 0;
-    // Untouched (or a card, which has no balance field): keep what is stored.
-    if (isCard || balanceText.trim() === initialBalanceText.trim()) return current;
-    const target = parseAmount(balanceText) ?? 0;
-    return ledger ? openingForTarget(ledger, current, target) : target;
+  /**
+   * The figure the user typed, when they changed it — else null.
+   *
+   * Recorded as a checkpoint "as of now" (see `setAccountBalance`), not folded
+   * into the opening balance: the ledger anchors to the latest checkpoint, so
+   * an opening shifted backwards would simply be absorbed by the next bank
+   * message's figure, and the user's correction would vanish.
+   */
+  function typedBalance(): number | null {
+    if (isCard || balanceText.trim() === initialBalanceText.trim()) return null;
+    return parseAmount(balanceText) ?? 0;
   }
+
 
   /*
    * The bank list is a STEP inside this sheet, not a sheet of its own.

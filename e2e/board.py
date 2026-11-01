@@ -50,7 +50,7 @@ def _settle_on_dashboard(tries=3):
         if dismiss_keyboard():
             continue
 
-        if "BALANCE" in screen_text():
+        if "LEFT AFTER PLAN" in screen_text():
             return True
 
         if tap("Dashboard"):
@@ -59,7 +59,7 @@ def _settle_on_dashboard(tries=3):
 
         relaunch()
 
-    return "BALANCE" in screen_text() and not _sheet_is_open()
+    return "LEFT AFTER PLAN" in screen_text() and not _sheet_is_open()
 
 
 def _sheet_is_open():

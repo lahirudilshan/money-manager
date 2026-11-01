@@ -601,7 +601,9 @@ function computePlanInsights(views: CategoryView[], period: string): PlanInsight
     },
     // The next thing actually coming up — skip anything already overdue, which
     // has its own louder row above it.
-    nextDue: dueLines.find((line) => line.dueDate != null && !line.overdue) ?? null,
+    // …and anything that costs nothing: a line with no plan and no spending
+    // read "Next: Clothing · LKR 0", which is not a bill coming up.
+    nextDue: dueLines.find((line) => line.dueDate != null && !line.overdue && line.amountMinor > 0) ?? null,
     dueLines,
   };
 }

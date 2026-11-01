@@ -20,6 +20,12 @@ import {
   type Card,
   type Category,
   type AccountTransfer,
+  type AccountMove,
+  type BalanceCheckpoint,
+  type NewBalanceCheckpoint,
+  balanceCheckpoints,
+  type NewAccountMove,
+  accountMoves,
   type CategoryFundingStatus,
   type CategoryState,
   type Funding,
@@ -180,6 +186,14 @@ export const categoryRepo = {
   remove(id: string): void {
     db.delete(categories).where(eq(categories.id, id)).run();
   },
+  /** Hide a category whose lines carry history — see `subcategoryRepo.archive`. */
+  archive(id: string): void {
+    db.update(categories).set({ archivedAt: now(), updatedAt: now() }).where(eq(categories.id, id)).run();
+  },
+  /** Every category, archived ones too — the account ledger still needs their accounts. */
+  allIncludingArchived(): Category[] {
+    return db.select().from(categories).all();
+  },
   /** Persist a new top-level order — powers the board's drag-to-reorder. */
   reorder(orderedIds: readonly string[]): void {
     orderedIds.forEach((id, index) => {
@@ -229,6 +243,33 @@ export const subcategoryRepo = {
   },
   remove(id: string): void {
     db.delete(subcategories).where(eq(subcategories.id, id)).run();
+  },
+  /**
+   * Hide a line instead of deleting it, keeping the payments recorded on it.
+   *
+   * A hard delete cascades to its transactions and monthly states, so removing
+   * a line from the plan rewrote every past month that had paid it — and the
+   * money those payments took out of an account went with them.
+   */
+  archive(id: string): void {
+    db.update(subcategories).set({ archivedAt: now(), updatedAt: now() }).where(eq(subcategories.id, id)).run();
+  },
+  /** Every line, archived ones too — the account ledger still counts their payments. */
+  allIncludingArchived(): Subcategory[] {
+    return db.select().from(subcategories).all();
+  },
+  /** Whether any money was ever recorded against these lines. */
+  hasHistory(ids: readonly string[]): boolean {
+    if (ids.length === 0) return false;
+    const txn = db.select({ id: transactions.id }).from(transactions).where(inArray(transactions.subcategoryId, [...ids])).limit(1).all();
+    if (txn.length > 0) return true;
+    const st = db
+      .select({ id: subcategoryStates.id })
+      .from(subcategoryStates)
+      .where(and(inArray(subcategoryStates.subcategoryId, [...ids]), ne(subcategoryStates.status, 'pending')))
+      .limit(1)
+      .all();
+    return st.length > 0;
   },
   /**
    * Persist a new order for the bills WITHIN one category.
@@ -630,7 +671,18 @@ export const stateRepo = {
     const paidAmount = status === 'paid' ? paidAmountMinor : null;
 
     db.insert(subcategoryStates)
-      .values({ id: createId(), subcategoryId, period, status, ...timestamps, paidAmountMinor: paidAmount })
+      // Stamped from the app's clock: the ledger orders a tick against bank
+      // balances by `updatedAt`, so it must be the moment of the tick.
+      .values({
+        id: createId(),
+        subcategoryId,
+        period,
+        status,
+        ...timestamps,
+        paidAmountMinor: paidAmount,
+        createdAt: now(),
+        updatedAt: now(),
+      })
       .onConflictDoUpdate({
         target: [subcategoryStates.subcategoryId, subcategoryStates.period],
         set: { status, ...timestamps, paidAmountMinor: paidAmount, updatedAt: now() },
@@ -689,6 +741,8 @@ export const stateRepo = {
         period,
         status: input.status,
         ...statusTimestamps,
+        createdAt: now(),
+        updatedAt: now(),
         actualMinor: input.actualMinor ?? null,
         paidAmountMinor,
         note: input.note ?? null,
@@ -802,6 +856,17 @@ export const accountTransferRepo = {
       .run();
   },
 
+  /**
+   * Mark a hand-ticked month as confirmed by the bank: the move that arrived
+   * IS the funding, at the bank's figure. See `accountMoves` in schema.ts.
+   */
+  confirm(cardId: string, period: string, amountMinor: number): void {
+    db.update(accountTransfers)
+      .set({ matchedAmountMinor: amountMinor, amountMinor, updatedAt: now() })
+      .where(and(eq(accountTransfers.cardId, cardId), eq(accountTransfers.period, period)))
+      .run();
+  },
+
   /** Every month's row, for the running account balance. */
   all(): AccountTransfer[] {
     try {
@@ -809,6 +874,56 @@ export const accountTransferRepo = {
     } catch {
       return [];
     }
+  },
+};
+
+/** Bank-confirmed moves between the user's own accounts — see schema.ts. */
+export const accountMoveRepo = {
+  all(): AccountMove[] {
+    try {
+      return db.select().from(accountMoves).where(liveOnly(accountMoves)).all();
+    } catch {
+      // Added by a migration; a launch that predates it must not fail.
+      return [];
+    }
+  },
+
+  /** Records a move once: a re-delivered message (same fingerprint) is ignored. */
+  create(input: Omit<NewAccountMove, 'id'>): boolean {
+    const result = db
+      .insert(accountMoves)
+      .values({ ...input, id: createId() })
+      .onConflictDoNothing()
+      .run() as unknown as { changes?: number };
+    return (result?.changes ?? 1) > 0;
+  },
+
+  remove(id: string): void {
+    db.delete(accountMoves).where(eq(accountMoves.id, id)).run();
+  },
+};
+
+/** Bank-reported (or typed) balances — see `balanceCheckpoints` in schema.ts. */
+export const balanceCheckpointRepo = {
+  all(): BalanceCheckpoint[] {
+    try {
+      return db.select().from(balanceCheckpoints).where(liveOnly(balanceCheckpoints)).all();
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Records a checkpoint once: the same message (fingerprint) adds nothing.
+   * Returns whether a row was added.
+   */
+  create(input: Omit<NewBalanceCheckpoint, 'id'>): boolean {
+    const result = db
+      .insert(balanceCheckpoints)
+      .values({ ...input, id: createId() })
+      .onConflictDoNothing()
+      .run() as unknown as { changes?: number };
+    return (result?.changes ?? 1) > 0;
   },
 };
 

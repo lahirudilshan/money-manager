@@ -25,8 +25,10 @@ import {
   type CategoryGuess,
 } from './merchantSignals';
 import {
+  isGenericTypeLabel,
   matchMerchant,
   payeeAccountKey,
+  transferAmountKey,
   type MatchConfidence,
   type MerchantRule,
 } from './merchantRules';
@@ -407,7 +409,7 @@ function messageNamesSomething(parsed: ParsedSms, hint: CategoryHint | null): bo
    * Checked BEFORE the hint, because these messages also infer a `transfer`
    * hint from the same worthless word.
    */
-  if (GENERIC_TYPE_LABEL.test(parsed.merchant)) return false;
+  if (GENERIC_TYPE_LABEL.test(parsed.merchant) || isGenericTypeLabel(parsed.merchant)) return false;
 
   if (hint) return true;
   return /[a-z]{3,}/i.test(parsed.merchant);
@@ -438,6 +440,13 @@ const GENERIC_TYPE_LABEL =
 function exactAmountScore(a: Minor, b: Minor): number {
   if (a <= 0 || b <= 0) return 0;
   if (a === b) return 1;
+  /*
+   * The plan ROUNDED to the rupee is the same payment. An installment schedule
+   * carries cents (a lease at 122,866.59) and the bank debits whole rupees
+   * (122,867.00) — on the user's device that half-score left the lease's own
+   * debit just under the bar and unsuggested.
+   */
+  if (a % 100 === 0 && (a === Math.round(b / 100) * 100 || a === Math.ceil(b / 100) * 100)) return 1;
   return Math.abs(a - b) <= 100 ? 0.5 : 0;
 }
 
@@ -770,11 +779,25 @@ export function reconcileSms(
     learnedHint !== 'bank_charge' &&
     parsed.kind === 'bank_charge';
 
-  const scoringHint =
-    (learnedHintStale ? null : learnedHint) ??
-    (parsed.kind === 'bank_charge'
-      ? 'bank_charge'
-      : ((vetoed ? null : keywordHint) ?? hintFromGuesses(guesses)));
+  /*
+   * A bare mechanism label ("CEFTS Outward Transfer", 11,000) says HOW money
+   * moved, not what for — the user files these under rent, a sister's
+   * allowance, a house, a vehicle. Its `transfer` hint lit up "Cash / pocket
+   * money" (the hint matches /cash/) on every one, a confident guess with
+   * nothing behind it. With no hint, only real evidence — an amount matching a
+   * planned line, a learned payee account — can suggest a line; otherwise the
+   * draft honestly asks.
+   */
+  const mechanismOnly =
+    isGenericTypeLabel(parsed.merchant) &&
+    (parsed.kind === 'transfer_out' || parsed.kind === 'transfer_in' || parsed.kind === 'other');
+
+  const scoringHint = mechanismOnly
+    ? null
+    : (learnedHintStale ? null : learnedHint) ??
+      (parsed.kind === 'bank_charge'
+        ? 'bank_charge'
+        : ((vetoed ? null : keywordHint) ?? hintFromGuesses(guesses)));
 
   const matches: DraftMatch[] = board.subcategories
     .filter((sub) => sub.type === wantType)
@@ -797,7 +820,7 @@ export function reconcileSms(
    * row without silently choosing which budget line the money comes out of.
    * The user still picks; they just start from a suggestion instead of a blank.
    */
-  const hint = scoringHint ?? weakHintFromGuesses(guesses);
+  const hint = scoringHint ?? (mechanismOnly ? null : weakHintFromGuesses(guesses));
 
   /*
    * A learned rule pointing at a line that still exists and is the right type
@@ -843,9 +866,21 @@ export function reconcileSms(
       ? learnedPayee.subcategoryId
       : null;
 
+  /*
+   * A payee-less transfer the user has filed before at this exact amount from
+   * this account — see `transferAmountKey`.
+   */
+  const amountKey = mechanismOnly ? transferAmountKey(parsed.account, parsed.amountMinor) : '';
+  const amountRule = amountKey ? rules.find((rule) => rule.pattern === amountKey) : undefined;
+  const amountTarget =
+    amountRule?.subcategoryId &&
+    board.subcategories.some((sub) => sub.id === amountRule.subcategoryId && sub.type === wantType)
+      ? amountRule.subcategoryId
+      : null;
+
   const best = matches[0];
   const scoreTarget = best && best.score >= CONFIDENT_MATCH_SCORE ? best.subcategoryId : '';
-  const subcategoryId = learnedTarget ?? payeeTarget ?? scoreTarget;
+  const subcategoryId = learnedTarget ?? payeeTarget ?? amountTarget ?? scoreTarget;
 
   // `exact` is reserved for a learned rule that resolved to a real line: only
   // then can the UI honestly offer a one-tap confirm. A rule whose line was

@@ -1,9 +1,9 @@
 import { create } from 'zustand';
-import { createSmsSlice } from '~/store/smsSlice';
+import { createSmsSlice, recordBalanceCheckpoints } from '~/store/smsSlice';
 import { createActionsSelector, type ActionsOf } from '~/store/selectActions';
 import { buildSchedule, paymentsElapsed, remainingBalance } from '~/features/loans/logic/amortization';
 import { setDisplayCurrency, sumMinor, type Minor } from '~/shared/lib/money';
-import type { AccountTransfer } from '~/db/schema';
+import type { AccountMove, AccountTransfer, BalanceCheckpoint } from '~/db/schema';
 import { faceValue, plannedForAccount, toLedgerLines } from '~/features/accounts/logic/accountLedger';
 import { fromHomeMinor } from '~/features/accounts/logic/accountCurrency';
 import type { PlanId } from '~/features/budget/logic/plans';
@@ -79,12 +79,19 @@ import {
   reconcileSms,
   type SmsDraft,
 } from '~/features/sms/logic/smsReconcile';
-import { merchantKey, planRuleUpsert, type MerchantRule } from '~/features/sms/logic/merchantRules';
+import {
+  isGenericTypeLabel,
+  merchantKey,
+  planRuleUpsert,
+  transferAmountKey,
+  type MerchantRule,
+} from '~/features/sms/logic/merchantRules';
 import { observationsFrom, planCatalogMerge } from '~/features/sms/logic/catalogSync';
 import {
   findGroupForProposal,
   findLineForHint,
   proposalForHint,
+  proposalKeyFor,
 } from '~/features/sms/logic/hintCatalog';
 import type { CategoryHint } from '~/features/sms/logic/smsCategoryHints';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
@@ -113,6 +120,8 @@ import {
   categoryRepo,
   houseRepo,
   accountTransferRepo,
+  accountMoveRepo,
+  balanceCheckpointRepo,
   categoryStateRepo,
   fundingRepo,
   incomeRepo,
@@ -234,6 +243,13 @@ export interface AppState {
     states: SubcategoryState[];
     transactions: Transaction[];
     transfers: AccountTransfer[];
+    /** Bank-confirmed moves between the user's own accounts. */
+    moves: AccountMove[];
+    /** Every line and category, ARCHIVED ones too: their payments still moved money. */
+    lines: Subcategory[];
+    categories: Category[];
+    /** Balances the bank reported (or the user typed) — the ledger's anchors. */
+    checkpoints: BalanceCheckpoint[];
     /** The user's explicit salary-account pick, when they made one. */
     chosenSourceCardId: string | null;
   };
@@ -281,6 +297,12 @@ export interface AppState {
    * there is nothing to persist. Newest first.
    */
   smsDrafts: SmsDraft[];
+  /**
+   * The account each bank message of the last 60 days named — reviewed or not.
+   * What `selectUnknownAccounts` reads: an account the user never added keeps
+   * texting even once its messages have been dealt with.
+   */
+  recentAccountFragments: string[];
 
   /**
    * The learned merchant → line map, mirrored from the database so
@@ -471,6 +493,11 @@ export interface AppState {
    * categories the account funds.
    */
   toggleAccountTransfer: (cardId: string) => void;
+  /**
+   * The user says this account holds `balanceMinor` NOW — from their banking
+   * app. Recorded as a checkpoint the ledger anchors to.
+   */
+  setAccountBalance: (cardId: string, balanceMinor: Minor) => void;
   /**
    * Mark every category an account funds as transferred — one-way, for the
    * automatic confirmation from a matching bank credit. Returns whether
@@ -801,6 +828,68 @@ function repairFeePoisonedMerchantRules(): void {
   }
 }
 
+/**
+ * Teach the transfer-amount tier from transfers the user already filed.
+ *
+ * `transferAmountKey` rules are learned on confirm, so a device that filed its
+ * sister's 11,000 allowance by hand twice before that tier existed would still
+ * get no suggestion for the third. Reading the confirmed queue back fills it.
+ *
+ * Insert-only: an existing rule is never strengthened or re-pointed here, so
+ * running on every launch changes nothing after the first.
+ */
+function learnTransferAmountsFromHistory(): void {
+  const lines = new Set(subcategoryRepo.all().map((sub) => sub.id));
+  const known = new Set(merchantRuleRepo.all().map((rule) => rule.pattern));
+  for (const { raw, subcategoryId } of smsInboxRepo.confirmedWithLine()) {
+    if (!subcategoryId || !lines.has(subcategoryId)) continue;
+    const parsed = parseSms(raw);
+    if (!parsed || !isGenericTypeLabel(parsed.merchant)) continue;
+    // Transfers only — a fee is filed by its own kind, never by its amount.
+    if (parsed.kind !== 'transfer_out' && parsed.kind !== 'transfer_in') continue;
+    const key = transferAmountKey(parsed.account, parsed.amountMinor);
+    if (!key || known.has(key)) continue;
+    const upsert = planRuleUpsert(key, subcategoryId, null, [], true);
+    if (upsert) merchantRuleRepo.apply(upsert);
+    known.add(key);
+  }
+}
+
+/**
+ * Anchor every account to the balances its stored bank messages reported.
+ *
+ * Checkpoints are recorded as messages arrive, so a device that received its
+ * alerts before they existed would otherwise keep its wrong, inferred balances
+ * until the next message for each account. Every message is still on the
+ * device — queue and log — so the history is read back once. Insert-only and
+ * de-duplicated by message, so running it on every launch adds nothing new.
+ */
+function learnBalancesFromHistory(get: () => AppState): void {
+  const entries = smsInboxRepo
+    .everyRawMessage()
+    .map((raw) => ({ raw, sms: parseSms(raw) }))
+    .filter((entry): entry is { raw: string; sms: ParsedSms } => entry.sms !== null);
+  recordBalanceCheckpoints(get, entries);
+}
+
+/**
+ * Re-derive each account's stored "last 4" from the number it belongs to.
+ *
+ * The tail is what several matchers fall back on, and two of the user's were
+ * wrong: Salary (…5584) held its USD leg's 7427, and Online (…6796) an old
+ * 3824. Every message for those accounts then matched nothing by tail.
+ */
+function repairAccountTails(): void {
+  for (const card of cardRepo.all()) {
+    const tail = (card.accountNumber ?? '').replace(/\D/g, '').slice(-4);
+    const foreignTail = (card.foreignAccountNumber ?? '').replace(/\D/g, '').slice(-4);
+    const patch: { last4?: string; foreignLast4?: string } = {};
+    if (tail.length === 4 && card.last4 !== tail) patch.last4 = tail;
+    if (foreignTail.length === 4 && card.foreignLast4 !== foreignTail) patch.foreignLast4 = foreignTail;
+    if (Object.keys(patch).length > 0) cardRepo.update(card.id, patch);
+  }
+}
+
 function repairCategorySortOrder(): void {
   const categories = categoryRepo.all();
   if (!hasSiblingTie(categories)) return;
@@ -888,6 +977,8 @@ function paidAmountFor(state: AppState, subcategoryId: string): Minor | null {
   return faceValue(line);
 }
 
+export { learnTransferAmountsFromHistory, learnBalancesFromHistory, repairAccountTails };
+
 export const useAppStore = create<AppState>((set, get, api) => ({
   ready: false,
   needsOnboarding: false,
@@ -902,7 +993,16 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   fundingTotals: new Map(),
   transactionTotals: new Map(),
   houseTotals: new Map(),
-  history: { states: [], transactions: [], transfers: [], chosenSourceCardId: null },
+  history: {
+    states: [],
+    transactions: [],
+    transfers: [],
+    moves: [],
+    lines: [],
+    categories: [],
+    checkpoints: [],
+    chosenSourceCardId: null,
+  },
   incomes: [],
   loans: [],
   currency: 'LKR',
@@ -915,6 +1015,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   // Premium for now: the paid tier is enabled by default until billing exists.
   plan: 'premium',
   smsDrafts: [],
+  recentAccountFragments: [],
   merchantRules: [],
   catalogSyncEnabled: true,
   catalogSyncedAt: null,
@@ -935,7 +1036,12 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     repairCategorySortOrder();
     repairSubcategorySortOrder();
     repairFeePoisonedMerchantRules();
+    repairAccountTails();
+    learnTransferAmountsFromHistory();
     get().refresh();
+    // Needs the cards loaded (it matches messages to them), hence after refresh.
+    learnBalancesFromHistory(get);
+    get().refreshBoard();
     set({
       ready: true,
       needsOnboarding: settingsRepo.get(SETTINGS_KEYS.onboarded) !== 'true',
@@ -1046,6 +1152,10 @@ export const useAppStore = create<AppState>((set, get, api) => ({
         states: stateRepo.all(),
         transactions: transactionRepo.all(),
         transfers: accountTransferRepo.all(),
+        moves: accountMoveRepo.all(),
+        lines: subcategoryRepo.allIncludingArchived(),
+        categories: categoryRepo.allIncludingArchived(),
+        checkpoints: balanceCheckpointRepo.all(),
         chosenSourceCardId: settingsRepo.get(SETTINGS_KEYS.salaryCardId) ?? null,
       },
       incomes: incomeRepo.all(),
@@ -1637,7 +1747,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
      * `guesses` is the wider read (see core/merchantSignals.ts); taking its
      * best entry means "create the line for me" works for those too.
      */
-    const category = draft.hint ?? draft.guesses[0]?.category ?? null;
+    const category = proposalKeyFor(draft);
 
     const proposal = proposalForHint(category);
     if (!proposal) return null;
@@ -1764,11 +1874,29 @@ export const useAppStore = create<AppState>((set, get, api) => ({
      */
     const line = get().subcategories.find((s) => s.id === subcategoryId);
     if (line && !isOngoing(line.frequency) && billAccumulatesPerHouse(get().houses, line.houseScoped)) {
+      /*
+       * A per-house bill records each PAYMENT as an entry — so only when it is
+       * being marked paid. Saving the sheet with the bill pending used to add an
+       * entry too, and a payment with no figure typed was stored as LKR 0: the
+       * bill read "paid" on screen while no money had moved anywhere.
+       */
+      if (input.status !== 'paid') {
+        get().refreshBoard();
+        return;
+      }
+      const alreadyPaid = transactionRepo
+        .bySubcategoryPeriod(subcategoryId, period)
+        .some((entry) => entry.amountMinor > 0);
+      // Re-saving an already-paid bill without a new figure is not a second payment.
+      if (alreadyPaid && input.actualMinor == null) {
+        get().refreshBoard();
+        return;
+      }
       transactionRepo.create({
         subcategoryId,
         period,
         name: line.name,
-        amountMinor: input.actualMinor ?? 0,
+        amountMinor: input.actualMinor ?? faceValue(line),
         date: input.date ?? new Date(),
         note: input.note ?? null,
         imageUri: input.imageUri ?? null,
@@ -1858,6 +1986,17 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     );
     get().refreshBoard();
     return true;
+  },
+
+  setAccountBalance(cardId, balanceMinor) {
+    balanceCheckpointRepo.create({
+      cardId,
+      balanceMinor,
+      at: new Date(),
+      source: 'manual',
+      fingerprint: null,
+    });
+    get().refreshBoard();
   },
 
   toggleAccountTransfer(cardId) {
@@ -2028,7 +2167,16 @@ export const useAppStore = create<AppState>((set, get, api) => ({
       };
     }
 
-    categoryRepo.remove(id);
+    // Same rule as a line: history keeps the category (and its lines) archived.
+    const lineIds = subcategoryRepo.allIncludingArchived()
+      .filter((sub) => sub.categoryId === id)
+      .map((sub) => sub.id);
+    if (subcategoryRepo.hasHistory(lineIds)) {
+      for (const lineId of lineIds) subcategoryRepo.archive(lineId);
+      categoryRepo.archive(id);
+    } else {
+      categoryRepo.remove(id);
+    }
     get().refreshBoard();
     return { ok: true };
   },
@@ -2180,7 +2328,9 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     get().refreshBoard();
   },
   deleteSubcategory(id) {
-    subcategoryRepo.remove(id);
+    // A line that has paid anything is archived, so its history stays true.
+    if (subcategoryRepo.hasHistory([id])) subcategoryRepo.archive(id);
+    else subcategoryRepo.remove(id);
     get().refreshBoard();
   },
 

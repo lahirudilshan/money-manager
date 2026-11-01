@@ -59,6 +59,8 @@ const HINT_TARGET: Record<string, readonly [string, string]> = {
    */
   transfer: ['living', 'cash'],
   income: ['income', 'salary'],
+  // Interest is income, but it is not the salary — see `proposalKeyFor`.
+  interest: ['income', 'interest'],
   bank_charge: ['bank-fees', 'bank-charges'],
 
   /*
@@ -78,6 +80,7 @@ const HINT_TARGET: Record<string, readonly [string, string]> = {
   entertainment: ['lifestyle', 'entertainment'],
   household: ['living', 'household'],
   insurance: ['health', 'health-insurance'],
+  pet: ['living', 'pet'],
 };
 
 /** A concrete proposal: the group and line a hint would create. */
@@ -220,4 +223,23 @@ export function findGroupForProposal(
     ...(FORMER_CATEGORY_NAMES[proposal.category.name] ?? []),
   ].map(normalise);
   return groups.find((group) => wanted.includes(normalise(group.name))) ?? null;
+}
+
+/**
+ * Which catalog line to offer a draft, by the key `proposalForHint` reads.
+ *
+ * Usually the hint. Bank interest is the exception: it carries the `income`
+ * hint, which proposes "Salary" — so a 306.54 interest credit invited the user
+ * to file it as their salary. It gets the catalog's own "Interest / dividends"
+ * line instead.
+ */
+export function proposalKeyFor(draft: {
+  hint: CategoryHint | null;
+  guesses?: readonly { category: string }[];
+  parsed: { direction: string; merchant: string };
+}): string | null {
+  if (draft.parsed.direction === 'credit' && /\binterest\b|\bInt\.?\s*Pd\b/i.test(draft.parsed.merchant)) {
+    return 'interest';
+  }
+  return draft.hint ?? draft.guesses?.[0]?.category ?? null;
 }

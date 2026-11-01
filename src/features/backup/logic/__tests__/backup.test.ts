@@ -452,12 +452,13 @@ describe('summariseSnapshot table breakdown', () => {
     );
 
     /*
-     * Seven, not five: `account_transfers` and `meter_readings` joined this
+     * Eight, not five: `account_transfers` and `meter_readings` joined this
      * part when the snapshot was found to be missing them entirely — a restore
      * had been silently dropping every transfer between the user's own
-     * accounts.
+     * accounts — and `account_moves` and `balance_checkpoints`, the bank-confirmed
+     * moves between them and the balances the bank reported.
      */
-    expect(history?.tables).toHaveLength(7);
+    expect(history?.tables).toHaveLength(9);
     expect(history?.tables.every((table) => table.count === 0)).toBe(true);
   });
 });

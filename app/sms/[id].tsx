@@ -44,7 +44,7 @@ import type { CatalogSuggestion } from '~/features/sms/logic/catalogSync';
 import {
   findGroupForProposal,
   findLineForHint,
-  proposalForHint,
+  proposalForHint, proposalKeyFor,
 } from '~/features/sms/logic/hintCatalog';
 import { extractStatementBill } from '~/features/sms/logic/smsParser';
 import { accountLabelFor } from '~/features/sms/logic/smsReconcile';
@@ -458,9 +458,10 @@ export default function SmsDraftModal() {
    * bill"), so this never invites the user to duplicate their own board.
    */
   const createTarget = (() => {
-    if (!draft.hint) return null;
-    if (findLineForHint(draft.hint, state.subcategories, state.categories)) return null;
-    return proposalForHint(draft.hint);
+    const key = proposalKeyFor(draft);
+    if (!key) return null;
+    if (findLineForHint(key, state.subcategories, state.categories)) return null;
+    return proposalForHint(key);
   })();
 
   // Whether the new line joins a group the user already has, or brings a new

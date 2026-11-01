@@ -101,7 +101,8 @@ def test_dashboard_lists_upcoming_bills(check):
     mark = now_ms()
     _complete_onboarding_with_amounts()
 
-    check.on_screen("COMING UP", "dashboard has a Coming up section")
+    # Below the hero and the quick actions on a phone-sized screen.
+    check.that(scroll_to("COMING UP", tries=8), "dashboard has a Coming up section")
     check.not_on_screen("Nothing due right now",
                         "does not claim nothing is due while bills are unpaid")
 

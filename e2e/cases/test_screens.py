@@ -173,8 +173,12 @@ def test_fuel_addon(check):
 
     if not check.that(board.open_settings(), "reached Settings"):
         return
+    # Add-ons now live behind one "Add-ons" row (also on the dashboard).
+    if not check.that(scroll_to("Add-ons", tries=8), "Add-ons is listed in settings"):
+        return
+    tap("Add-ons", partial=True, required=True)
     if not check.that(scroll_to("Fuel & vehicles", tries=8),
-                      "the fuel add-on is listed in settings"):
+                      "the fuel add-on is listed under Add-ons"):
         return
 
     check.that("off" in screen_text().lower(),
@@ -189,7 +193,7 @@ def test_dashboard_sections(check):
         return
 
     text = screen_text()
-    check.that("BALANCE" in text, "shows the balance hero")
+    check.that("LEFT AFTER PLAN" in text, "shows the left-after-plan hero")
     check.that("INCOME" in text, "shows income")
     check.that("PLANNED" in text, "shows planned spend")
     check.that("MONEY TO MOVE" in text or "COMING UP" in text,

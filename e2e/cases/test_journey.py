@@ -184,22 +184,13 @@ def test_logging_a_spend_moves_every_figure(check):
 
 
 def test_spent_figure_on_dashboard_matches_the_database(check):
-    """The dashboard's SPENT hero is the planned cost of SETTLED lines.
+    """The dashboard's SPENT hero is money actually SPENT this month.
 
-    It is NOT the sum of logged transactions, which is what this case asserted
-    at first — and the app was right and the test wrong. `paidMinor` sums
-    `monthlyAmount` over the lines whose status is `paid` (see
-    `summariseCategory`), so spending LKR 2,000 against a line planned at 8,000
-    settles it and the hero moves by the full 8,000.
-
-    That is the intended meaning: the board is a FUNDING board, and a settled
-    bill has taken its whole planned amount out of what still has to be moved.
-    The sum of transactions is a different number, checked against the line
-    itself in `test_spending_shows_on_the_line`.
-
-    So this asserts the hero against the same derivation the app uses — the
-    planned amount of the line just settled — which still catches a selector
-    losing or double-counting a settlement.
+    It used to be the planned cost of "settled" lines, so logging 2,000 against
+    an 8,000 grocery budget showed SPENT 8K — and, before that, 0 until the
+    budget was used up. Both misstated what had left the user's accounts. An
+    everyday-spending line now contributes what was logged against it (see
+    `summariseCategory`), so this asserts the 2,000 itself.
     """
     mark = now_ms()
     if not _board(check):
@@ -209,25 +200,15 @@ def test_spent_figure_on_dashboard_matches_the_database(check):
     if not check.that(line is not None, "the board has a budget to spend against"):
         return
 
-    # What the line is PLANNED at — the amount the hero should move by once
-    # spending against it settles it.
-    planned = _one("SELECT planned_minor FROM subcategories "
-                   f"WHERE name = '{line}'")
-
     _add_transaction(2000, line, category)
     relaunch()
 
     if not check.that(spent_total() > 0, "money has been logged"):
         return
 
-    # The hero renders compact and without a currency code.
-    major = round(planned / 100)
-    compact = (f"{round(major / 1000, 1)}".rstrip("0").rstrip(".") + "K"
-               if major >= 1000 else f"{major:,}")
-
     check.on_screen("SPENT", "the dashboard reports a spent figure")
-    check.that(compact in screen_text(),
-               f"SPENT shows {compact}, the planned cost of the settled line")
+    # Dated bills on a fresh board are unpaid, so the logged 2,000 is all of it.
+    check.that("2K" in screen_text(), "SPENT shows 2K, the money actually spent")
     check.no_errors(mark)
 
 

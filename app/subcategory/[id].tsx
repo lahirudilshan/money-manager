@@ -373,7 +373,7 @@ export default function SubcategoryScreen() {
   }
 
   function confirmDelete() {
-    Alert.alert(`Delete ${subcategory!.name}?`, 'This removes it from the category.', [
+    Alert.alert(`Delete ${subcategory!.name}?`, 'This removes it from your plan. Payments already recorded on it stay in your account history.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',

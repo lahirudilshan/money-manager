@@ -86,10 +86,11 @@ def _ordered(cases):
 
 
 def main():
-    wanted = sys.argv[1] if len(sys.argv) > 1 else None
+    # One or more files or case names: `run.py ledger delete-subcategory`.
+    wanted = sys.argv[1:] or None
     cases = load_cases()
     if wanted:
-        cases = [c for c in cases if wanted in (c[0], c[1])]
+        cases = [c for c in cases if c[0] in wanted or c[1] in wanted]
         if not cases:
             print(f"No case matching {wanted!r}. Available:")
             for group, name, _ in load_cases():

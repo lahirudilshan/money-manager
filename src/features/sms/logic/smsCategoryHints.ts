@@ -54,7 +54,9 @@ export type CategoryHint =
   | 'transport'
   | 'entertainment'
   | 'household'
-  | 'insurance';
+  | 'insurance'
+  /** A vet, a pet shop, pet food — "PET CARE ANIMAL HOSPITA…" had no tag at all. */
+  | 'pet';
 
 /**
  * Human label + icon for each hint, for chips and the filter UI.
@@ -92,6 +94,7 @@ export const HINT_META: Record<CategoryHint, { label: string; icon: string }> = 
   household: { label: 'Household', icon: 'home-outline' },
   // The word a policy actually uses for its payment.
   insurance: { label: 'Insurance premium', icon: 'shield-checkmark-outline' },
+  pet: { label: 'Pet care', icon: 'paw-outline' },
 };
 
 /**
@@ -244,10 +247,20 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
    * which matches BILL NAMES. Nothing matched them in a MESSAGE, so every
    * pharmacy and hospital payment arrived with no suggestion at all.
    */
+  /*
+   * Pets, BEFORE health: "PET CARE ANIMAL HOSPITA…" holds the health word
+   * "hospital", and a vet's bill is not the family's medicine.
+   */
+  [
+    'pet',
+    [/\bpet\s*(?:care|shop|food|clinic|world|zone)\b/i, /\banimal\s*(?:hospital|hospita|clinic|care)\b/i, /\bveterinar/i, /\bvet\s*(?:clinic|hospital|care)\b/i],
+  ],
   [
     'health',
     [
-      /\bpharmac/i,
+      /\bphar(?:a)?mac/i,
+      // "Ayana Medicals PVT Ltd" — a pharmacy chain's own word for itself.
+      /\bmedicals\b/i,
       /\bchemist/i,
       /\bhospital\b/i,
       /\bmedical\b/i,
@@ -291,7 +304,13 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
    */
   [
     'atm',
-    [/\batm\b/i, /\bwithdrawal\b/i, /cash withdrawal/i],
+    /*
+     * "ATM" not followed by "POS" in the same sentence: "@ S T S RANASINGHE
+     * KADUWELA. ATM POS Transaction." is a card payment at a fuel station, and
+     * the bare word sent it to Cash / pocket money. `cash withdrawal` still
+     * catches a real withdrawal whatever else the sentence says.
+     */
+    [/\batm\b(?![^.]*\bpos\b)/i, /\bwithdrawal\b/i, /cash withdrawal/i],
   ],
   /*
    * Bank fees, AFTER `atm` but BEFORE `transfer` — both placements matter.
@@ -313,7 +332,18 @@ const HINT_KEYWORDS: [CategoryHint, RegExp[]][] = [
     ],
   ],
   ['transfer', [/\btransfer\b/i, /\bcefts\b/i, /\bslips\b/i, /\bctb\b/i]],
-  ['income', [/\bsalary\b/i, /\bpayroll\b/i, /\bdividend\b/i, /\brefund\b/i]],
+  [
+    'income',
+    [
+      /\bsalary\b/i,
+      /\bpayroll\b/i,
+      /\bdividend\b/i,
+      /\brefund\b/i,
+      // Interest the bank pays: "ref: Interest Capitalise", "Int.Pd:31-08-2026".
+      /\binterest\s*-?\s*(?:capitali[sz]e|credit|paid)/i,
+      /\bInt\.?\s*Pd\b/i,
+    ],
+  ],
 ];
 
 /**
@@ -419,7 +449,7 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
   loan: [/\bloan(?:s)?\b/i, /\blease\b/i, /\bdebt\b/i, /\bcredit\b/i],
   transfer: [/\btransfer(?:s)?\b/i, /\bcash\b/i],
   atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i],
-  income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
+  income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i, /\binterest\b/i],
   bank_charge: [/\bbank\b/i, /\bcharge(?:s)?\b/i, /\bfee(?:s)?\b/i, /\bduty\b/i],
   /*
    * The wider tags, named as a BILL LINE would name itself.
@@ -428,7 +458,7 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
    * "Medicine" or "Doctor" line instead of proposing a new one — the same job
    * the entries above do, for the categories the scorer can now detect.
    */
-  health: [/\bhealth\b/i, /\bmedic(?:al|ine)\b/i, /\bdoctor\b/i, /\bhospital\b/i, /\bpharmac/i],
+  health: [/\bhealth\b/i, /\bmedic(?:al|ine)\b/i, /\bdoctor\b/i, /\bhospital\b/i, /\bphar(?:a)?mac/i],
   // "delivery" and "takeaway" so the "Eating out & delivery" line answers to
   // this tag by every part of its name, not only the first two words.
   dining: [
@@ -449,6 +479,7 @@ const HINT_SELF_WORDS: Record<CategoryHint, RegExp[]> = {
    */
   household: [/\bhousehold\b/i, /\bhome\b(?!\s*food)/i, /\bfurniture\b/i, /\bappliance/i],
   insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpremium\b/i],
+  pet: [/\bpets?\b/i, /\bvet\b/i, /\banimal\b/i, /\bpaw\b/i],
 };
 
 /**

@@ -53,7 +53,8 @@ export type SpendCategory =
   | 'transport'
   | 'entertainment'
   | 'household'
-  | 'insurance';
+  | 'insurance'
+  | 'pet';
 
 /** One piece of evidence found in the message. */
 export interface Signal {
@@ -145,8 +146,9 @@ const BRANDS: [SpendCategory, string[]][] = [
  * categorised at all. This is the layer the old keyword list was missing.
  */
 const VOCABULARY: [SpendCategory, RegExp[]][] = [
+  ['pet', [/\bpet\s*(?:care|shop|food|clinic|world|zone)\b/i, /\banimal\s*(?:hospital|hospita|clinic|care)\b/i, /\bveterinar/i]],
   ['health', [
-    /\bhospital/i, /\bpharmac/i, /\bmedical\b/i, /\bclinic\b/i, /\bdental\b/i,
+    /\bhospital/i, /\bphar(?:a)?mac/i, /\bmedicals\b/i, /\bmedical\b/i, /\bclinic\b/i, /\bdental\b/i,
     /\blab(?:orator)?(?:y|ies)\b/i, /\bmedi[-\s]?care\b/i, /\bnursing\b/i,
     /\bchemist/i, /\bdrug\s*store\b/i, /\bsurgery\b/i, /\bdoctor\b/i, /\bchannel/i,
   ]],
@@ -195,7 +197,8 @@ const VOCABULARY: [SpendCategory, RegExp[]][] = [
   ['insurance', [/\binsurance\b/i, /\bassurance\b/i, /\bpolicy\s*(?:no|premium)\b/i, /\bpremium\b/i]],
   ['telecom', [/\binternet\b(?!\s*banking)/i, /\bbroadband\b/i, /\breload\b/i, /\bpostpaid\b/i, /\bprepaid\b/i]],
   ['subscription', [/\bsubscription\b/i, /\bstreaming\b/i, /\brenewal\b/i]],
-  ['atm', [/\batm\b/i, /\bcash\s*withdrawal\b/i]],
+  // Not "ATM POS Transaction" — that is a card payment at a shop (see smsCategoryHints).
+  ['atm', [/\batm\b(?![^.]*\bpos\b)/i, /\bcash\s*withdrawal\b/i]],
   ['loan', [/\bloan\b/i, /\bleas(?:e|ing)\b/i, /\binstal{1,2}ment\b/i, /\bEMI\b/]],
 ];
 
@@ -479,7 +482,7 @@ export const CATEGORY_SELF_WORDS: Record<SpendCategory, RegExp[]> = {
   atm: [/\batm\b/i, /\bcash\b/i, /\bwithdrawal\b/i, /\bpocket\b/i, /\bspending\b/i],
   income: [/\bsalary\b/i, /\bincome\b/i, /\bwage(?:s)?\b/i, /\bpay\b/i],
   bank_charge: [/\bbank\b[^.]{0,20}\b(?:charge|fee)/i, /\b(?:charge|fee)s?\b/i],
-  health: [/\bhealth\b/i, /\bmedic/i, /\bhospital\b/i, /\bpharmac/i, /\bdoctor\b/i, /\bdental\b/i],
+  health: [/\bhealth\b/i, /\bmedic/i, /\bhospital\b/i, /\bphar(?:a)?mac/i, /\bdoctor\b/i, /\bdental\b/i],
   // The outside-food half — "delivery"/"takeaway" so the line answers to this
   // category by every part of its name. See the groceries note above.
   dining: [
@@ -493,6 +496,7 @@ export const CATEGORY_SELF_WORDS: Record<SpendCategory, RegExp[]> = {
   // "home" must not swallow "Groceries (home food)".
   household: [/\bhousehold\b/i, /\bhome\b(?!\s*food)/i, /\bfurniture\b/i, /\brepairs?\b/i, /\bmaintenance\b/i],
   insurance: [/\binsurance\b/i, /\bassurance\b/i, /\bpolicy\b/i, /\bpremium\b/i],
+  pet: [/\bpets?\b/i, /\bvet\b/i, /\banimal\b/i, /\bpaw\b/i],
 };
 
 /** Whether a budget line plausibly belongs to a guessed category. */

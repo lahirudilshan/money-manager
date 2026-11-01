@@ -17,33 +17,61 @@ vi.mock('expo-sqlite', async () => {
 // build from inside node_modules where the mock above does not reach.
 vi.mock('drizzle-orm/expo-sqlite', async () => import('drizzle-orm/expo-sqlite/driver'));
 
+/*
+ * An in-memory file system, so the real SMS inbox drain (the Shortcuts file)
+ * runs in tests: `globalThis.__mockFiles` maps a file URI to its text.
+ */
 vi.mock('expo-file-system', () => {
+  const files: Map<string, string> = ((globalThis as Record<string, unknown>).__mockFiles ??=
+    new Map<string, string>()) as Map<string, string>;
+  const join = (base: unknown, name?: string) => {
+    const root = typeof base === 'string' ? base : ((base as { uri?: string })?.uri ?? 'file:///app');
+    return name ? `${root.replace(/\/$/, '')}/${name}` : root;
+  };
   class Directory {
-    exists = false;
-    uri = 'file:///app/x';
-    constructor(..._a: unknown[]) {}
+    uri: string;
+    constructor(base?: unknown, name?: string) {
+      this.uri = join(base ?? 'file:///app/Documents', name);
+    }
+    get exists() {
+      return true;
+    }
     create() {}
     list() {
       return [];
     }
   }
   class File {
-    exists = false;
-    uri = 'file:///app/x';
-    constructor(..._a: unknown[]) {}
+    uri: string;
+    constructor(base?: unknown, name?: string) {
+      this.uri = join(base, name);
+    }
+    get exists() {
+      return files.has(this.uri);
+    }
     text() {
-      return Promise.resolve('');
+      return Promise.resolve(files.get(this.uri) ?? '');
     }
     textSync() {
-      return '';
+      return files.get(this.uri) ?? '';
     }
-    write() {}
-    delete() {}
+    write(text: string) {
+      files.set(this.uri, text);
+    }
+    create() {
+      if (!files.has(this.uri)) files.set(this.uri, '');
+    }
+    delete() {
+      files.delete(this.uri);
+    }
+    get size() {
+      return (files.get(this.uri) ?? '').length;
+    }
   }
   return {
     Directory,
     File,
-    Paths: { document: { uri: 'file:///app/Documents/' }, cache: { uri: 'file:///app/Caches/' } },
+    Paths: { document: new Directory('file:///app/Documents'), cache: new Directory('file:///app/Caches') },
   };
 });
 

@@ -29,6 +29,7 @@ import {
   selectTrackerReminders,
   type BuddyReminderView,
   selectTotalIncome,
+  selectUnknownAccounts,
   useAppStore,
   type ReminderView,
 } from '../../src/store/useAppStore';
@@ -57,7 +58,7 @@ const DETECT_WASH_DARK = -0.86;
  * month's overall shape. The full category tree lives on the List tab.
  */
 export default function DashboardScreen() {
-  const { colors, mode, space } = useTheme();
+  const { colors, mode, radius, space } = useTheme();
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -70,6 +71,7 @@ export default function DashboardScreen() {
   const accounts = useMemo(() => selectAccountTransfers(state), [state]);
   const reminders = useMemo(() => selectReminders(state), [state]);
   const loanViews = useMemo(() => selectLoanViews(state), [state]);
+  const unknownAccounts = useMemo(() => selectUnknownAccounts(state), [state]);
   const miniApps = useMemo(() => enabledMiniApps(state.miniApps), [state.miniApps]);
   /** Which add-ons are on, for the picker's switches. */
   const enabledAddOns = useMemo(() => parseEnabled(state.miniApps), [state.miniApps]);
@@ -353,7 +355,10 @@ export default function DashboardScreen() {
             {/* One label in both directions — this is simply income minus
                 expenses, and the sign on the figure says which way it went. */}
             <Row justify="space-between" align="center">
-              <Label color="rgba(255,255,255,0.75)">BALANCE</Label>
+              {/* Income minus the month's plan — NOT money held. Labelled
+                  "Balance" it read as an account balance beside the real ones
+                  on the Accounts screen; this says what it is. */}
+              <Label color="rgba(255,255,255,0.75)">LEFT AFTER PLAN</Label>
               {/* Health is never colour alone: the word and icon carry it too,
                   so it survives greyscale and colour-vision differences. */}
               <Row gap={4}>
@@ -428,7 +433,7 @@ export default function DashboardScreen() {
                   an overspent one, and the signed figure carries that. */}
               <LegendDot
                 shade={0.4}
-                label={`Balance ${ratios.freePct > 0 ? '+' : ''}${ratios.freePct.toFixed(0)}%`}
+                label={`Left ${ratios.freePct > 0 ? '+' : ''}${ratios.freePct.toFixed(0)}%`}
               />
             </Row>
           </View>
@@ -571,6 +576,41 @@ export default function DashboardScreen() {
               </Text>
             </Row>
           </Row>
+
+          {/* Accounts the bank keeps texting about that are not in the app.
+              Moves through them can't be recognised until they are added. */}
+          {unknownAccounts.slice(0, 2).map((account) => (
+            <Pressable
+              key={account.tail}
+              onPress={() => router.push('/(tabs)/cards?add=1')}
+              accessibilityRole="button"
+              accessibilityLabel={`${account.count} messages from account ending ${account.tail}, which is not in the app. Add it.`}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: space.sm,
+                padding: space.md,
+                borderRadius: radius.md,
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+                opacity: pressed ? 0.85 : 1,
+              })}
+            >
+              <Ionicons name="add-circle-outline" size={20} color={colors.accent} />
+              <View style={{ flex: 1 }}>
+                <Text variant="small" style={{ fontWeight: '700' }}>
+                  {account.count} message{account.count === 1 ? '' : 's'} from ••{account.tail.replace('…', '')}
+                </Text>
+                <Text variant="caption" tone="muted">
+                  Not one of your accounts yet. Add it so transfers to it are recognised.
+                </Text>
+              </View>
+              <Text variant="caption" color={colors.accent}>
+                Add
+              </Text>
+            </Pressable>
+          ))}
 
           {smsDrafts.map((draft) => (
             <SmsDraftCard

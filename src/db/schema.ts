@@ -512,6 +512,95 @@ export const accountTransfers = sqliteTable(
   (t) => [uniqueIndex('account_transfers_lookup_idx').on(t.cardId, t.period)],
 );
 
+/**
+ * Money the bank says moved between two of the user's OWN accounts.
+ *
+ * Smart Detect recognises an own-account transfer by its two halves — a debit
+ * on one of the user's accounts and a matching credit on another — and drops
+ * both from the review queue, because moving money is neither income nor
+ * spending. But the money did change accounts, so it is recorded here: one row
+ * per move, with both ends, the real amount and the day.
+ *
+ * The per-month tick in `account_transfers` is the PLAN ("I moved the funding
+ * for Household"); a row here is the bank's FACT. Where an account received
+ * moves in a month, they replace the tick's planned figure in the balance —
+ * otherwise a 120,000 move against a 115,000 plan, or a second top-up later
+ * in the month, would be counted wrong or not at all.
+ */
+export const accountMoves = sqliteTable(
+  'account_moves',
+  {
+    id: text('id').primaryKey(),
+    /** The account the money left; null when the bank did not say. */
+    fromCardId: text('from_card_id').references(() => cards.id, { onDelete: 'set null' }),
+    toCardId: text('to_card_id')
+      .notNull()
+      .references(() => cards.id, { onDelete: 'cascade' }),
+    /** "YYYY-MM" the move happened in. */
+    period: text('period').notNull(),
+    /** What arrived, in the RECEIVING account's currency. */
+    amountMinor: integer('amount_minor').notNull(),
+    /** What left, in the SENDING account's currency, when the bank said. */
+    sentMinor: integer('sent_minor'),
+    date: integer('date', { mode: 'timestamp_ms' }).notNull(),
+    /** Fingerprint of the credit message, so a re-delivered SMS adds nothing. */
+    fingerprint: text('fingerprint'),
+    ...timestamps,
+  },
+  (t) => [
+    index('account_moves_to_idx').on(t.toCardId, t.period),
+    uniqueIndex('account_moves_fingerprint_idx').on(t.fingerprint),
+  ],
+);
+
+export type AccountMove = typeof accountMoves.$inferSelect;
+
+/**
+ * What an account HELD at a moment, as the bank reported it (or the user typed).
+ *
+ * Nearly every bank alert ends with the balance after the transaction — "Avl
+ * Bal 285,825.28". That is the ground truth the rest of the app can only infer:
+ * a missed SMS, an interest credit, a fee, a transfer from an account the app
+ * does not know, a salary that lands somewhere other than where it was planned
+ * — every one of them is already inside the bank's figure. So the account
+ * ledger is anchored to the latest checkpoint and only adds what happened
+ * after it (see `buildLedgers`). Without them, the user's real balances were
+ * off by 116,834 on one account and 1.6 million on another.
+ *
+ * `source` is 'sms' for a bank alert, 'manual' for the "Current balance" field.
+ */
+export const balanceCheckpoints = sqliteTable(
+  'balance_checkpoints',
+  {
+    id: text('id').primaryKey(),
+    cardId: text('card_id')
+      .notNull()
+      .references(() => cards.id, { onDelete: 'cascade' }),
+    /** The balance, in the account's own currency. */
+    balanceMinor: integer('balance_minor').notNull(),
+    /** When it was true — the alert's own date and time. */
+    at: integer('at', { mode: 'timestamp_ms' }).notNull(),
+    source: text('source', { enum: ['sms', 'manual'] }).notNull().default('sms'),
+    /**
+     * What the message was about — "Transfer Out", "KEELLS SUPER". Names the
+     * adjustment line in the account's statement, so a payment still waiting
+     * in Smart Detect reads as what it was rather than as a bare correction.
+     */
+    note: text('note'),
+    /** Fingerprint of the message, so a re-delivered SMS adds nothing. */
+    fingerprint: text('fingerprint'),
+    ...timestamps,
+  },
+  (t) => [
+    index('balance_checkpoints_card_idx').on(t.cardId, t.at),
+    uniqueIndex('balance_checkpoints_fingerprint_idx').on(t.fingerprint),
+  ],
+);
+
+export type BalanceCheckpoint = typeof balanceCheckpoints.$inferSelect;
+export type NewBalanceCheckpoint = typeof balanceCheckpoints.$inferInsert;
+export type NewAccountMove = typeof accountMoves.$inferInsert;
+
 export type AccountTransfer = typeof accountTransfers.$inferSelect;
 export type NewAccountTransfer = typeof accountTransfers.$inferInsert;
 

@@ -21,15 +21,32 @@ import {
   splitItemisedFee,
   type ParsedSms,
 } from '~/features/sms/logic/smsParser';
-import { cardForAccount, orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsReconcile';
-import { payeeAccountKey, planRuleUpsert } from '~/features/sms/logic/merchantRules';
+import { orderDraftsWithFees, reconcileSms } from '~/features/sms/logic/smsReconcile';
+import {
+  isGenericTypeLabel,
+  payeeAccountKey,
+  planRuleUpsert,
+  transferAmountKey,
+} from '~/features/sms/logic/merchantRules';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { matchTransferToAccount } from '~/features/budget/logic/autoTransfer';
 import { periodKey } from '~/features/budget/logic/planning';
-import { isForeignAccountMessage } from '~/features/sms/logic/accountMasks';
+import {
+  accountFragmentOf,
+  isForeignAccountMessage,
+  ownerOfAccount,
+} from '~/features/sms/logic/accountMasks';
+import { alertMoment, checkpointFromSms } from '~/features/accounts/logic/balanceCheckpoints';
+
+/** "YYYY-MM-DD" of a local date, for same-day comparisons. */
+function periodDay(date: Date): string {
+  const d = new Date(date);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
 import { selectAccountTransfers } from '~/store/selectors';
 import {
-  cancelInternalTransfers,
+  pairInternalTransfers,
+  cardPaymentTwins,
   cancelReversals,
   inferOwnAccounts,
   splitMergedMessages,
@@ -45,6 +62,9 @@ import {
 import { onForeground } from '~/shared/lib/network';
 import { notifyDraftsImported } from '~/shared/lib/notifications';
 import {
+  accountMoveRepo,
+  balanceCheckpointRepo,
+  accountTransferRepo,
   merchantRuleRepo,
   meterReadingRepo,
   settingsRepo,
@@ -123,10 +143,116 @@ export type SmsSlice = Pick<
   | 'dismissDraft'
 >;
 
+/**
+ * Anchor each message's account to the balance it reports — see
+ * `balance_checkpoints` in schema.ts. Returns how many were new.
+ */
+export function recordBalanceCheckpoints(
+  get: () => AppState,
+  entries: readonly { raw: string; sms: ParsedSms }[],
+): number {
+  const { cards, currency } = get();
+  let added = 0;
+  for (const entry of entries) {
+    const checkpoint = checkpointFromSms(entry.sms, cards, currency);
+    if (!checkpoint) continue;
+    const isNew = balanceCheckpointRepo.create({
+      cardId: checkpoint.cardId,
+      balanceMinor: checkpoint.balanceMinor,
+      at: checkpoint.at,
+      source: 'sms',
+      note: checkpoint.note,
+      fingerprint: fingerprintMessage(entry.raw),
+    });
+    if (isNew) added += 1;
+  }
+  return added;
+}
+
+/**
+ * Record each own-account transfer pair as a move between the two accounts.
+ *
+ * Both halves are dropped from review — moving money is not spending — but the
+ * money did change accounts, and the balances must say so. Returns the
+ * destination card of each pair's credit half, for the dashboard tick.
+ *
+ * Shared by the drain (pairs in one batch) and the queue clean-up (halves that
+ * arrived in separate drains). A re-delivered message adds nothing: moves are
+ * keyed by the credit message's fingerprint.
+ */
+function recordOwnAccountMoves(
+  get: () => AppState,
+  pairs: readonly { debit: ParsedSms; credit: ParsedSms }[],
+  rawOf: (sms: ParsedSms) => string,
+): Map<ParsedSms, string> {
+  const ownedCards = get().cards.map((card) => ({
+    id: card.id,
+    accountNumber: card.accountNumber,
+    last4: card.last4,
+    foreignAccountNumber: card.foreignAccountNumber,
+    foreignLast4: card.foreignLast4,
+  }));
+  const destinations = new Map<ParsedSms, string>();
+  for (const pair of pairs) {
+    const to = ownerOfAccount(ownedCards, accountFragmentOf(pair.credit));
+    if (!to) continue;
+    const from = ownerOfAccount(ownedCards, accountFragmentOf(pair.debit));
+    const when = alertMoment(pair.credit.date, pair.credit.time) ?? new Date();
+    accountMoveRepo.create({
+      fromCardId: from && from.id !== to.id ? from.id : null,
+      toCardId: to.id,
+      period: periodKey(when),
+      amountMinor: pair.credit.amountMinor,
+      sentMinor: pair.debit.amountMinor,
+      date: when,
+      fingerprint: fingerprintMessage(rawOf(pair.credit)),
+    });
+    destinations.set(pair.credit, to.id);
+  }
+  // A move changes two balances and imports nothing, so callers that refresh
+  // only "when something was queued" would leave both stale.
+  if (destinations.size > 0) get().refreshBoard();
+  return destinations;
+}
+
+/**
+ * Decide whether a confirmed move into an account IS its monthly funding.
+ *
+ * It is when it covers what was asked — moving MORE than the plan is the
+ * funding done; a small top-up is not. Then:
+ *   - a month still pending is ticked, at the bank's figure;
+ *   - a month the user already ticked by hand is CONFIRMED: the tick takes the
+ *     bank's figure, and the ledger counts the move instead of the plan.
+ * Anything smaller is an extra top-up, counted on its own beside the tick.
+ */
+function markFundedByMove(
+  get: () => AppState,
+  cardId: string,
+  amountMinor: number,
+  period: string,
+  pending: readonly { cardId: string; toTransferMinor: number }[],
+): boolean {
+  const tick = accountTransferRepo.byPeriod(period).get(cardId);
+  if (tick?.status === 'transferred') {
+    // Already confirmed by an earlier move: this one is extra.
+    if (tick.matchedAmountMinor != null) return false;
+    if (amountMinor < (tick.amountMinor ?? 0)) return false;
+    accountTransferRepo.confirm(cardId, period, amountMinor);
+    get().refreshBoard();
+    return true;
+  }
+  if (period !== get().period) return false;
+  const row = pending.find((account) => account.cardId === cardId);
+  if (!row || row.toTransferMinor <= 0 || amountMinor < row.toTransferMinor) return false;
+  return get().markAccountTransferred(cardId, amountMinor);
+}
+
 export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, get) => ({
   ingestSmsText(text) {
     const parsed = parseSms(text);
     if (!parsed) return null;
+    // A pasted message anchors its account exactly as a drained one does.
+    recordBalanceCheckpoints(get, [{ raw: parsed.raw, sms: parsed }]);
 
     /*
      * Persist BEFORE building the draft.
@@ -440,10 +566,22 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       return byWhen !== 0 ? byWhen : a.row.receivedAt.getTime() - b.row.receivedAt.getTime();
     });
 
-    const survivors = new Set(cancelInternalTransfers(ordered.map((entry) => entry.sms), ownAccounts));
+    const orderedSms = ordered.map((entry) => entry.sms);
+    const internalPairs = pairInternalTransfers(orderedSms, ownAccounts);
+    const paired = new Set(internalPairs.flatMap((pair) => [pair.debit, pair.credit]));
+    // A card bill paid twice over in the queue — the bank's transfer and the
+    // card's own confirmation of it. See `cardPaymentTwins`.
+    const twins = cardPaymentTwins(orderedSms);
+    const survivors = new Set(orderedSms.filter((sms) => !paired.has(sms) && !twins.has(sms)));
     for (const entry of ordered) {
       if (!survivors.has(entry.sms)) doomed.add(entry.row.id);
     }
+    // The halves met only now, in the queue: record the move they describe.
+    const moveDestination = recordOwnAccountMoves(
+      get,
+      internalPairs,
+      (sms) => ordered.find((entry) => entry.sms === sms)?.row.raw ?? sms.raw,
+    );
 
     /*
      * Auto-mark before retiring, exactly as the drain does.
@@ -466,6 +604,18 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     for (const entry of ordered) {
       if (survivors.has(entry.sms)) continue;
       if (entry.sms.direction !== 'credit') continue;
+
+      const destination = moveDestination.get(entry.sms);
+      if (destination) {
+        markFundedByMove(
+          get,
+          destination,
+          entry.sms.amountMinor,
+          entry.sms.date ? entry.sms.date.slice(0, 7) : get().period,
+          pendingAccounts,
+        );
+        continue;
+      }
 
       const match = matchTransferToAccount(
         {
@@ -539,6 +689,13 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
    * between is picked up instead of the draft being stuck with a stale guess.
    */
   loadSmsDrafts() {
+    set({
+      recentAccountFragments: smsInboxRepo
+        .recentRawMessages(60)
+        .map((raw) => parseSms(raw))
+        .filter((sms): sms is ParsedSms => sms !== null)
+        .map((sms) => accountFragmentOf(sms)),
+    });
     const { subcategories, categories, cards, merchantRules, currency, usdRate } = get();
 
     /*
@@ -698,6 +855,14 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         );
 
         /*
+         * Every alert that reports the account's balance anchors it — whatever
+         * happens to the message next. A reversal pair, an own-account
+         * transfer, an auto-filed fee: all are dropped from review, and all
+         * still state what the account holds.
+         */
+        if (recordBalanceCheckpoints(get, movements)) get().refreshBoard();
+
+        /*
          * Messages the parser did not understand are counted here, since they
          * never reach `ingestSmsText` below.
          *
@@ -833,8 +998,23 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         );
 
         const afterReversals = cancelReversals(movements.map((entry) => entry.sms));
-        const surviving = cancelInternalTransfers(afterReversals, ownAccounts);
+        const internalPairs = pairInternalTransfers(afterReversals, ownAccounts);
+        const pairedHalves = new Set(internalPairs.flatMap((pair) => [pair.debit, pair.credit]));
+        const twins = cardPaymentTwins(afterReversals);
+        const surviving = afterReversals.filter((sms) => !pairedHalves.has(sms) && !twins.has(sms));
         const keep = new Set(surviving);
+
+        /*
+         * Record each own-account move: money left one account and arrived in
+         * another. Both halves are dropped from review (it is not spending),
+         * but the balances still have to move — without this, a 120,000 move
+         * to the household account changed neither account in the app.
+         */
+        const moveDestination = recordOwnAccountMoves(
+          get,
+          internalPairs,
+          (sms) => movements.find((entry) => entry.sms === sms)?.raw ?? sms.raw,
+        );
 
         // Both halves of an internal transfer are dropped silently — no row, no
         // draft. They are not income and not spend, so there is nothing for the
@@ -873,6 +1053,29 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
           if (keep.has(entry.sms)) continue;
           if (entry.sms.direction !== 'credit') continue;
 
+          /*
+           * A confirmed move into an account still waiting for its funding
+           * ticks that account — when it covers what was asked. Moving MORE
+           * than the plan (120,000 against 115,000) is the funding done; a
+           * small top-up is not, and leaves the row pending. The destination
+           * is known from the account digits, so there is no guessing here.
+           */
+          const destination = moveDestination.get(entry.sms);
+          if (destination) {
+            if (
+              markFundedByMove(
+                get,
+                destination,
+                entry.sms.amountMinor,
+                entry.sms.date ? entry.sms.date.slice(0, 7) : get().period,
+                pendingAccounts,
+              )
+            ) {
+              autoMarked.set(entry.sms, destination);
+            }
+            continue;
+          }
+
           const match = matchTransferToAccount(
             {
               account: entry.sms.account,
@@ -900,9 +1103,11 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
               CHANGED the board. "Own-account transfer" alone would leave the
               user unable to explain why a row ticked itself.
             */
-            reason: marked
-              ? 'Own-account transfer — matched money to move, marked as moved'
-              : 'Own-account transfer — not income or spend',
+            reason: twins.has(entry.sms)
+              ? "Card payment — kept the card's own message for it"
+              : marked
+                ? 'Own-account transfer — matched money to move, marked as moved'
+                : 'Own-account transfer — not income or spend',
             amountMinor: entry.sms.amountMinor,
             merchant: entry.sms.merchant,
             kind: entry.sms.kind,
@@ -1195,7 +1400,18 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      * and the PERIOD it counts toward are derived from the one value — they
      * disagreed before only because each branch re-derived them separately.
      */
-    const occurredAt = overrides?.date ?? (draft.parsed.date ? new Date(draft.parsed.date) : new Date());
+    /*
+     * The message's own moment — its date AND time, local. `new Date(date)`
+     * read a bare ISO date as UTC midnight, which loses the time (so a payment
+     * could not be placed before or after the balance its own alert reports)
+     * and lands on the previous day anywhere west of Greenwich. A date the user
+     * picked keeps the message's time when it is the same day.
+     */
+    const messageMoment = alertMoment(draft.parsed.date, draft.parsed.time);
+    const occurredAt =
+      overrides?.date && !(messageMoment && periodDay(overrides.date) === periodDay(messageMoment))
+        ? overrides.date
+        : (messageMoment ?? overrides?.date ?? new Date());
     const occurredPeriod = periodKey(occurredAt);
 
     /*
@@ -1249,7 +1465,9 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      */
     const category = target && get().categories.find((c) => c.id === target.categoryId);
     const lineCardId = target?.cardId ?? category?.cardId ?? null;
-    const messageCardId = cardForAccount(draft.parsed.account ?? '', get().cards)?.id ?? null;
+    // Matched on full numbers (and masks), not the stored tail — a stale tail
+    // sent the user's Salary (…5584) and Online (…6796) messages nowhere.
+    const messageCardId = ownerOfAccount(get().cards, accountFragmentOf(draft.parsed))?.id ?? null;
     const paymentCardId = messageCardId && messageCardId !== lineCardId ? messageCardId : null;
 
     /*
@@ -1299,6 +1517,13 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       // account.
       (reversed ||
         paymentCardId !== null ||
+        /*
+         * A dated bill that already holds ENTRIES this month: its total is the
+         * sum of those entries (see `billActual`), so writing this payment as
+         * the month's typed actual left it out of the board entirely — a
+         * Groceries bill with a 2,000 entry ignored a 1,200 card payment.
+         */
+        transactionRepo.bySubcategoryPeriod(target.id, occurredPeriod).length > 0 ||
         target.frequency === 'ongoing' ||
         /*
          * A house-scoped bill on a multi-house board accumulates too.
@@ -1400,6 +1625,25 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      * bought, while an account only says who was paid, and the same account can
      * receive a rent payment one month and a loan repayment the next.
      */
+    /*
+     * A payee-less transfer is learned by its amount from its account instead —
+     * see `transferAmountKey`. Not for a fee row, a split, or a house filing,
+     * for the same reasons as the merchant rule above.
+     */
+    if (
+      !isFeeRow &&
+      !filedUnder &&
+      !splits &&
+      (draft.parsed.kind === 'transfer_out' || draft.parsed.kind === 'transfer_in') &&
+      isGenericTypeLabel(draft.parsed.merchant)
+    ) {
+      const key = transferAmountKey(draft.parsed.account, draft.parsed.amountMinor);
+      const amountUpsert = key
+        ? planRuleUpsert(key, subcategoryId, null, get().merchantRules, true)
+        : null;
+      if (amountUpsert) merchantRuleRepo.apply(amountUpsert);
+    }
+
     const payeeAccount = draft.parsed.payeeAccount;
     if (payeeAccount && !draft.parsed.merchant) {
       const payeeUpsert = planRuleUpsert(

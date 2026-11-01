@@ -48,7 +48,9 @@ export type MovementKind =
   | 'transfer_out'
   | 'bill'
   | 'spend'
-  | 'credit';
+  | 'credit'
+  /** The gap between what the app worked out and what the bank reported. */
+  | 'adjustment';
 
 export interface Movement {
   cardId: string;
@@ -90,6 +92,12 @@ export interface LedgerState {
   actualMinor: Minor | null;
   /** What the tick cost, frozen at the time; null on older rows. */
   paidAmountMinor?: Minor | null;
+  /**
+   * When the payment happened, when known — a bill confirmed from a bank SMS
+   * happened at the message's time, not when the user tapped confirm (which
+   * would put it AFTER the bank's balance that already includes it).
+   */
+  eventAt?: Date | null;
   updatedAt?: Date | null;
 }
 
@@ -119,6 +127,29 @@ export interface LedgerTransfer {
   transferredAt: Date | null;
 }
 
+/** What an account held at a moment — the bank's own figure. */
+export interface LedgerCheckpoint {
+  cardId: string;
+  /** In the account's own currency. */
+  balanceMinor: Minor;
+  at: Date;
+  source?: 'sms' | 'manual';
+  /** What the bank's message was about, for the statement line. */
+  note?: string | null;
+}
+
+/** A move the bank confirmed between two of the user's accounts. */
+export interface LedgerMove {
+  fromCardId: string | null;
+  toCardId: string;
+  period: string;
+  /** What arrived, in the receiving account's currency. */
+  amountMinor: Minor;
+  /** What left, in the sending account's currency, when known. */
+  sentMinor: Minor | null;
+  date: Date | null;
+}
+
 export interface LedgerIncome {
   id: string;
   name: string;
@@ -134,6 +165,10 @@ export interface LedgerInput {
   states: readonly LedgerState[];
   transactions: readonly LedgerTransaction[];
   transfers: readonly LedgerTransfer[];
+  /** Bank-confirmed moves between the user's own accounts. Optional for callers that predate them. */
+  moves?: readonly LedgerMove[];
+  /** Balances the bank reported (or the user typed), each true at a moment. */
+  checkpoints?: readonly LedgerCheckpoint[];
   incomes: readonly LedgerIncome[];
   /** Where moved money comes FROM — usually the salary account. */
   sourceCardId: string | null;
@@ -361,30 +396,93 @@ export function buildLedgers(input: LedgerInput): Map<string, AccountLedger> {
       kind: income ? 'income' : 'bill',
       amountMinor: (income ? 1 : -1) * input.toAccount(amount, line.cardId),
       label: line.name,
-      date: state.updatedAt ?? null,
+      date: state.eventAt ?? state.updatedAt ?? null,
       subcategoryId: line.id,
     });
   }
 
-  // ── Transfers: the dashboard tick, in to the account and out of the source ─
+  /*
+   * Accounts the bank REPORTS on: at least one alert stated their balance.
+   * For these the ledger counts facts only — what the bank confirmed, what
+   * the user recorded — and none of the inferences that fill the gaps for an
+   * account the app never hears about (salary assumed to land, a tick valued
+   * at the plan). Those inferences are what put the user's salary account
+   * 1.6 million out: the salary never lands there.
+   */
+  const bankReported = new Set(
+    (input.checkpoints ?? []).filter((cp) => cp.source !== 'manual').map((cp) => cp.cardId),
+  );
+
+  // ── Moves the bank confirmed between the user's own accounts ─────────────
   const movedThisMonth = new Set<string>();
+  /** "cardId|period|amount" of every confirmed move, to find a tick it confirmed. */
+  const confirmedInto = new Set<string>();
+  for (const move of input.moves ?? []) {
+    movedThisMonth.add(move.period);
+    confirmedInto.add(`${move.toCardId}|${move.period}|${move.amountMinor}`);
+    push({
+      cardId: move.toCardId,
+      period: move.period,
+      kind: 'transfer_in',
+      amountMinor: move.amountMinor,
+      label: 'Money moved in',
+      date: move.date,
+    });
+    if (move.fromCardId) {
+      const sent =
+        move.sentMinor ??
+        input.toAccount(input.toHome(move.amountMinor, move.toCardId), move.fromCardId);
+      push({
+        cardId: move.fromCardId,
+        period: move.period,
+        kind: 'transfer_out',
+        amountMinor: -sent,
+        label: 'Money moved out',
+        date: move.date,
+      });
+    }
+  }
+
+  // ── Transfers: the dashboard tick, in to the account and out of the source ─
   for (const transfer of transfers) {
     if (transfer.status !== 'transferred') continue;
     movedThisMonth.add(transfer.period);
     if (transfer.cardId === input.sourceCardId) continue; // money already there
+    /*
+     * The bank's record wins over the plan. A tick is valued at the plan; when
+     * a confirmed move IS that month's funding — the tick carries its amount
+     * as `matchedAmountMinor` — the move already moved the money, and counting
+     * the tick too would move it twice. A smaller top-up later in the month
+     * confirms nothing and is counted beside the tick, not instead of it.
+     */
+    if (
+      transfer.matchedAmountMinor != null &&
+      confirmedInto.has(`${transfer.cardId}|${transfer.period}|${transfer.matchedAmountMinor}`)
+    ) {
+      continue;
+    }
     const arrived =
       transfer.amountMinor ??
       transfer.matchedAmountMinor ??
       input.toAccount(plannedForAccount(lines, transfer.cardId, transfer.period), transfer.cardId);
-    push({
-      cardId: transfer.cardId,
-      period: transfer.period,
-      kind: 'transfer_in',
-      amountMinor: arrived,
-      label: 'Money moved in',
-      date: transfer.transferredAt,
-    });
-    if (input.sourceCardId) {
+    /*
+     * A tick is a GUESS about money moving: the plan, from the assumed salary
+     * account, at the moment the user tapped. An account the bank reports on
+     * gets the fact instead — its credit alert carries the new balance — so
+     * the guess would only count the move a second time. On the user's phone
+     * the tick came three minutes AFTER the bank's alert and doubled 294,534.
+     */
+    if (!bankReported.has(transfer.cardId)) {
+      push({
+        cardId: transfer.cardId,
+        period: transfer.period,
+        kind: 'transfer_in',
+        amountMinor: arrived,
+        label: 'Money moved in',
+        date: transfer.transferredAt,
+      });
+    }
+    if (input.sourceCardId && !bankReported.has(input.sourceCardId)) {
       const home = input.toHome(arrived, transfer.cardId);
       push({
         cardId: input.sourceCardId,
@@ -412,6 +510,8 @@ export function buildLedgers(input: LedgerInput): Map<string, AccountLedger> {
   );
   for (const income of incomes) {
     if (!income.isActive || !income.cardId) continue;
+    // Inferred arrival, never for an account the bank reports on — see ticks.
+    if (bankReported.has(income.cardId)) continue;
     if (boardIncomeKeys.has(`${income.name.trim().toLowerCase()}:${income.amountMinor}`)) continue;
     const account = accountById.get(income.cardId);
     if (!account) continue;
@@ -428,20 +528,88 @@ export function buildLedgers(input: LedgerInput): Map<string, AccountLedger> {
     }
   }
 
+  // ── Anchor to the bank's own balances ─────────────────────────────────────
+  /*
+   * Everything above is inferred: a salary assumed to land, a tick valued at
+   * its plan, a payment attributed to the line's account. The bank's reported
+   * balance is the fact. At each checkpoint the gap between the two is booked
+   * as an adjustment, so the account holds exactly what the bank said at that
+   * moment and only what happened AFTER it is added on top. Booking a movement
+   * rather than replacing the figure keeps every month a statement that adds
+   * up, with the correction visible as its own line.
+   */
+  const byCard = new Map<string, Movement[]>();
+  for (const m of movements) {
+    const list = byCard.get(m.cardId);
+    if (list) list.push(m);
+    else byCard.set(m.cardId, [m]);
+  }
+  const checkpointsByCard = new Map<string, LedgerCheckpoint[]>();
+  for (const cp of input.checkpoints ?? []) {
+    if (!accountById.has(cp.cardId)) continue;
+    const list = checkpointsByCard.get(cp.cardId);
+    if (list) list.push(cp);
+    else checkpointsByCard.set(cp.cardId, [cp]);
+  }
+
   // ── Fold into per-account ledgers ─────────────────────────────────────────
   const result = new Map<string, AccountLedger>();
   for (const account of accounts) {
-    result.set(account.id, { cardId: account.id, balanceMinor: account.openingBalanceMinor, movements: [] });
-  }
-  for (const m of movements) {
-    const ledger = result.get(m.cardId)!;
-    ledger.movements.push(m);
-    ledger.balanceMinor += m.amountMinor;
+    const own = (byCard.get(account.id) ?? []).slice().sort((a, b) => timeOf(a) - timeOf(b));
+    const anchors = (checkpointsByCard.get(account.id) ?? [])
+      .slice()
+      .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+    const ledger: AccountLedger = { cardId: account.id, balanceMinor: account.openingBalanceMinor, movements: [] };
+
+    let i = 0;
+    for (const anchor of anchors) {
+      const at = new Date(anchor.at).getTime();
+      // Everything up to and including the anchor's moment is inside its figure.
+      while (i < own.length && timeOf(own[i]) <= at) {
+        ledger.movements.push(own[i]);
+        ledger.balanceMinor += own[i].amountMinor;
+        i += 1;
+      }
+      const gap = anchor.balanceMinor - ledger.balanceMinor;
+      if (gap !== 0) {
+        const period = periodKey(new Date(anchor.at));
+        ledger.movements.push({
+          cardId: account.id,
+          period,
+          kind: 'adjustment',
+          amountMinor: gap,
+          label:
+            anchor.source === 'manual'
+              ? 'Set to your balance'
+              : anchor.note
+                ? `${anchor.note} (per bank)`
+                : 'Matched to bank balance',
+          date: new Date(anchor.at),
+        });
+        ledger.balanceMinor = anchor.balanceMinor;
+      }
+    }
+    for (; i < own.length; i += 1) {
+      ledger.movements.push(own[i]);
+      ledger.balanceMinor += own[i].amountMinor;
+    }
+    result.set(account.id, ledger);
   }
   for (const ledger of result.values()) {
     ledger.movements.sort(compareMovements);
   }
   return result;
+}
+
+/**
+ * When a movement happened, for ordering against a checkpoint. An undated one
+ * (an inferred salary, a tick from before ticks were dated) sits at the start
+ * of its month — the earliest it can have happened.
+ */
+function timeOf(m: Movement): number {
+  if (m.date) return new Date(m.date).getTime();
+  const [year, month] = m.period.split('-').map(Number);
+  return new Date(year, month - 1, 1).getTime();
 }
 
 /** Newest first: by month, then by date, undated last within a month. */

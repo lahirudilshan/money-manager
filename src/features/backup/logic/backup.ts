@@ -92,6 +92,10 @@ export const SNAPSHOT_TABLES = [
    * silently dropped every transfer between the user's own accounts.
    */
   'account_transfers',
+  // Bank-confirmed moves between the user's own accounts (references cards).
+  'account_moves',
+  // Bank-reported balances the ledger is anchored to (references cards).
+  'balance_checkpoints',
   'meter_readings',
   'vehicle_services',
   // References vehicle_services.
@@ -640,6 +644,8 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
       'fundings',
       'fuel_entries',
       'account_transfers',
+      'account_moves',
+      'balance_checkpoints',
       'meter_readings',
     ],
   },

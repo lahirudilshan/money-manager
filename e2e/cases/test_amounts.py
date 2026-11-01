@@ -197,7 +197,8 @@ def test_account_detail_matches_its_row(check):
         return
     tap(nickname, required=True)
 
-    check.on_screen("WHAT THIS FUNDS", "account detail shows what it funds")
+    # Below the BALANCE statement, which leads the sheet.
+    check.that(scroll_to("WHAT THIS FUNDS", tries=8), "account detail shows what it funds")
     # The section must not be empty for an account the dashboard is asking
     # money for — the exact contradiction that shipped.
     check.not_on_screen(
@@ -215,7 +216,7 @@ def test_account_detail_matches_its_row(check):
         WHERE k.nickname = '{nickname}' AND s.type != 'income' AND s.archived_at IS NULL
         """
     ):
-        check.on_screen(name, f"{nickname} detail names {name}")
+        check.that(exists(name) or scroll_to(name, tries=4), f"{nickname} detail names {name}")
 
     check.no_errors(mark)
 

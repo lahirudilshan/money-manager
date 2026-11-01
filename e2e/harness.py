@@ -652,12 +652,42 @@ def start_onboarding(wait=2.0):
     return exists("Where do you bank?")
 
 
+#: A DEVELOPMENT build cold-starts on a blank screen until it is told where
+#: Metro is — it does not reopen the last server by itself. Every launch in this
+#: harness therefore follows up with the dev-client link; on a build that
+#: bundles its own JS the link is simply ignored.
+DEV_CLIENT_URL = os.environ.get(
+    "DEV_CLIENT_URL",
+    "exp+money-manager://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081",
+)
+
+
+def _point_at_metro():
+    """Relaunch the app straight into the dev-client link — ONE JS load.
+
+    Opening the link on an app that is already loading its bundle makes the
+    development build reload mid-mount, which trips an Expo native-view
+    assertion (`ExpoFabricView.injectInitializer`) and kills the app: five such
+    crashes in one suite run. Terminating first means the link itself launches
+    the app, and the bundle loads once.
+    """
+    if not UDID:
+        return
+    subprocess.run(["xcrun", "simctl", "terminate", UDID, BUNDLE], capture_output=True)
+    time.sleep(1)
+    subprocess.run(["xcrun", "simctl", "openurl", UDID, DEV_CLIENT_URL],
+                   capture_output=True)
+    time.sleep(8)
+
+
+
 def relaunch(wait=8):
     req("POST", f"/session/{sid()}/execute/sync",
         {"script": "mobile: terminateApp", "args": [{"bundleId": BUNDLE}]})
     time.sleep(2)
     req("POST", f"/session/{sid()}/execute/sync",
         {"script": "mobile: launchApp", "args": [{"bundleId": BUNDLE}]})
+    _point_at_metro()
     time.sleep(wait)
     invalidate_source()
 
@@ -680,6 +710,7 @@ def fresh_install(wait=14):
             shell=True, capture_output=True)
     req("POST", f"/session/{sid()}/execute/sync",
         {"script": "mobile: launchApp", "args": [{"bundleId": BUNDLE}]})
+    _point_at_metro()
     time.sleep(wait)
     invalidate_source()
     # The database is gone, so no snapshot is loaded — the next request for one
@@ -724,6 +755,7 @@ def snapshot_db(name):
                            capture_output=True)
     req("POST", f"/session/{sid()}/execute/sync",
         {"script": "mobile: launchApp", "args": [{"bundleId": BUNDLE}]})
+    _point_at_metro()
     time.sleep(6)
     invalidate_source()
     # What was just saved is exactly what the device holds, so the case that
@@ -766,6 +798,7 @@ def restore_db(name, wait=9):
 
     req("POST", f"/session/{sid()}/execute/sync",
         {"script": "mobile: launchApp", "args": [{"bundleId": BUNDLE}]})
+    _point_at_metro()
     time.sleep(wait)
     invalidate_source()
     _device.update(snapshot=name, dirty=False)

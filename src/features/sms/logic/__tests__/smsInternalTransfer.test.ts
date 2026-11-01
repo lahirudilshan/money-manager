@@ -254,3 +254,20 @@ describe('pairing when one side prints no time', () => {
     expect(cancelInternalTransfers(pair, ['6796'])).toHaveLength(2);
   });
 });
+
+describe('pairInternalTransfers', () => {
+  it('returns each own-account transfer as the debit that left and the credit that arrived', async () => {
+    const { pairInternalTransfers } = await import('../smsInbox');
+    const { parseSms } = await import('../smsParser');
+    const out = parseSms(
+      'Your A/C No: ********7068 is debited with LKR120,000.00 on 25 NOV 2026 ref: Outward CEFT Transfer. Your bal is LKR207,659.00. If unauthorized call 0112350035',
+    )!;
+    const into = parseSms(
+      'Dear Customer,LKR 120,000.00 Credited to your A/c XXXXXXXX4150 on 25/11/2026 at 14:32.AvlBal LKR 120,000.00.Transaction CEFT Inward Transfer Deposit.Thank you for banking with us.Call Centre 1972.',
+    )!;
+    const pairs = pairInternalTransfers([into, out], ['7068', '4150']);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].debit).toBe(out);
+    expect(pairs[0].credit).toBe(into);
+  });
+});

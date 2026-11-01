@@ -189,6 +189,13 @@ export function observationsFrom(sources: readonly ObservationSource[]): Observa
   for (const source of sources) {
     const { rule } = source;
     if (rule.source !== 'learned' || !rule.hint || !rule.pattern) continue;
+    /*
+     * Private keys never leave the device. A payee-account rule (`acct:…`) is
+     * the user's own or a payee's account number, and a transfer-amount rule
+     * (`xfer:…`) is an account tail and an amount: neither is a merchant, and
+     * both identify a person. Only shop names are shared.
+     */
+    if (/^(?:acct|xfer):/.test(rule.pattern)) continue;
 
     // One observation per merchant: when the user has several rules for one
     // shop, the most-confirmed hint is the one this device stands behind.
