@@ -65,6 +65,27 @@ export const trackedItemRepo = {
   },
 };
 
+/**
+ * Give every item with no entries its first one, dated when it was added.
+ *
+ * Adding an item MEANS one is in use from then — the user's own model, and the
+ * only one under which "how long did it last" has an answer. Items created
+ * before adding started the first entry sat at "not started" forever; this
+ * brings them in line once. Returns how many were started.
+ */
+export function startUnstartedItems(): number {
+  let started = 0;
+  for (const item of trackedItemRepo.all()) {
+    const has = db.select({ id: refills.id }).from(refills).where(eq(refills.itemId, item.id)).get();
+    if (has) continue;
+    db.insert(refills)
+      .values({ id: createId(), itemId: item.id, filledOn: item.createdAt, priceMinor: null })
+      .run();
+    started += 1;
+  }
+  return started;
+}
+
 export const refillRepo = {
   /** One item's refills, newest first — the order the history screen reads in. */
   forItem(itemId: string): RefillRow[] {

@@ -6,6 +6,7 @@ import {
   Empty,
   GradientButton,
   GradientCard,
+  Label,
   Row,
   Surface,
   Text,
@@ -220,6 +221,80 @@ export default function TrackedItemDetail() {
         ) : null}
       </GradientCard>
 
+      {/*
+        The full record, every fact in one place: when tracking began and how
+        long ago, how long the current one has been in use (against the
+        expected life), how many were bought and what they cost. The hero
+        above answers "when next?"; this answers "what has happened so far?",
+        and it says something even before the first refill is logged.
+      */}
+      <View style={{ gap: space.sm }}>
+        <Label>FULL RECORD</Label>
+        <Surface padded={false}>
+          <RecordRow
+            icon="calendar-outline"
+            label="Added to tracker"
+            value={longDate(item.createdAt)}
+            detail={`${elapsed(item.createdAt, now)} ago`}
+          />
+          <RecordRow
+            icon="time-outline"
+            label="Current one in use since"
+            value={stats.lastFilledOn ? longDate(stats.lastFilledOn) : 'Not logged yet'}
+            detail={
+              stats.lastFilledOn
+                ? item.expectedDays
+                  ? `${elapsed(stats.lastFilledOn, now)} · day ${stats.daysOnCurrent ?? 0} of about ${item.expectedDays}`
+                  : elapsed(stats.lastFilledOn, now)
+                : 'Log when you last replaced it to start the count'
+            }
+          />
+          {item.expectedDays ? (
+            <RecordRow
+              icon="hourglass-outline"
+              label="Expected to last"
+              value={describeDays(item.expectedDays)}
+              detail="Your estimate — replaced by the measured average once there is one"
+            />
+          ) : null}
+          <RecordRow
+            icon="repeat-outline"
+            label="Times bought"
+            value={ordered.length === 0 ? 'None logged' : String(ordered.length)}
+            detail={
+              ordered.length > 1
+                ? `First on ${longDate(ordered[ordered.length - 1].filledOn)}`
+                : undefined
+            }
+          />
+          {stats.averageDays ? (
+            <RecordRow
+              icon="stats-chart-outline"
+              label="Lasts"
+              value={`${describeDays(Math.round(stats.averageDays))} on average`}
+              detail={
+                stats.shortestDays !== null && stats.longestDays !== null
+                  ? `Shortest ${describeDays(stats.shortestDays)} · longest ${describeDays(stats.longestDays)}`
+                  : undefined
+              }
+            />
+          ) : null}
+          {stats.totalSpentMinor > 0 ? (
+            <RecordRow
+              icon="wallet-outline"
+              label="Spent in total"
+              value={formatMoney(stats.totalSpentMinor)}
+              detail={
+                stats.averagePriceMinor
+                  ? `About ${formatMoney(stats.averagePriceMinor)} each`
+                  : undefined
+              }
+              last
+            />
+          ) : null}
+        </Surface>
+      </View>
+
       <View style={{ gap: space.sm }}>
         <Text variant="bodyStrong">Every one you bought</Text>
 
@@ -430,6 +505,60 @@ export default function TrackedItemDetail() {
       </View>
     </Screen>
   );
+}
+
+/** One fact in the full record: icon, what it is, the value, and a detail line. */
+function RecordRow({
+  icon,
+  label,
+  value,
+  detail,
+  last = false,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  detail?: string;
+  last?: boolean;
+}) {
+  const { colors, space } = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: space.md,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        borderBottomWidth: last ? 0 : 1,
+        borderBottomColor: colors.hairline,
+      }}
+    >
+      <Ionicons name={icon} size={18} color={TRACKER_COLOR} style={{ marginTop: 1 }} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text variant="caption" tone="secondary">
+          {label}
+        </Text>
+        <Text variant="bodyStrong">{value}</Text>
+        {detail ? (
+          <Text variant="caption" tone="muted">
+            {detail}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** "15 Sep 2026". */
+function longDate(date: Date): string {
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** "1 month 22 days" from a date until now; "today" for the same day. */
+function elapsed(from: Date, now: Date): string {
+  const days = Math.max(0, Math.floor((now.getTime() - from.getTime()) / 86_400_000));
+  return days === 0 ? 'today' : describeDays(days);
 }
 
 function confirmDelete(refill: RefillLike, remove: (id: string) => void) {

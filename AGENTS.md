@@ -28,3 +28,23 @@ grep -c UnableToResolveError /tmp/b.js   # expect 0
 ```
 
 `cacheBust` is required — Metro serves a cached bundle otherwise and hides the change.
+
+# Adding data (tables or columns) — it MUST be backed up
+
+Every table the user's data lives in must travel in a full backup and in Drive
+sync. Buddy loans and split-payment parts were silently missing from every
+backup for months because nobody added them to a backup part. Follow the
+`add-table` skill (`.claude/skills/add-table/SKILL.md`). The short version:
+
+1. `src/db/schema.ts` — the Drizzle table (spread `timestamps`).
+2. `src/db/client.ts` — `CREATE TABLE IF NOT EXISTS` in `DDL`, the table in
+   `SYNCED_TABLES`; a new COLUMN on an existing table also goes in
+   `ensureAdditiveColumns`.
+3. `src/features/backup/logic/backup.ts` — the table in `SNAPSHOT_TABLES`
+   (parents before children), in a `BACKUP_PARTS` entry, in the history-scope
+   list if it is history, and a `TABLE_LABELS` entry.
+4. Excluding a table from backups is a decision: add it to `NOT_BACKED_UP`
+   with the reason.
+
+`backupCoverage.test.ts` reads the DDL and fails if a table is in none of
+these — run `yarn test` before calling the change done.

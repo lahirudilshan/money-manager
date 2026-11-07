@@ -149,14 +149,14 @@ export function inboxPath(): string {
  * The folder name as it appears in the Files app.
  *
  * Shown in the setup steps because the full sandbox path is a UUID soup nobody
- * can navigate by eye — the user needs "On My iPhone > money-manager", not
+ * can navigate by eye — the user needs "On My iPhone > Dayly", not
  * /var/mobile/Containers/Data/Application/A1B2.../Documents.
  *
  * This is the APP's folder — iOS names it after the app — and the inbox file
  * sits directly inside it, so this is also the folder the user picks in the
  * Shortcuts folder chooser.
  */
-export const FILES_APP_LOCATION = 'On My iPhone → money-manager';
+export const FILES_APP_LOCATION = 'On My iPhone → Dayly';
 
 /**
  * What the user types into Shortcuts' File Path field, and what the copy button
@@ -180,7 +180,7 @@ export const INBOX_FILE_PATH = INBOX_RELATIVE_PATH;
  * so it costs nothing to keep at the top of the file forever.
  */
 const SEED_HEADER = [
-  '# money-manager SMS inbox — TEMPORARY HANDOFF FILE',
+  '# Dayly SMS inbox — TEMPORARY HANDOFF FILE',
   '#',
   '# Your Shortcuts automation appends bank messages here. The app moves',
   '# each one into its database and clears them from this file, so seeing',

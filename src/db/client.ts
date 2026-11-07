@@ -3,7 +3,13 @@ import { drizzle } from 'drizzle-orm/expo-sqlite';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as schema from './schema';
 
-const DATABASE_NAME = 'money-manager.db';
+/**
+ * The SQLite file. Was `money-manager.db` before the app became Dayly; the
+ * rename shipped together with the bundle id change (com.lahirudilshan.dayly), which is
+ * a fresh app container anyway, so no device ever has a file under the old
+ * name to migrate — data arrives by restoring a backup.
+ */
+const DATABASE_NAME = 'dayly.db';
 
 /**
  * Where the database lives — deliberately NOT the default.
@@ -418,6 +424,10 @@ CREATE TABLE IF NOT EXISTS category_states (
     blood_group TEXT,
     allergies TEXT,
     conditions TEXT,
+    sex TEXT,
+    height_cm REAL,
+    waist_cm REAL,
+    length_unit TEXT,
     note TEXT,
     color TEXT NOT NULL DEFAULT '#D6336C',
     icon TEXT NOT NULL DEFAULT 'person-outline',
@@ -483,6 +493,7 @@ CREATE TABLE IF NOT EXISTS category_states (
     document_date INTEGER NOT NULL,
     summary TEXT,
     note TEXT,
+    tags TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
@@ -507,6 +518,50 @@ CREATE TABLE IF NOT EXISTS category_states (
     deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS health_readings_person_idx ON health_readings(person_id, metric, measured_at)`,
+  // AI lab-report analysis — column comments live in schema.ts.
+  `CREATE TABLE IF NOT EXISTS health_analyses (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT NOT NULL REFERENCES health_people(id) ON DELETE CASCADE,
+    document_ids TEXT NOT NULL DEFAULT '[]',
+    headline TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    overall_json TEXT NOT NULL DEFAULT '{}',
+    model TEXT,
+    report_date INTEGER NOT NULL,
+    analysed_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS health_analyses_person_idx ON health_analyses(person_id, report_date)`,
+  `CREATE TABLE IF NOT EXISTS health_lab_results (
+    id TEXT PRIMARY KEY NOT NULL,
+    person_id TEXT NOT NULL REFERENCES health_people(id) ON DELETE CASCADE,
+    analysis_id TEXT NOT NULL REFERENCES health_analyses(id) ON DELETE CASCADE,
+    document_id TEXT REFERENCES health_documents(id) ON DELETE SET NULL,
+    test_key TEXT NOT NULL,
+    test_name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'Other',
+    value REAL,
+    value_text TEXT NOT NULL,
+    unit TEXT,
+    ref_low REAL,
+    ref_high REAL,
+    ref_text TEXT,
+    status TEXT NOT NULL DEFAULT 'unknown',
+    meaning TEXT,
+    if_high TEXT,
+    if_low TEXT,
+    body_area TEXT,
+    explanation TEXT,
+    search_terms TEXT NOT NULL DEFAULT '',
+    measured_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS health_lab_results_person_idx ON health_lab_results(person_id, test_key, measured_at)`,
+  `CREATE INDEX IF NOT EXISTS health_lab_results_analysis_idx ON health_lab_results(analysis_id)`,
   // Buddy loans mini-app — see shared/lib/miniApps.ts. Opt-in, so these stay
   // empty on a device that never enables it. Column comments live in schema.ts.
   `CREATE TABLE IF NOT EXISTS buddy_loans (
@@ -749,6 +804,37 @@ CREATE TABLE IF NOT EXISTS category_states (
     deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS refills_item_idx ON refills(item_id, filled_on)`,
+  // Documents add-on. parent_id / folder_id are plain columns, not foreign keys:
+  // deletes are tombstones, and sync may write a child before its parent.
+  `CREATE TABLE IF NOT EXISTS doc_folders (
+    id TEXT PRIMARY KEY NOT NULL,
+    parent_id TEXT,
+    name TEXT NOT NULL,
+    color TEXT,
+    icon TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS doc_folders_parent_idx ON doc_folders(parent_id, name)`,
+  `CREATE TABLE IF NOT EXISTS doc_files (
+    id TEXT PRIMARY KEY NOT NULL,
+    folder_id TEXT,
+    title TEXT NOT NULL,
+    description TEXT,
+    tags TEXT,
+    image_uri TEXT,
+    file_name TEXT,
+    mime_type TEXT,
+    size_bytes INTEGER,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS doc_files_folder_idx ON doc_files(folder_id, created_at)`,
 ];
 
 /**
@@ -1162,6 +1248,19 @@ function ensureAdditiveColumns(): void {
   );
   if (hasHealthPeople) {
     ensureColumn('health_people', 'relation_label', 'relation_label TEXT');
+    // Body measures — see `healthPeople.heightCm` in schema.ts.
+    ensureColumn('health_people', 'sex', 'sex TEXT');
+    ensureColumn('health_people', 'height_cm', 'height_cm REAL');
+    ensureColumn('health_people', 'waist_cm', 'waist_cm REAL');
+    ensureColumn('health_people', 'length_unit', 'length_unit TEXT');
+  }
+
+  // Search tags on a report — see `healthDocuments.tags` in schema.ts.
+  const hasHealthDocuments = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='health_documents'`,
+  );
+  if (hasHealthDocuments) {
+    ensureColumn('health_documents', 'tags', 'tags TEXT');
   }
 
   const hasLoans = expoDb.getFirstSync(
@@ -1328,10 +1427,14 @@ const SYNCED_TABLES = [
   'health_medicines',
   'health_documents',
   'health_readings',
+  'health_analyses',
+  'health_lab_results',
   'buddy_loans',
   'buddy_repayments',
   'tracked_items',
   'refills',
+  'doc_folders',
+  'doc_files',
   'meter_readings',
   /*
    * `sms_inbox` is here for a different reason from the rest.
@@ -2081,38 +2184,53 @@ export function initialiseDatabase(): void {
 }
 
 /**
- * Wipe all data but keep the schema — used by "Clear all data" in settings.
+ * Delete every row of the named tables, keeping the schema.
  *
- * `settings` is cleared too, which would let a naive re-launch treat this as
- * a fresh install. Callers that want the app to stay genuinely empty (rather
- * than replaying onboarding or a seed) must re-set the relevant settings
- * flags themselves afterwards.
+ * Runs with foreign keys ON, so the database's own rules decide what else
+ * goes: a payment cascades away with its bill, a fuel entry merely loses its
+ * link to a deleted transaction. A reference declared with no ON DELETE rule
+ * (the `house_id` columns) would block the delete instead, so those are
+ * cleared to NULL first — erasing houses keeps the bills, unhoused.
+ *
+ * `tables` should be children first (see `tablesToClear`). One transaction:
+ * a clear that fails halfway leaves the board exactly as it was.
  */
-export function resetDatabase(): void {
-  const tables = [
-    // Children before the rows they reference.
-    'transaction_splits',
-    'transactions',
-    'subcategory_states',
-    'category_states',
-    'account_transfers',
-    'account_moves',
-    'balance_checkpoints',
-    'fundings',
-    // Before `subcategories`, which it references.
-    'merchant_rules',
-    'subcategories',
-    'categories',
-    'incomes',
-    'loans',
-    'cards',
-    // Holds raw bank message text — clearing data must not leave it behind.
-    'sms_inbox',
-    'settings',
-  ];
-  expoDb.execSync('PRAGMA foreign_keys = OFF;');
-  for (const table of tables) {
-    expoDb.execSync(`DELETE FROM ${table};`);
-  }
+export function clearTables(tables: readonly string[]): void {
+  const doomed = new Set(tables);
+  const existing = expoDb
+    .getAllSync<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .map((row) => row.name);
+  const present = new Set(existing);
+
   expoDb.execSync('PRAGMA foreign_keys = ON;');
+  expoDb.withTransactionSync(() => {
+    for (const table of existing) {
+      if (doomed.has(table) || table.startsWith('sqlite_')) continue;
+      const keys = expoDb.getAllSync<{ table: string; from: string; on_delete: string }>(
+        `PRAGMA foreign_key_list(${table})`,
+      );
+      for (const key of keys) {
+        if (doomed.has(key.table) && key.on_delete === 'NO ACTION') {
+          expoDb.execSync(`UPDATE ${table} SET ${key.from} = NULL WHERE ${key.from} IS NOT NULL;`);
+        }
+      }
+    }
+    for (const table of tables) {
+      if (present.has(table)) expoDb.execSync(`DELETE FROM ${table};`);
+    }
+  });
+}
+
+/** Row count per table, for "this will erase 214 records". */
+export function tableRowCounts(tables: readonly string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const table of tables) {
+    try {
+      counts[table] =
+        expoDb.getFirstSync<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
+    } catch {
+      counts[table] = 0;
+    }
+  }
+  return counts;
 }

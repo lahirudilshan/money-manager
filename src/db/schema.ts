@@ -1153,6 +1153,23 @@ export const healthPeople = sqliteTable('health_people', {
   allergies: text('allergies'),
   /** Long-term conditions — "Type 2 diabetes, hypertension". */
   conditions: text('conditions'),
+  /**
+   * Body measures for BMI and the rest — see features/health/logic/bodyMeasures.ts.
+   *
+   * Height and waist live on the person: they change slowly and are entered
+   * once. WEIGHT does not — it is a `health_readings` row, so it keeps its
+   * history and chart; the profile form writes a new reading when it changes.
+   * `sex` is only for the formulas that differ by it (resting calories).
+   */
+  sex: text('sex', { enum: ['male', 'female'] }),
+  heightCm: real('height_cm'),
+  waistCm: real('waist_cm'),
+  /**
+   * How this person's height and waist are typed and shown: centimetres, or
+   * feet-and-inches / inches. Values are always STORED in cm — this is display
+   * only, so BMI and every formula read one unit.
+   */
+  lengthUnit: text('length_unit', { enum: ['cm', 'in'] }),
   note: text('note'),
   color: text('color').notNull().default('#D6336C'),
   icon: text('icon').notNull().default('person-outline'),
@@ -1310,6 +1327,13 @@ export const healthDocuments = sqliteTable(
     /** Free text lifted off the page, so a report is findable by what it says. */
     summary: text('summary'),
     note: text('note'),
+    /**
+     * Space-separated search tags: written from the AI's results when a report
+     * is read (test names, categories, everyday words like "sugar"), plus any
+     * the user adds. What lets "last 3 months sugar reports" find a report
+     * whose paper only ever said "Fasting Plasma Glucose" — offline, no AI.
+     */
+    tags: text('tags'),
     ...timestamps,
   },
   (t) => [
@@ -1373,6 +1397,105 @@ export const healthReadings = sqliteTable(
   (t) => [
     // Every chart reads one metric for one person, in date order.
     index('health_readings_person_idx').on(t.personId, t.metric, t.measuredAt),
+  ],
+);
+
+/**
+ * One AI read-through of a batch of lab reports.
+ *
+ * A batch, not a document: people come home from the lab with three sheets
+ * (blood count, lipids, sugar) and the useful answer — "how am I doing?" — is
+ * about all of them together. The per-test figures live in
+ * `health_lab_results`; this row holds the plain-English verdict over them.
+ *
+ * `overallJson` keeps the structured parts (good news, things to watch, body
+ * areas, questions for the doctor) as JSON rather than four more tables: they
+ * are only ever shown together, never queried on their own.
+ */
+export const healthAnalyses = sqliteTable(
+  'health_analyses',
+  {
+    id: text('id').primaryKey(),
+    personId: text('person_id')
+      .notNull()
+      .references(() => healthPeople.id, { onDelete: 'cascade' }),
+    /** JSON array of `health_documents.id` this analysis read. */
+    documentIds: text('document_ids').notNull().default('[]'),
+    headline: text('headline').notNull(),
+    summary: text('summary').notNull(),
+    /** JSON — see `AnalysisOverall` in features/health/logic/labReports.ts. */
+    overallJson: text('overall_json').notNull().default('{}'),
+    /** Which model produced it, so an old analysis can be told from a new one. */
+    model: text('model'),
+    /** The date printed on the reports — what charts plot against. */
+    reportDate: integer('report_date', { mode: 'timestamp_ms' }).notNull(),
+    analysedAt: integer('analysed_at', { mode: 'timestamp_ms' }).notNull(),
+    ...timestamps,
+  },
+  (t) => [index('health_analyses_person_idx').on(t.personId, t.reportDate)],
+);
+
+/**
+ * One test result lifted off a lab report — "Fasting blood sugar 126 mg/dL".
+ *
+ * Stored per test so the question people actually ask later ("what is my sugar
+ * level?") is answered from this table, OFFLINE, with history and a chart. The
+ * AI is needed once, to read the paper; never again to look the number up.
+ *
+ * `testKey` is a normalised name (`fasting_blood_glucose`) so the same test from
+ * two different labs lands on one chart. `searchTerms` holds everyday words the
+ * AI attached ("sugar", "diabetes") so a search in plain language finds it.
+ *
+ * The explanation fields (`meaning`, `ifHigh`, `ifLow`, `bodyArea`) are copied
+ * onto every row rather than kept in a lookup table: they came from the AI with
+ * this report, and showing them offline must not depend on anything else.
+ */
+export const healthLabResults = sqliteTable(
+  'health_lab_results',
+  {
+    id: text('id').primaryKey(),
+    personId: text('person_id')
+      .notNull()
+      .references(() => healthPeople.id, { onDelete: 'cascade' }),
+    analysisId: text('analysis_id')
+      .notNull()
+      .references(() => healthAnalyses.id, { onDelete: 'cascade' }),
+    documentId: text('document_id').references(() => healthDocuments.id, {
+      onDelete: 'set null',
+    }),
+    testKey: text('test_key').notNull(),
+    testName: text('test_name').notNull(),
+    /** "Blood sugar", "Kidney", "Liver" — groups the list. */
+    category: text('category').notNull().default('Other'),
+    /** Null when the result is not a number ("Negative", "Trace"). */
+    value: real('value'),
+    /** Always set: what the report printed, for display. */
+    valueText: text('value_text').notNull(),
+    unit: text('unit'),
+    refLow: real('ref_low'),
+    refHigh: real('ref_high'),
+    /** The reference range as printed, when it is not two numbers. */
+    refText: text('ref_text'),
+    status: text('status', {
+      enum: ['low', 'normal', 'high', 'borderline', 'abnormal', 'unknown'],
+    })
+      .notNull()
+      .default('unknown'),
+    meaning: text('meaning'),
+    ifHigh: text('if_high'),
+    ifLow: text('if_low'),
+    bodyArea: text('body_area'),
+    /** What THIS result means for this person, in one or two sentences. */
+    explanation: text('explanation'),
+    /** Lowercased, space-separated everyday words for offline search. */
+    searchTerms: text('search_terms').notNull().default(''),
+    measuredAt: integer('measured_at', { mode: 'timestamp_ms' }).notNull(),
+    ...timestamps,
+  },
+  (t) => [
+    // The history chart reads one test for one person, in date order.
+    index('health_lab_results_person_idx').on(t.personId, t.testKey, t.measuredAt),
+    index('health_lab_results_analysis_idx').on(t.analysisId),
   ],
 );
 
@@ -1570,6 +1693,11 @@ export type HealthDocument = typeof healthDocuments.$inferSelect;
 export type NewHealthDocument = typeof healthDocuments.$inferInsert;
 export type HealthReading = typeof healthReadings.$inferSelect;
 export type NewHealthReading = typeof healthReadings.$inferInsert;
+export type HealthAnalysis = typeof healthAnalyses.$inferSelect;
+export type NewHealthAnalysis = typeof healthAnalyses.$inferInsert;
+export type HealthLabResult = typeof healthLabResults.$inferSelect;
+export type NewHealthLabResult = typeof healthLabResults.$inferInsert;
+export type LabStatus = HealthLabResult['status'];
 
 export type BuddyLoan = typeof buddyLoans.$inferSelect;
 export type NewBuddyLoan = typeof buddyLoans.$inferInsert;
@@ -1949,3 +2077,63 @@ export type NewTrackedItem = typeof trackedItems.$inferInsert;
  */
 export type RefillRow = typeof refills.$inferSelect;
 export type NewRefill = typeof refills.$inferInsert;
+
+/**
+ * Documents add-on — a folder in the user's own words ("Car → Insurance →
+ * 2026"), nested to any depth.
+ *
+ * `parent_id` is a plain column, not a foreign key, on purpose. Deletes are
+ * tombstones (see `timestamps`), so a cascade would never fire; and a sync
+ * merge or restore may write a child before its parent within the same table.
+ * The repository walks the subtree itself when a folder is deleted.
+ */
+export const docFolders = sqliteTable(
+  'doc_folders',
+  {
+    id: text('id').primaryKey(),
+    /** Null = top level. */
+    parentId: text('parent_id'),
+    name: text('name').notNull(),
+    /** A category colour key from categoryColors, so a folder is recognisable. */
+    color: text('color'),
+    /** Ionicons glyph; null draws the plain folder. */
+    icon: text('icon'),
+    ...timestamps,
+  },
+  (t) => [index('doc_folders_parent_idx').on(t.parentId, t.name)],
+);
+
+/**
+ * One kept file — a photo, PDF, Word document, anything.
+ *
+ * `image_uri` holds the same stored reference every other attachment uses
+ * (`imageRef.ts`), which is what lets the existing Drive upload and download
+ * passes carry these files with no new machinery. The column name is the
+ * pipeline's, not a claim that the file is an image.
+ */
+export const docFiles = sqliteTable(
+  'doc_files',
+  {
+    id: text('id').primaryKey(),
+    /** Null = not in any folder (the top level). */
+    folderId: text('folder_id'),
+    title: text('title').notNull(),
+    description: text('description'),
+    /** Space-separated, lower case — generated from title and description, then edited. */
+    tags: text('tags'),
+    imageUri: text('image_uri'),
+    /** The name it had when picked — "Lease 2026.docx". Its extension decides how it opens. */
+    fileName: text('file_name'),
+    mimeType: text('mime_type'),
+    sizeBytes: integer('size_bytes'),
+    /** Pinned files sit at the top of their folder and of the home search. */
+    pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
+    ...timestamps,
+  },
+  (t) => [index('doc_files_folder_idx').on(t.folderId, t.createdAt)],
+);
+
+export type DocFolder = typeof docFolders.$inferSelect;
+export type NewDocFolder = typeof docFolders.$inferInsert;
+export type DocFile = typeof docFiles.$inferSelect;
+export type NewDocFile = typeof docFiles.$inferInsert;

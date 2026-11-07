@@ -42,7 +42,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOTS = os.path.join(HERE, "artifacts", "snapshots")
-BUNDLE = "com.anonymous.moneymanager"
+BUNDLE = "com.lahirudilshan.dayly"
 # The app moved its database out of Documents (which file sharing exposes) into
 # Application Support — see `DATABASE_DIRECTORY` in src/db/client.ts.
 REMOTE_DIR = "Library/Application Support"
@@ -95,11 +95,11 @@ def main():
 
         src = None
         for root, _dirs, files in os.walk(tmp):
-            if "money-manager.db" in files:
-                src = os.path.join(root, "money-manager.db")
+            if "dayly.db" in files:
+                src = os.path.join(root, "dayly.db")
                 break
         if not src:
-            print("No money-manager.db in the copied container.")
+            print("No dayly.db in the copied container.")
             return 1
 
         os.makedirs(SNAPSHOTS, exist_ok=True)

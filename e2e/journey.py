@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import *  # noqa
 from harness import _element_id, invalidate_source, mark_data_dirty  # noqa
 
-SCHEME = "exp+money-manager://"
+SCHEME = "exp+dayly://"
 STARTED = time.time()
 RESULTS = []
 

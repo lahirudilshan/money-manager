@@ -9,6 +9,7 @@
  */
 
 import { expoDb } from '~/db/client';
+import { missingRows, onlyColumns } from './recoverRows';
 import {
   ALL_PARTS,
   buildSnapshot,
@@ -351,4 +352,34 @@ export function exportForSync(): Record<string, Record<string, unknown>[]> {
   }
 
   return tables;
+}
+
+/**
+ * Add rows to a table that it does not already have — see recoverRows.ts.
+ *
+ * `INSERT OR IGNORE` on top of the id check, so a race cannot overwrite a row
+ * created meanwhile. Returns how many were added.
+ */
+export function insertMissingRows(table: string, rows: readonly Record<string, unknown>[]): number {
+  if (!tableExists(table)) return 0;
+  const columns = new Set(
+    (expoDb.getAllSync(`PRAGMA table_info(${table})`) as { name: string }[]).map((c) => c.name),
+  );
+  const localIds = new Set(
+    (expoDb.getAllSync(`SELECT id FROM ${table}`) as { id: string }[]).map((r) => r.id),
+  );
+  let added = 0;
+  expoDb.withTransactionSync(() => {
+    for (const source of missingRows(rows, localIds)) {
+      const row = onlyColumns(source, columns);
+      const keys = Object.keys(row);
+      if (keys.length === 0) continue;
+      const result = expoDb.runSync(
+        `INSERT OR IGNORE INTO ${table} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
+        keys.map((k) => row[k] as never),
+      );
+      added += result.changes;
+    }
+  });
+  return added;
 }

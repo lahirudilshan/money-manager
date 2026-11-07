@@ -2,7 +2,8 @@ import { Stack, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { AppState, ScrollView, View } from 'react-native';
+import Constants from 'expo-constants';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppLockGate } from '~/shared/components/AppLockGate';
@@ -19,6 +20,69 @@ import { salaryRateCurrency } from '~/features/rates/logic/useSalaryRate';
 import { salaryBankRate } from '~/features/rates/logic/useSalaryRate';
 import { settingsRepo, SETTINGS_KEYS } from '../src/db/repositories';
 import { Text } from '~/shared/components/ui';
+import {
+  DRIVE_PROMPT_SNOOZE_MS,
+  isSnoozed,
+  registerAttachmentGate,
+} from '~/shared/lib/attachmentGate';
+import {
+  connectedAccount,
+  isDriveAvailable,
+  isSignedIn,
+  signIn,
+} from '~/features/backup/logic/googleDrive';
+
+/**
+ * Answer the attach controls' Drive questions — see shared/lib/attachmentGate.
+ *
+ * Registered at module load, before any screen can render an attach control.
+ */
+const DRIVE_PROMPT_SNOOZED_UNTIL = 'drive_attach_prompt_snoozed_until';
+
+/**
+ * Drive catch-up work, run at launch and whenever the app comes back to the
+ * foreground: fetch photos missing from this phone, then the daily backup if
+ * one is due (see autoBackup.ts). Failure-swallowing — it is background work,
+ * and the next launch or resume retries.
+ */
+async function runDriveHousekeeping(): Promise<void> {
+  const store = useAppStore.getState();
+  await store.downloadMissingImages().catch(() => 0);
+  await store
+    .runAutoBackup(Constants.expoConfig?.version ?? '1.0.0')
+    .catch(() => 'failed' as const);
+}
+
+// The daily backup is checked on every return to the app, not only at cold
+// launch: an iPhone keeps an app suspended for days, so "at launch" alone
+// could mean a week without a backup.
+AppState.addEventListener('change', (state) => {
+  if (state === 'active') void runDriveHousekeeping();
+});
+registerAttachmentGate({
+  async shouldOfferDrive() {
+    if (!isDriveAvailable()) return false;
+    if (isSnoozed(settingsRepo.get(DRIVE_PROMPT_SNOOZED_UNTIL), Date.now())) return false;
+    return !(await isSignedIn());
+  },
+  connectDrive: signIn,
+  snoozeDrive() {
+    settingsRepo.set(DRIVE_PROMPT_SNOOZED_UNTIL, String(Date.now() + DRIVE_PROMPT_SNOOZE_MS));
+  },
+  afterAttach() {
+    // The row is written by the caller's save, which may come a moment after
+    // the pick — so wait briefly, then push whatever is pending.
+    setTimeout(() => {
+      void useAppStore
+        .getState()
+        .uploadPendingImages()
+        .catch(() => {
+          // Offline: the file is safe locally and the next pass retries.
+        });
+    }, 1500);
+  },
+  connectedAccount,
+});
 
 /**
  * Options for a route whose screen renders its content inside the shared
@@ -312,6 +376,10 @@ function RootNavigator() {
             // same rows are still pending, and the next launch tries again.
           });
 
+        // Bring down photos that are in Drive but not here (after a restore,
+        // or on a second phone), then the daily backup if one is due.
+        void runDriveHousekeeping();
+
         const primary = salaryRateCurrency(useAppStore.getState());
 
         void refreshBankRates({
@@ -548,6 +616,7 @@ function RootNavigator() {
           <Stack.Screen name="transaction/new" options={SHEET_ROUTE} />
           <Stack.Screen name="transaction/ongoing" options={SHEET_ROUTE} />
           <Stack.Screen name="account/[id]" options={SHEET_ROUTE} />
+          <Stack.Screen name="search" options={{ animation: 'fade', animationDuration: 160 }} />
           <Stack.Screen name="sms/index" />
           <Stack.Screen name="sms/new" options={SHEET_ROUTE} />
           <Stack.Screen name="sms/[id]" options={SHEET_ROUTE} />
@@ -601,6 +670,11 @@ function RootNavigator() {
             backing out of a form returns to the timeline rather than to the
             chooser it came through.
           */}
+          {/* Documents add-on: each folder is a pushed screen (back = up a
+              level); adding a file or a folder is a task, so a sheet. */}
+          <Stack.Screen name="mini/documents/index" />
+          <Stack.Screen name="mini/documents/file" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/documents/folder" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/trackers/index" />
           <Stack.Screen name="mini/trackers/detail" />
           <Stack.Screen name="mini/trackers/item" options={SHEET_ROUTE} />
@@ -619,6 +693,11 @@ function RootNavigator() {
           <Stack.Screen name="mini/health/visit" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/health/reading" options={SHEET_ROUTE} />
           <Stack.Screen name="mini/health/document" options={SHEET_ROUTE} />
+          {/* AI lab reports: upload → read → results, then offline search. */}
+          <Stack.Screen name="mini/health/analyze" />
+          <Stack.Screen name="mini/health/analysis" />
+          <Stack.Screen name="mini/health/labs" />
+          <Stack.Screen name="mini/health/lab-test" />
         </Stack>
         )}
       </AppLockGate>

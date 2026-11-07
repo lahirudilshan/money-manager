@@ -254,3 +254,32 @@ describe('describeDays', () => {
     expect(describeDays(60)).toBe('2 months');
   });
 });
+
+import { suggestTrackerIcon } from '~/features/refills/logic/refills';
+
+describe('suggestTrackerIcon', () => {
+  it('picks an icon from the name', () => {
+    expect(suggestTrackerIcon('Gas cylinder')).toBe('flame-outline');
+    expect(suggestTrackerIcon('Water filter')).toBe('funnel-outline');
+    expect(suggestTrackerIcon('Drinking water 20L')).toBe('water-outline');
+    expect(suggestTrackerIcon('AA batteries')).toBe('battery-half-outline');
+    expect(suggestTrackerIcon('Dog food')).toBe('paw-outline');
+  });
+
+  it('returns null when nothing fits', () => {
+    expect(suggestTrackerIcon('Something odd')).toBeNull();
+    expect(suggestTrackerIcon('')).toBeNull();
+  });
+});
+
+import { trackerColor } from '~/features/refills/logic/refills';
+
+describe('trackerColor', () => {
+  it('colours by icon, and steadily by name otherwise', () => {
+    expect(trackerColor('flame-outline', 'Gas cylinder')).toBe('#EA580C');
+    expect(trackerColor('water-outline', 'Water')).toBe('#0284C7');
+    const a = trackerColor('cube-outline', 'Something');
+    expect(trackerColor(null, 'something ')).toBe(a);
+    expect(a).toMatch(/^#[0-9A-F]{6}$/);
+  });
+});

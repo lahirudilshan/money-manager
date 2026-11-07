@@ -6,7 +6,7 @@ works on a device — see step 3.
 
 ```
 CLIENT_ID   486010862889-aaps2ikec9a1aigbei98varil468mn9f.apps.googleusercontent.com
-BUNDLE_ID   com.anonymous.moneymanager
+BUNDLE_ID   com.lahirudilshan.dayly
 SCHEME      com.googleusercontent.apps.486010862889-aaps2ikec9a1aigbei98varil468mn9f
 ```
 
@@ -25,7 +25,7 @@ In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 2. **APIs & Services → Library →** enable **Google Drive API**.
 3. **Credentials → Create credentials → OAuth client ID**.
 4. Application type: **iOS**.
-5. Bundle ID: `com.anonymous.moneymanager` — must match
+5. Bundle ID: `com.lahirudilshan.dayly` — must match
    `expo.ios.bundleIdentifier` in `app.json` exactly.
 
 Google issues a client id like `123456-abcdef.apps.googleusercontent.com`.
@@ -108,7 +108,8 @@ that as a non-sensitive scope, so it needs no verification review.
 ## What it does once configured
 
 - Signing in uploads a backup immediately (no second button to hunt for).
-- Backups go to a visible **`money-manager`** folder in the user's Drive, created
+- Backups go to a visible **`Dayly`** folder in the user's Drive (an older
+  `money-manager` folder is found and renamed on first use), created
   on first upload.
 - The last upload time is stored locally (`SETTINGS_KEYS.lastCloudBackupAt`) so
   the screen can say "Backed up 2 hours ago" without a network round trip.

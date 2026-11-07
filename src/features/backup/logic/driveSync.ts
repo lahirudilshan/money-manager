@@ -9,7 +9,7 @@
  * better privacy position than anything account-based this app could offer, and
  * it costs no backend.
  *
- * Everything is written to a VISIBLE "money-manager" folder in the user's
+ * Everything is written to a VISIBLE "Dayly" folder in the user's
  * Drive, created on first upload. The `drive.file` scope grants access only to
  * files this app itself created — it cannot read anything else the user keeps
  * there, and Google's consent screen states that.
@@ -43,7 +43,21 @@
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
 /** The folder backups live in, created on first upload. */
-export const BACKUP_FOLDER_NAME = 'money-manager';
+export const BACKUP_FOLDER_NAME = 'Dayly';
+
+/**
+ * What the folder was called before the app was renamed to Dayly.
+ *
+ * Still matched when looking the folder up, because the folder IS the user's
+ * backups and the pairing between phones: searching only for the new name
+ * would find nothing, create an empty "Dayly" folder, and both phones would
+ * report success while their history sat unseen in the old one. A folder found
+ * under this name is renamed to `BACKUP_FOLDER_NAME` (see googleDrive.ts).
+ */
+export const LEGACY_FOLDER_NAME = 'money-manager';
+
+/** The Drive query clause matching the folder under either name. */
+const FOLDER_NAME_CLAUSE = `(name='${BACKUP_FOLDER_NAME}' or name='${LEGACY_FOLDER_NAME}')`;
 
 /** Drive's "about this account" endpoint — see `accountRequest`. */
 const DRIVE_ABOUT = 'https://www.googleapis.com/drive/v3/about';
@@ -97,8 +111,10 @@ function auth(token: string): Record<string, string> {
  * the backup would exist and be invisible.
  */
 export function findFolderRequest(token: string): DriveRequest {
-  const query = `name='${BACKUP_FOLDER_NAME}' and mimeType='${FOLDER_MIME}' and trashed=false`;
-  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '1' });
+  const query = `${FOLDER_NAME_CLAUSE} and mimeType='${FOLDER_MIME}' and trashed=false`;
+  // Two, so that a phone holding both an old and a new folder prefers the old
+  // one — that is where the history is (see `pickFolder`).
+  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '2' });
 
   return { url: `${DRIVE_FILES}?${params}`, method: 'GET', headers: auth(token) };
 }
@@ -208,14 +224,45 @@ export function parsePermissions(payload: unknown): FolderMember[] {
  */
 export function findSharedFolderRequest(token: string): DriveRequest {
   const query = [
-    `name='${BACKUP_FOLDER_NAME}'`,
+    FOLDER_NAME_CLAUSE,
     `mimeType='${FOLDER_MIME}'`,
     'trashed=false',
     'sharedWithMe=true',
   ].join(' and ');
 
-  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '1' });
+  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '2' });
   return { url: `${DRIVE_FILES}?${params}`, method: 'GET', headers: auth(token) };
+}
+
+/**
+ * The folder from a find response, with its name.
+ *
+ * When both names exist (a phone that ran the renamed app before the old
+ * folder was migrated), the LEGACY one wins: it holds the backups and the sync
+ * file, while a new one can only be the empty folder made by mistake.
+ */
+export function pickFolder(payload: unknown): { id: string; name: string } | null {
+  if (payload === null || typeof payload !== 'object') return null;
+  const body = payload as { id?: unknown; name?: unknown; files?: unknown };
+  if (typeof body.id === 'string') {
+    return { id: body.id, name: typeof body.name === 'string' ? body.name : BACKUP_FOLDER_NAME };
+  }
+  const files = (Array.isArray(body.files) ? body.files : []).filter(
+    (f): f is { id: string; name?: string } => typeof (f as { id?: unknown })?.id === 'string',
+  );
+  const legacy = files.find((f) => f.name === LEGACY_FOLDER_NAME);
+  const chosen = legacy ?? files[0];
+  return chosen ? { id: chosen.id, name: chosen.name ?? BACKUP_FOLDER_NAME } : null;
+}
+
+/** Rename a folder found under the old name to the current one. */
+export function renameFolderRequest(token: string, folderId: string): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}/${folderId}?fields=id,name`,
+    method: 'PATCH',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: BACKUP_FOLDER_NAME }),
+  };
 }
 
 /** The folder id from a find/create response, or null. */
@@ -264,7 +311,21 @@ export function parseAccountEmail(payload: unknown): string | null {
 
 export function listBackupsRequest(token: string, folderId: string): DriveRequest {
   const params = new URLSearchParams({
-    q: `'${folderId}' in parents and trashed=false`,
+    /*
+     * Files only. The folder also holds the `attachments` subfolder (photos)
+     * and, on a paired board, the sync file. A folder or a Google-native file
+     * cannot be downloaded at all (Drive answers 403 fileNotDownloadable), and
+     * the attachments folder is usually the most recently changed item, so it
+     * sat at the TOP of the restore list — the first thing anyone tapped.
+     */
+    q: [
+      `'${folderId}' in parents`,
+      'trashed=false',
+      `mimeType != '${FOLDER_MIME}'`,
+      "not mimeType contains 'application/vnd.google-apps'",
+      `name != '${SYNC_FILENAME}'`,
+      `name != '${LEGACY_SYNC_FILENAME}'`,
+    ].join(' and '),
     fields: 'files(id,name,modifiedTime,size,description)',
     orderBy: 'modifiedTime desc',
     pageSize: '50',
@@ -290,7 +351,7 @@ export function uploadBackupRequest(
   /** The user's own name for this backup, stored as Drive's `description`. */
   label?: string,
 ): DriveRequest {
-  const boundary = 'money-manager-backup-boundary';
+  const boundary = 'dayly-backup-boundary';
 
   // `description` is omitted entirely when there is no label, rather than sent
   // as an empty string — an empty description is a value Drive stores and
@@ -347,7 +408,10 @@ export function downloadBackupRequest(token: string, fileId: string): DriveReque
  * state, and a new file per upload would leave each device merging against
  * whichever copy it happened to find.
  */
-export const SYNC_FILENAME = 'money-manager-sync.json';
+export const SYNC_FILENAME = 'dayly-sync.json';
+
+/** The sync file's name before the rename — still found, never created. */
+export const LEGACY_SYNC_FILENAME = 'money-manager-sync.json';
 
 /**
  * Find the shared sync file by name inside the app's folder.
@@ -358,7 +422,7 @@ export const SYNC_FILENAME = 'money-manager-sync.json';
  */
 export function findSyncFileRequest(token: string, folderId: string): DriveRequest {
   const query = [
-    `name = '${SYNC_FILENAME}'`,
+    `(name = '${SYNC_FILENAME}' or name = '${LEGACY_SYNC_FILENAME}')`,
     `'${folderId}' in parents`,
     'trashed = false',
   ].join(' and ');
@@ -399,7 +463,7 @@ export function createSyncFileRequest(
   folderId: string,
   contents: string,
 ): DriveRequest {
-  const boundary = 'money-manager-sync-boundary';
+  const boundary = 'dayly-sync-boundary';
   const metadata = JSON.stringify({ name: SYNC_FILENAME, parents: [folderId] });
 
   const body = [
@@ -529,6 +593,37 @@ export function createAttachmentsFolderRequest(token: string, parentId: string):
       mimeType: FOLDER_MIME,
       parents: [parentId],
     }),
+  };
+}
+
+/**
+ * Escape a value for a Drive search query.
+ *
+ * Folder names here come from the user — a person called "Amma's" or a title
+ * with a backslash — and Drive's query language delimits strings with single
+ * quotes. Unescaped, the query is malformed and Drive answers 400, so every
+ * upload for that person would fail forever.
+ */
+export function escapeDriveQuery(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/** Find a named subfolder inside a parent folder. */
+export function findChildFolderRequest(token: string, parentId: string, name: string): DriveRequest {
+  const query =
+    `name='${escapeDriveQuery(name)}' and mimeType='${FOLDER_MIME}' ` +
+    `and trashed=false and '${parentId}' in parents`;
+  const params = new URLSearchParams({ q: query, fields: 'files(id,name)', pageSize: '1' });
+  return { url: `${DRIVE_FILES}?${params}`, method: 'GET', headers: auth(token) };
+}
+
+/** Create a named subfolder. Only when `findChildFolderRequest` found none. */
+export function createChildFolderRequest(token: string, parentId: string, name: string): DriveRequest {
+  return {
+    url: `${DRIVE_FILES}?fields=id,name`,
+    method: 'POST',
+    headers: { ...auth(token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parentId] }),
   };
 }
 

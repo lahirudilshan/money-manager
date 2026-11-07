@@ -1,5 +1,5 @@
 {
-  "name": "money-manager",
+  "name": "dayly",
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
@@ -7,6 +7,7 @@
     "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.2",
     "expo": "~57.0.7",
+    "expo-blur": "~57.0.3",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.6",
     "expo-crypto": "~57.0.1",
@@ -15,6 +16,7 @@
     "expo-file-system": "~57.0.1",
     "expo-font": "~57.0.1",
     "expo-haptics": "~57.0.1",
+    "expo-image-manipulator": "57.0.5",
     "expo-image-picker": "~57.0.5",
     "expo-linear-gradient": "~57.0.1",
     "expo-linking": "~57.0.3",
@@ -28,6 +30,7 @@
     "expo-system-ui": "~57.0.1",
     "expo-video": "~57.0.2",
     "expo-web-browser": "~57.0.2",
+    "firebase": "^13.2.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
@@ -36,6 +39,7 @@
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-svg": "15.15.4",
+    "react-native-webview": "13.16.1",
     "react-native-worklets": "0.10.0",
     "zustand": "^5.0.14"
   },

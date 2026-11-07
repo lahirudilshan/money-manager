@@ -7,9 +7,9 @@ import {
   tableInScope,
 } from '../backup';
 
-describe('health is a sensitive, opt-in backup part', () => {
-  it('is excluded from the default backup selection', () => {
-    expect(DEFAULT_BACKUP_PARTS).not.toContain('health');
+describe('health is a sensitive backup part, included by default', () => {
+  it('is in the default backup — a reinstall must not lose medical history', () => {
+    expect(DEFAULT_BACKUP_PARTS).toContain('health');
   });
 
   it('is flagged sensitive, like SMS text', () => {
@@ -45,5 +45,25 @@ describe('health is a sensitive, opt-in backup part', () => {
     expect(tableInScope('health_visits', 'setup')).toBe(false);
     expect(tableInScope('health_documents', 'setup')).toBe(false);
     expect(tableInScope('health_readings', 'setup')).toBe(false);
+  });
+});
+
+
+describe('every table can be backed up', () => {
+  it('everySnapshotTableHasAPart — no table is silently left out of backups', () => {
+    /*
+     * A backup reads only the tables its parts name. A snapshot table in no
+     * part is written as empty forever — which is how buddy loans went
+     * missing from every backup until this test existed.
+     */
+    const covered = new Set(BACKUP_PARTS.flatMap((part) => part.tables));
+    const orphaned = SNAPSHOT_TABLES.filter((table) => !covered.has(table));
+    expect(orphaned).toEqual([]);
+  });
+
+  it('backs up buddy loans by default', () => {
+    expect(tablesForParts(DEFAULT_BACKUP_PARTS)).toEqual(
+      expect.arrayContaining(['buddy_loans', 'buddy_repayments']),
+    );
   });
 });

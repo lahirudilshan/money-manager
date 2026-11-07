@@ -16,21 +16,36 @@ import { parseImageRef } from './imageRef';
 
 const CACHE_DIR_NAME = 'drive-attachments';
 
-/** Where a Drive file lands once fetched. */
-export function cachedPathFor(driveId: string): string {
+/**
+ * Where a Drive file lands once fetched.
+ *
+ * The extension matters: a PDF saved as `.jpg` cannot be previewed, because iOS
+ * picks the viewer by extension. The downloader sniffs the bytes and passes it.
+ */
+export function cachedPathFor(driveId: string, extension: string = 'jpg'): string {
   const dir = new Directory(Paths.cache, CACHE_DIR_NAME);
-  return new File(dir, `${driveId}.jpg`).uri;
+  return new File(dir, `${driveId}.${extension}`).uri;
+}
+
+/** The cached copy of this Drive file, whichever kind it turned out to be. */
+function cachedCopy(driveId: string, extra?: string): string | null {
+  // `extra` is the real extension when the caller knows it — a Documents file
+  // can be a .docx, which the byte sniff in the downloader cannot tell apart.
+  const candidates = extra && extra !== 'jpg' && extra !== 'pdf' ? [extra, 'jpg', 'pdf'] : ['jpg', 'pdf'];
+  for (const extension of candidates) {
+    try {
+      const path = cachedPathFor(driveId, extension);
+      if (new File(path).exists) return path;
+    } catch {
+      // A cache miss and an unreadable cache are the same thing: fetch again.
+    }
+  }
+  return null;
 }
 
 /** True when this Drive file has already been fetched. */
 export function isCached(driveId: string): boolean {
-  try {
-    return new File(cachedPathFor(driveId)).exists;
-  } catch {
-    // A cache miss and an unreadable cache are the same thing to the caller:
-    // fetch it again.
-    return false;
-  }
+  return cachedCopy(driveId) !== null;
 }
 
 /**
@@ -48,7 +63,11 @@ export function isCached(driveId: string): boolean {
  * that is no longer there. Without the check the screen would render a broken
  * image instead of falling through to the Drive copy that is still good.
  */
-export function resolveImageUri(stored: string | null | undefined): string | null {
+export function resolveImageUri(
+  stored: string | null | undefined,
+  /** The file's own extension, for attachments that are neither JPG nor PDF. */
+  extension?: string,
+): string | null {
   const { driveId, localUri } = parseImageRef(stored);
 
   if (localUri) {
@@ -59,8 +78,7 @@ export function resolveImageUri(stored: string | null | undefined): string | nul
     }
   }
 
-  if (driveId && isCached(driveId)) return cachedPathFor(driveId);
-  return null;
+  return driveId ? cachedCopy(driveId, extension) : null;
 }
 
 /** Make sure the cache directory exists before writing into it. */

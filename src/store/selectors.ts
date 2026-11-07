@@ -73,7 +73,7 @@ import { rateBetween } from '~/features/rates/logic/rateTable';
 import { stateRepo, transactionRepo, transactionSplitRepo } from '~/db/repositories';
 import { isOngoing } from '~/db/schema';
 import { accountFragmentOf, ownerOfAccount } from '~/features/sms/logic/accountMasks';
-import { parseSms } from '~/features/sms/logic/smsParser';
+import { parseSms, type ParsedSms } from '~/features/sms/logic/smsParser';
 import { alertMoment } from '~/features/accounts/logic/balanceCheckpoints';
 import type {
   Subcategory,
@@ -1191,6 +1191,8 @@ export interface UnknownAccount {
   tail: string;
   /** How many recent messages name it. */
   count: number;
+  /** Those messages, newest first — what the detail sheet shows. */
+  messages: ParsedSms[];
 }
 
 /**
@@ -1203,20 +1205,26 @@ export interface UnknownAccount {
  * Only fragments that identify an account (four digits or a bank mask) count.
  */
 export function selectUnknownAccounts(state: AppState): UnknownAccount[] {
+  const byTail = new Map<string, ParsedSms[]>();
   const counts = new Map<string, number>();
+  const parsed: (ParsedSms | null)[] = state.recentAccountMessages?.length
+    ? state.recentAccountMessages
+    : (state.smsDrafts ?? []).map((draft) => draft.parsed as ParsedSms);
   const fragments = state.recentAccountFragments?.length
     ? state.recentAccountFragments
     : (state.smsDrafts ?? []).map((draft) => accountFragmentOf(draft.parsed));
-  for (const fragment of fragments) {
+  fragments.forEach((fragment, index) => {
     const digits = fragment.replace(/\D/g, '');
-    if (digits.length < 4 && !/[X*•x]/.test(fragment)) continue;
-    if (ownerOfAccount(state.cards, fragment)) continue;
+    if (digits.length < 4 && !/[X*•x]/.test(fragment)) return;
+    if (ownerOfAccount(state.cards, fragment)) return;
     // A bank mask keeps only its suffix as the recognisable end: "13802XXXXX40" → "…40".
     const masked = fragment.match(/[X*•x]+(\d+)$/);
     const tail = masked ? `…${masked[1]}` : digits.slice(-4);
     counts.set(tail, (counts.get(tail) ?? 0) + 1);
-  }
+    const sms = parsed[index];
+    if (sms) byTail.set(tail, [...(byTail.get(tail) ?? []), sms]);
+  });
   return [...counts.entries()]
-    .map(([tail, count]) => ({ tail, count }))
+    .map(([tail, count]) => ({ tail, count, messages: byTail.get(tail) ?? [] }))
     .sort((a, b) => b.count - a.count);
 }

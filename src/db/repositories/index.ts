@@ -15,3 +15,4 @@ export * from './health';
 export * from './utility';
 export * from './settings';
 export * from './attachments';
+export * from './documents';

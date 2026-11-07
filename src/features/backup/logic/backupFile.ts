@@ -20,7 +20,7 @@
  *
  * Deliberately. Two folders would mean two places for the user to look, and the
  * inbox file is named `temp-` precisely so it reads as transient next to
- * something like `money-manager-2026-08-04.json` that plainly is not.
+ * something like `dayly-2026-08-04.json` that plainly is not.
  */
 
 import { Directory, File, Paths } from 'expo-file-system';
@@ -114,8 +114,9 @@ export function listBackups(): StoredBackup[] {
       backups.push({
         filename: name,
         size: file.size ?? 0,
-        // "money-manager-2026-08-04T12-00-00.json" -> the timestamp portion.
-        createdAt: name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
+        // "dayly-2026-08-04T12-00-00.json" -> the timestamp portion. Older
+        // backups carry the pre-rename "money-manager-" prefix.
+        createdAt: name.replace(/^(dayly|money-manager)-/i, '').replace(/\.json$/i, ''),
         ...readMeta(file),
       });
     }
@@ -182,7 +183,7 @@ export function deleteBackup(filename: string): boolean {
  * The folder name as it appears in the Files app.
  *
  * Shown in the UI because the full sandbox path is a UUID nobody can navigate
- * by eye — the user needs "On My iPhone > money-manager", which is also where
+ * by eye — the user needs "On My iPhone > Dayly", which is also where
  * they long-press a backup to share it into Drive.
  */
-export const BACKUP_FILES_LOCATION = 'On My iPhone → money-manager';
+export const BACKUP_FILES_LOCATION = 'On My iPhone → Dayly';

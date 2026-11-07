@@ -78,8 +78,8 @@ describe('buildSnapshot', () => {
     // would orphan every one of them.
     expect(tablesForScope('setup')).not.toContain('transaction_splits');
     expect(tablesForScope('everything')).toContain('transaction_splits');
-    expect(DEFAULT_BACKUP_PARTS).not.toContain('sms');
-    // Still offered — the user ticks it deliberately.
+    // A full backup by default, review queue included.
+    expect(DEFAULT_BACKUP_PARTS).toContain('sms');
     expect(ALL_PARTS).toContain('sms');
   });
 
@@ -458,7 +458,7 @@ describe('summariseSnapshot table breakdown', () => {
      * accounts — and `account_moves` and `balance_checkpoints`, the bank-confirmed
      * moves between them and the balances the bank reported.
      */
-    expect(history?.tables).toHaveLength(9);
+    expect(history?.tables).toHaveLength(10);
     expect(history?.tables.every((table) => table.count === 0)).toBe(true);
   });
 });
@@ -473,9 +473,9 @@ describe('the Smart Detect queue as a backup part', () => {
     expect(ALL_PARTS).toContain('sms');
   });
 
-  it('is left OUT of a new backup unless ticked', () => {
-    // Raw bank message text must not leave the phone because a default said so.
-    expect(DEFAULT_BACKUP_PARTS).not.toContain('sms');
+  it('is in a new backup by default — everything is, now', () => {
+    // The user's own Drive holds it; it can still be unticked per backup.
+    expect(DEFAULT_BACKUP_PARTS).toContain('sms');
     expect(DEFAULT_BACKUP_PARTS).toContain('history');
   });
 
@@ -495,7 +495,8 @@ describe('the Smart Detect queue as a backup part', () => {
 
   it('does not drag sms_inbox in when unticked', () => {
     // `core` is required and folds in regardless; the queue must not.
-    expect(tablesForParts(DEFAULT_BACKUP_PARTS)).not.toContain('sms_inbox');
+    const withoutSms = DEFAULT_BACKUP_PARTS.filter((part) => part !== 'sms');
+    expect(tablesForParts(withoutSms)).not.toContain('sms_inbox');
   });
 });
 

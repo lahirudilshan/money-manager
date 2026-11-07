@@ -70,6 +70,11 @@ export interface TimelineEntry {
    */
   metricKey?: string;
   /**
+   * A reading's raw numbers and context, so the row can say what was measured
+   * ("Fasting blood sugar") and give it a verdict, not just show "128/50".
+   */
+  reading?: { value: number; valueSecondary: number | null; context: string | null };
+  /**
    * The visit this record came out of, when it came out of one.
    *
    * What lets `healthStory` fold a consultation and everything it produced
@@ -212,6 +217,11 @@ export function healthTimeline(source: TimelineSource): TimelineEntry[] {
       title: formatReading(reading),
       detail: reading.context ?? undefined,
       metricKey: reading.metric,
+      reading: {
+        value: reading.value,
+        valueSecondary: reading.valueSecondary ?? null,
+        context: reading.context ?? null,
+      },
       visitId: reading.visitId ?? null,
     });
   }
@@ -472,6 +482,8 @@ export type StoryBlock =
       visit: TimelineEntry;
       /** What came out of it, newest first. */
       records: TimelineEntry[];
+      /** AI read-throughs of this visit's reports. */
+      analyses?: StoryAnalysis[];
     }
   | {
       kind: 'readings';
@@ -481,7 +493,33 @@ export type StoryBlock =
       entries: TimelineEntry[];
       metric: string;
     }
+  | {
+      /**
+       * One scan session: reports read by AI together, not tied to a visit.
+       *
+       * People come home from the lab with three sheets — blood count, lipids,
+       * sugar — and scan them in one go. They are one event, and showing them
+       * as three unrelated rows hid that; this block keeps them together under
+       * the AI's verdict on the set.
+       */
+      kind: 'session';
+      id: string;
+      at: Date;
+      analysis: StoryAnalysis;
+      documents: TimelineEntry[];
+    }
   | { kind: 'single'; id: string; at: Date; entry: TimelineEntry };
+
+/** An AI read-through, as the timeline needs it. */
+export interface StoryAnalysis {
+  id: string;
+  at: Date;
+  headline: string;
+  /** How many results were out of range. */
+  flagged: number;
+  condition: string;
+  documentIds: string[];
+}
 
 /**
  * How many routine readings must pile up before they are collapsed.
@@ -499,13 +537,34 @@ const COLLAPSE_READINGS_AT = 3;
  * belongs to that consultation, and floating the whole episode forward would
  * put it out of sequence with everything around it.
  */
-export function healthStory(entries: readonly TimelineEntry[]): StoryBlock[] {
+export function healthStory(
+  entries: readonly TimelineEntry[],
+  analyses: readonly StoryAnalysis[] = [],
+): StoryBlock[] {
   const visits = entries.filter((entry) => entry.kind === 'visit');
   const byVisit = new Map<string, TimelineEntry[]>();
   const loose: TimelineEntry[] = [];
 
+  /*
+   * Documents read together by AI, grouped into a session — unless they came
+   * out of a visit, in which case the visit is the event and the analysis is
+   * shown inside it (see `analysesFor`).
+   */
+  const sessionOf = new Map<string, StoryAnalysis>();
+  for (const analysis of analyses) {
+    for (const documentId of analysis.documentIds) sessionOf.set(documentId, analysis);
+  }
+  const sessionDocs = new Map<string, TimelineEntry[]>();
+
   for (const entry of entries) {
     if (entry.kind === 'visit') continue;
+
+    const inVisit = entry.visitId && visits.some((visit) => visit.refId === entry.visitId);
+    const session = entry.kind === 'document' ? sessionOf.get(entry.refId) : undefined;
+    if (session && !inVisit) {
+      sessionDocs.set(session.id, [...(sessionDocs.get(session.id) ?? []), entry]);
+      continue;
+    }
 
     // Only attach to a visit that is actually in this list — a record whose
     // visit was deleted must still appear, not vanish into a missing parent.
@@ -518,15 +577,33 @@ export function healthStory(entries: readonly TimelineEntry[]): StoryBlock[] {
     loose.push(entry);
   }
 
-  const blocks: StoryBlock[] = visits.map((visit) => ({
-    kind: 'episode' as const,
-    id: visit.id,
-    at: visit.at,
-    visit,
-    records: (byVisit.get(visit.refId) ?? []).sort(
+  const blocks: StoryBlock[] = visits.map((visit) => {
+    const records = (byVisit.get(visit.refId) ?? []).sort(
       (a, b) => b.at.getTime() - a.at.getTime(),
-    ),
-  }));
+    );
+    const recordIds = new Set(records.map((r) => r.refId));
+    return {
+      kind: 'episode' as const,
+      id: visit.id,
+      at: visit.at,
+      visit,
+      records,
+      // The AI's read of this visit's reports, shown inside the visit.
+      analyses: analyses.filter((a) => a.documentIds.some((id) => recordIds.has(id))),
+    };
+  });
+
+  for (const analysis of analyses) {
+    const documents = sessionDocs.get(analysis.id);
+    if (!documents || documents.length === 0) continue;
+    blocks.push({
+      kind: 'session',
+      id: `session:${analysis.id}`,
+      at: analysis.at,
+      analysis,
+      documents: documents.sort((a, b) => a.title.localeCompare(b.title)),
+    });
+  }
 
   /*
    * Collapse consecutive routine readings OF THE SAME METRIC.

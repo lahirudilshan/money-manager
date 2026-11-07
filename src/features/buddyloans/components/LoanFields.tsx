@@ -6,6 +6,8 @@ import { AmountField, Field, NameWithIconField } from '~/shared/components/forms
 import { DatePickerField } from '~/shared/components/DatePickerField';
 import { ImageUploader } from '~/shared/components/ImageUploader';
 import {
+  findPerson,
+  matchPeople,
   outstandingForPerson,
   personColor,
   recentPeople,
@@ -140,6 +142,8 @@ export function useLoanDraft({
   seedNote?: string | null;
 } = {}): LoanDraft {
   const [personName, setPersonName] = React.useState(existing?.personName ?? '');
+  /** Everyone lent to before — so a typed name is saved in their spelling. */
+  const knownLoans = useAppStore((s) => s.buddyLoans);
   /*
    * Seeded through the SAME formatter the field applies to typing, so an
    * existing figure opens grouped rather than gaining its separators only once
@@ -216,7 +220,16 @@ export function useLoanDraft({
     dueError,
     canSave: !amountError && !nameError && !dueError,
     toPatch: () => ({
-      personName: personName.trim(),
+      /*
+       * An existing person's stored spelling wins: "nuwan" typed for a friend
+       * already saved as "Nuwan" must land on the same person, or their loans
+       * split in two and the "owes" totals stop adding up.
+       */
+      personName:
+        findPerson(
+          recentPeople(knownLoans as unknown as BuddyLoanLike[], Number.POSITIVE_INFINITY),
+          personName,
+        ) ?? personName.trim(),
       amountMinor: parseAmount(amount)!,
       direction,
       method,
@@ -266,11 +279,36 @@ export function LoanFields({
       byLoan.set(r.loanId, bucket);
     }
     const source = loans as unknown as BuddyLoanLike[];
-    return recentPeople(source).map((name) => ({
+    // Everyone, most recent first — typing filters this down (`matchPeople`).
+    return recentPeople(source, Number.POSITIVE_INFINITY).map((name) => ({
       name,
       outstandingMinor: outstandingForPerson(source, byLoan, name),
+      loanCount: source.filter(
+        (loan) => loan.personName.trim().toLowerCase() === name.toLowerCase(),
+      ).length,
     }));
   }, [loans, allRepayments]);
+
+  /** The existing person the typed name already is, if any. */
+  const chosen = React.useMemo(() => {
+    const name = findPerson(
+      suggestions.map((person) => person.name),
+      draft.personName,
+    );
+    return name ? suggestions.find((person) => person.name === name) ?? null : null;
+  }, [suggestions, draft.personName]);
+
+  /** People matching what is typed — or the recent ones for an empty box. */
+  const matches = React.useMemo(() => {
+    if (chosen) return [];
+    const names = matchPeople(
+      suggestions.map((person) => person.name),
+      draft.personName,
+    );
+    return names
+      .map((name) => suggestions.find((person) => person.name === name))
+      .filter((person): person is (typeof suggestions)[number] => Boolean(person));
+  }, [suggestions, draft.personName, chosen]);
 
   const [showMore, setShowMore] = React.useState(Boolean(existing));
   const hasOptionalValues = Boolean(existing?.imageUri || existing?.note);
@@ -387,14 +425,45 @@ export function LoanFields({
         each chip carries what that person still owes, so choosing one is an
         informed decision rather than a blind autocomplete.
       */}
-      {!existing && draft.personName.trim().length === 0 && suggestions.length > 0 ? (
+      {/*
+        Picked someone who already has loans: say so, so a new loan to the
+        same friend is a deliberate "another one for Nuwan", with what they
+        already owe in view.
+      */}
+      {!existing && chosen ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: space.sm,
+            padding: space.md,
+            borderRadius: radius.md,
+            backgroundColor: `${personColor(chosen.name, groupColors)}14`,
+          }}
+        >
+          <Ionicons name="person-circle" size={22} color={personColor(chosen.name, groupColors)} />
+          <View style={{ flex: 1 }}>
+            <Text variant="small" style={{ fontWeight: '700' }}>
+              {`Another loan for ${chosen.name}`}
+            </Text>
+            <Text variant="caption" tone="secondary">
+              {`${chosen.loanCount} ${chosen.loanCount === 1 ? 'loan' : 'loans'} so far`}
+              {chosen.outstandingMinor > 0
+                ? ` · owes ${formatMoney(chosen.outstandingMinor, { currency })}`
+                : ' · nothing owed now'}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {!existing && matches.length > 0 ? (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
           keyboardShouldPersistTaps="handled"
         >
-          {suggestions.map((person) => (
+          {matches.map((person) => (
             <Pressable
               key={person.name}
               onPress={() => draft.setPersonName(person.name)}

@@ -107,12 +107,14 @@ export function buildAuthUrl(options: {
   clientId: string;
   challenge: string;
   state: string;
+  /** Defaults to Drive. The AI set-up asks for Cloud access instead. */
+  scope?: string;
 }): string {
   const params = new URLSearchParams({
     client_id: options.clientId,
     redirect_uri: redirectUriFor(options.clientId),
     response_type: 'code',
-    scope: DRIVE_SCOPE,
+    scope: options.scope ?? DRIVE_SCOPE,
     code_challenge: options.challenge,
     code_challenge_method: 'S256',
     state: options.state,

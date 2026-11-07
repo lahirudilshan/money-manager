@@ -183,7 +183,7 @@ def _open_draft(fragment):
     if not rows:
         return False
     subprocess.run(["xcrun", "simctl", "openurl", UDID,
-                    f"exp+money-manager://sms/{rows[0].strip()}"], capture_output=True)
+                    f"exp+dayly://sms/{rows[0].strip()}"], capture_output=True)
     time.sleep(3)
     invalidate_source()
     return True

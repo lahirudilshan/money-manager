@@ -7,6 +7,7 @@ import type { BottomTabBarProps } from 'expo-router/build/react-navigation/botto
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeProvider';
+import { Blur, canBlur } from './Blur';
 import { Text } from './ui';
 
 /**
@@ -64,7 +65,11 @@ const ICONS: Record<string, { active: string; inactive: string; label: string }>
   index: { active: 'grid', inactive: 'grid-outline', label: 'Dashboard' },
   list: { active: 'list', inactive: 'list-outline', label: 'List' },
   loans: { active: 'pie-chart', inactive: 'pie-chart-outline', label: 'Loans' },
-  settings: { active: 'settings', inactive: 'settings-outline', label: 'Settings' },
+  settings: {
+    active: 'settings',
+    inactive: 'settings-outline',
+    label: 'Settings',
+  },
 };
 
 /**
@@ -92,8 +97,20 @@ export function useTabBarClearance(): number {
 }
 
 export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
-  const { colors, radius, shadow } = useTheme();
+  const { colors, radius, shadow, mode } = useTheme();
   const insets = useSafeAreaInsets();
+  const dark = mode === 'dark';
+  const blur = canBlur();
+  const bottom = dockBottomOffset(insets.bottom);
+  // The dock's top edge, measured from the screen's bottom.
+  const dockTop = bottom + DOCK_HEIGHT;
+  // The tallest blur strip covers the whole dock and reaches a few points past
+  // its top, so nothing sharp shows between the dock and the blur.
+  const blurTop = dockTop + 8;
+  // The shade reaches a little above the blur so content eases out of view
+  // rather than meeting the blur's hard top line.
+  const fadeHeight = blurTop + 16;
+  const blurStrips = [blurTop, dockTop * 0.75, dockTop * 0.5];
   const router = useRouter();
 
   // A custom tab bar must honour `href: null` itself — unlike the default bar,
@@ -102,110 +119,173 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   // `tabBarItemStyle: { display: 'none' }` (see expo-router TabsClient), so
   // that display flag — not `href` — is the reliable "hidden" signal.
   const routes = state.routes.filter((route) => {
-    const itemStyle = StyleSheet.flatten(
-      descriptors[route.key]?.options?.tabBarItemStyle,
-    ) as { display?: string } | undefined;
+    const itemStyle = StyleSheet.flatten(descriptors[route.key]?.options?.tabBarItemStyle) as
+      { display?: string } | undefined;
     return itemStyle?.display !== 'none';
   });
 
   return (
-    <View
-      style={{
-        position: 'absolute',
-        left: EDGE_INSET,
-        right: EDGE_INSET,
-        bottom: dockBottomOffset(insets.bottom),
-      }}
-      pointerEvents="box-none"
-    >
+    <>
+      {/*
+      The backdrop around the dock: content scrolling under it is blurred and
+      faded into the canvas, so the dock never sits on top of sharp text.
+
+      The tallest blur strip covers the whole dock plus a few points above it;
+      the two shorter ones stack extra blur toward the bottom. The band above
+      the blur is shade only — the canvas gradient, eased from clear — so the
+      backdrop's top edge fades in rather than starting at a line. Touches pass
+      straight through.
+    */}
       <View
-        style={[
-          {
-            flexDirection: 'row',
-            alignItems: 'center',
-            // Tabs are content-width, so the leftover width is shared between
-            // them rather than absorbed into four equal columns.
-            justifyContent: 'space-between',
-            // A floor on the gap between slots. `space-between` alone would let
-            // it collapse to nothing on a narrow screen, since it only
-            // distributes whatever is left over — this guarantees the tabs never
-            // touch, and the leftover still spreads them evenly beyond it.
-            gap: 4,
-            height: DOCK_HEIGHT,
-            borderRadius: radius.pill,
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.hairline,
-            // The same inset the slots have above and below, so the row sits an
-            // equal distance from every edge of the bar.
-            paddingHorizontal: DOCK_PADDING,
-          },
-          shadow.lifted,
-        ]}
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: fadeHeight,
+        }}
       >
-        {/* Each tab is as wide as its own label needs; the add slot is
+        {blur
+          ? blurStrips.map((height, i) => (
+              <Blur
+                key={i}
+                intensity={[10, 14, 18][i]}
+                dark={dark}
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height,
+                }}
+              />
+            ))
+          : null}
+        <LinearGradient
+          colors={[
+            colors.canvas + '00',
+            colors.canvas + (blur ? '66' : '99'),
+            colors.canvas + (blur ? 'B3' : 'E6'),
+            colors.canvas + (blur ? 'D9' : 'F2'),
+          ]}
+          locations={[0, 0.2, 0.5, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+      </View>
+      <View
+        style={{
+          position: 'absolute',
+          left: EDGE_INSET,
+          right: EDGE_INSET,
+          bottom,
+        }}
+        pointerEvents="box-none"
+      >
+        <View
+          style={[
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              // Tabs are content-width, so the leftover width is shared between
+              // them rather than absorbed into four equal columns.
+              justifyContent: 'space-between',
+              // A floor on the gap between slots. `space-between` alone would let
+              // it collapse to nothing on a narrow screen, since it only
+              // distributes whatever is left over — this guarantees the tabs never
+              // touch, and the leftover still spreads them evenly beyond it.
+              gap: 4,
+              height: DOCK_HEIGHT,
+              borderRadius: radius.pill,
+              // Frosted: the surface colour at part strength over a blur of
+              // whatever is behind. Solid as before on a binary without blur.
+              backgroundColor: blur ? colors.surface + (dark ? 'A6' : 'B3') : colors.surface,
+              borderWidth: 1,
+              borderColor: colors.hairline,
+              // The same inset the slots have above and below, so the row sits an
+              // equal distance from every edge of the bar.
+              paddingHorizontal: DOCK_PADDING,
+            },
+            shadow.lifted,
+          ]}
+        >
+          {blur ? (
+            <Blur
+              intensity={40}
+              dark={dark}
+              style={[StyleSheet.absoluteFill, { borderRadius: radius.pill, overflow: 'hidden' }]}
+            />
+          ) : null}
+          {/* Each tab is as wide as its own label needs; the add slot is
             fixed-width and trails, and `space-between` shares the remaining
             width out as even gaps. */}
-        {routes.map((route) => {
-          // Compare by key, not by position — filtering out hidden routes
-          // shifts array indices out of step with `state.index`.
-          const focused = state.routes[state.index]?.key === route.key;
-          const meta = ICONS[route.name] ?? {
-            active: 'ellipse',
-            inactive: 'ellipse-outline',
-            label: route.name,
-          };
+          {routes.map((route) => {
+            // Compare by key, not by position — filtering out hidden routes
+            // shifts array indices out of step with `state.index`.
+            const focused = state.routes[state.index]?.key === route.key;
+            const meta = ICONS[route.name] ?? {
+              active: 'ellipse',
+              inactive: 'ellipse-outline',
+              label: route.name,
+            };
 
-          return (
-            <Pressable
-              key={route.key}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: focused }}
-              accessibilityLabel={meta.label}
-              hitSlop={4}
-              onPress={() => {
-                const event = navigation.emit({
-                  type: 'tabPress',
-                  target: route.key,
-                  canPreventDefault: true,
-                });
-                if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
-              }}
-              // Content-width, not an equal quarter: at `flex: 1` every tab got
-              // the same room regardless of its label, so the longest one
-              // ("Dashboard") was the only one that truncated while "List" sat
-              // in empty space. The row distributes the slack instead.
-              style={({ pressed }) => ({
-                flexShrink: 0,
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: pressed ? 0.7 : 1,
-              })}
-            >
-              {/* No background behind any tab — the dock is the only surface.
-                  Selection is colour alone: accent vs. muted, and a filled
-                  glyph vs. an outlined one. */}
-              <View
-                style={{
-                  height: SLOT,
-                  minWidth: SLOT,
-                  paddingHorizontal: 6,
+            return (
+              <Pressable
+                key={route.key}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: focused }}
+                accessibilityLabel={meta.label}
+                hitSlop={4}
+                onPress={() => {
+                  const event = navigation.emit({
+                    type: 'tabPress',
+                    target: route.key,
+                    canPreventDefault: true,
+                  });
+                  if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
+                }}
+                // Content-width, not an equal quarter: at `flex: 1` every tab got
+                // the same room regardless of its label, so the longest one
+                // ("Dashboard") was the only one that truncated while "List" sat
+                // in empty space. The row distributes the slack instead.
+                style={({ pressed }) => ({
+                  flexShrink: 0,
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 5,
-                }}
+                  opacity: pressed ? 0.7 : 1,
+                })}
               >
-                {/* Fixed box around the glyph. The filled and outline variants
+                {/* No background behind any tab — the dock is the only surface.
+                  Selection is colour alone: accent vs. muted, and a filled
+                  glyph vs. an outlined one. */}
+                <View
+                  style={{
+                    height: SLOT,
+                    minWidth: SLOT,
+                    paddingHorizontal: 6,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 5,
+                  }}
+                >
+                  {/* Fixed box around the glyph. The filled and outline variants
                     are the same nominal size, but pinning the slot means the
                     swap can never nudge the label under it. */}
-                <View style={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}>
-                  <Ionicons
-                    name={(focused ? meta.active : meta.inactive) as never}
-                    size={22}
-                    color={focused ? colors.accent : colors.inkMuted}
-                  />
-                </View>
-                {/*
+                  <View
+                    style={{
+                      width: 22,
+                      height: 22,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Ionicons
+                      name={(focused ? meta.active : meta.inactive) as never}
+                      size={22}
+                      color={focused ? colors.accent : colors.inkMuted}
+                    />
+                  </View>
+                  {/*
                   One fixed weight for every tab, focused or not.
 
                   Switching 500 → 700 on selection made the active label wider,
@@ -215,53 +295,58 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
                   active tab without the width changing, and colour plus the
                   filled glyph still carry the selection.
                 */}
-                <Text
-                  color={focused ? colors.accent : colors.inkMuted}
-                  numberOfLines={1}
-                  style={{
-                    fontSize: 11,
-                    lineHeight: 13,
-                    fontWeight: '600',
-                    includeFontPadding: Platform.OS === 'android' ? false : undefined,
-                  }}
-                >
-                  {meta.label}
-                </Text>
-              </View>
-            </Pressable>
-          );
-        })}
+                  <Text
+                    color={focused ? colors.accent : colors.inkMuted}
+                    numberOfLines={1}
+                    style={{
+                      fontSize: 11,
+                      lineHeight: 13,
+                      fontWeight: '600',
+                      includeFontPadding: Platform.OS === 'android' ? false : undefined,
+                    }}
+                  >
+                    {meta.label}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
 
-        {/*
+          {/*
           Add action — a one-slot gradient circle, the one filled slot, so it
           reads as the primary action. Round rather than square: it is the only
           element here that is not a tab, and the shape says so before the colour
           does — which is why no divider precedes it. Opens the transaction
           screen (the model has no free-form entry): pick a category and log it.
         */}
-        <Pressable
-          onPress={() => router.push('/transaction/new')}
-          accessibilityRole="button"
-          accessibilityLabel="Add transaction"
-          hitSlop={6}
-          style={({ pressed }) => ({
-            width: SLOT,
-            height: SLOT,
-            borderRadius: SLOT / 2,
-            overflow: 'hidden',
-            transform: [{ scale: pressed ? 0.92 : 1 }],
-          })}
-        >
-          <LinearGradient
-            colors={[colors.gradientStart, colors.gradientEnd]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}
+          <Pressable
+            onPress={() => router.push('/transaction/new')}
+            accessibilityRole="button"
+            accessibilityLabel="Add transaction"
+            hitSlop={6}
+            style={({ pressed }) => ({
+              width: SLOT,
+              height: SLOT,
+              borderRadius: SLOT / 2,
+              overflow: 'hidden',
+              transform: [{ scale: pressed ? 0.92 : 1 }],
+            })}
           >
-            <Ionicons name="add" size={23} color="#FFFFFF" />
-          </LinearGradient>
-        </Pressable>
+            <LinearGradient
+              colors={[colors.gradientStart, colors.gradientEnd]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                flex: 1,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Ionicons name="add" size={23} color="#FFFFFF" />
+            </LinearGradient>
+          </Pressable>
+        </View>
       </View>
-    </View>
+    </>
   );
 }

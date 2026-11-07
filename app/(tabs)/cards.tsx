@@ -88,7 +88,14 @@ export default function CardsScreen() {
    * form lives here, so "Edit details" from there navigates in with this param
    * rather than the form being duplicated in two places.
    */
-  const { edit, add, req } = useLocalSearchParams<{ edit?: string; add?: string; req?: string }>();
+  const { edit, add, req, account, bank } = useLocalSearchParams<{
+    edit?: string;
+    add?: string;
+    req?: string;
+    /** Pre-fill for a new account — from an unknown account in Smart Detect. */
+    account?: string;
+    bank?: string;
+  }>();
 
   // `formId` null = closed; '' = creating new; an id = editing that entry.
   const [formId, setFormId] = useState<string | null>(add ? '' : (edit ?? null));
@@ -280,7 +287,11 @@ export default function CardsScreen() {
       </ScrollView>
 
       {formId !== null ? (
-        <CardFormModal editId={formId || null} onClose={() => setFormId(null)} />
+        <CardFormModal
+          editId={formId || null}
+          onClose={() => setFormId(null)}
+          prefill={formId ? undefined : { accountNumber: account, bankId: bank }}
+        />
       ) : null}
 
     </View>
@@ -406,13 +417,24 @@ function AccountRow({ view, onOpen }: { view: CardView; onOpen: () => void }) {
  * bank, name it, then fill only that type's fields — card gets number/CVV/expiry,
  * account gets number/branch/code. No opening balance is collected.
  */
-function CardFormModal({ editId, onClose }: { editId: string | null; onClose: () => void }) {
+function CardFormModal({
+  editId,
+  onClose,
+  prefill,
+}: {
+  editId: string | null;
+  onClose: () => void;
+  /** Starting values for a NEW entry, e.g. the account a bank SMS named. */
+  prefill?: { accountNumber?: string; bankId?: string };
+}) {
   const { colors, space, radius } = useTheme();
   const state = useAppStore();
   const existing = editId ? state.cards.find((c) => c.id === editId) : undefined;
 
   const [isCard, setIsCard] = useState(existing?.isCard ?? false);
-  const [bankId, setBankId] = useState<string | null>(existing?.bankId ?? null);
+  const [bankId, setBankId] = useState<string | null>(
+    existing?.bankId ?? prefill?.bankId ?? null,
+  );
   /**
    * The ONE name the user gives an account.
    *
@@ -441,7 +463,9 @@ function CardFormModal({ editId, onClose }: { editId: string | null; onClose: ()
   const [cvv, setCvv] = useState(existing?.cvv ?? '');
   const [expiry, setExpiry] = useState(existing?.expiry ?? '');
   // Account fields
-  const [accountNumber, setAccountNumber] = useState(existing?.accountNumber ?? '');
+  const [accountNumber, setAccountNumber] = useState(
+    existing?.accountNumber ?? prefill?.accountNumber ?? '',
+  );
   /*
    * The optional second leg of a dual-currency relationship.
    *

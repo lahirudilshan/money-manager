@@ -30,6 +30,9 @@ import {
   createFolderRequest,
   findFolderRequest,
   findSharedFolderRequest,
+  LEGACY_FOLDER_NAME,
+  pickFolder,
+  renameFolderRequest,
   listPermissionsRequest,
   parsePermissions,
   revokePermissionRequest,
@@ -42,10 +45,10 @@ import {
   parseFileList,
   parseFolderId,
   uploadBackupRequest,
-  createAttachmentsFolderRequest,
+  createChildFolderRequest,
   deleteImageRequest,
   downloadImageRequest,
-  findAttachmentsFolderRequest,
+  findChildFolderRequest,
   parseResumableUrl,
   parseUploadedFileId,
   startImageUploadRequest,
@@ -54,6 +57,7 @@ import {
 } from '~/features/backup/logic/driveSync';
 import { File } from 'expo-file-system';
 import { cachedPathFor, ensureCacheDir } from '~/shared/lib/imageCache';
+import { mimeTypeFor } from '~/shared/lib/fileKinds';
 
 type WebBrowser = typeof import('expo-web-browser');
 type SecureStore = typeof import('expo-secure-store');
@@ -374,7 +378,7 @@ async function send(request: DriveRequest): Promise<unknown | null> {
  *
  * Find-then-create rather than create-always: Drive happily makes a second
  * folder with the same name, and a user whose backups were split across three
- * identically-named "money-manager" folders would have no way to tell which
+ * identically-named "Dayly" folders would have no way to tell which
  * held the newest one.
  */
 async function folderId(token: string): Promise<string | null> {
@@ -382,21 +386,28 @@ async function folderId(token: string): Promise<string | null> {
    * A folder this account OWNS wins, because that is the ordinary case: the
    * person who set the app up first has their own backups here.
    */
-  const own = parseFolderId(await send(findFolderRequest(token)));
-  if (own) return own;
+  const own = pickFolder(await send(findFolderRequest(token)));
+  if (own) {
+    // Carry an old "money-manager" folder over to the new name. Best effort:
+    // a failed rename changes nothing, and the next call tries again.
+    if (own.name === LEGACY_FOLDER_NAME) await send(renameFolderRequest(token, own.id));
+    return own.id;
+  }
 
   /*
    * Then one shared WITH this account — the invited phone.
    *
    * Checked before creating anything, and this order is the whole feature: the
    * shared folder is not in her own Drive, so the search above finds nothing.
-   * Creating at that point would give her a second, empty `money-manager`
+   * Creating at that point would give her a second, empty `Dayly`
    * folder and sync into it — both phones would report success while sharing
    * nothing at all, which is the worst possible failure for a sync feature
    * because it looks exactly like it is working.
    */
-  const shared = parseFolderId(await send(findSharedFolderRequest(token)));
-  if (shared) return shared;
+  // Not renamed here: the folder belongs to the person who shared it, and
+  // their phone migrates it.
+  const shared = pickFolder(await send(findSharedFolderRequest(token)));
+  if (shared) return shared.id;
 
   return parseFolderId(await send(createFolderRequest(token)));
 }
@@ -429,7 +440,7 @@ export async function uploadBackup(
   if (!token) return { ok: false, error: 'Sign in to Google again to back up.' };
 
   const folder = await folderId(token);
-  if (!folder) return { ok: false, error: 'Could not open the money-manager folder in Drive.' };
+  if (!folder) return { ok: false, error: 'Could not open the Dayly folder in Drive.' };
 
   const result = await send(uploadBackupRequest(token, filename, contents, folder, label));
   if (!result) return { ok: false, error: 'The upload did not complete. Check your connection.' };
@@ -503,7 +514,7 @@ export async function listDriveBackupsResult(): Promise<ListResult> {
 
   const folder = await folderId(token);
   if (!folder) {
-    return { ok: false, files: [], error: 'Could not open the money-manager folder in Drive.' };
+    return { ok: false, files: [], error: 'Could not open the Dayly folder in Drive.' };
   }
 
   const payload = await send(listBackupsRequest(token, folder));
@@ -550,13 +561,49 @@ export async function downloadDriveBackup(fileId: string): Promise<DownloadResul
     });
 
     if (!response.ok) {
-      return { ok: false, error: 'Could not download it from Drive. Check your connection.' };
+      /*
+       * Say WHY. "Check your connection" was shown for every failure, which
+       * sent people checking Wi-Fi when Drive had answered perfectly well with
+       * "you no longer have access to this file" — a 403/404 that no amount
+       * of reconnecting fixes. The status and Drive's own reason go to the log
+       * too, so a report can be diagnosed without guessing.
+       */
+      const body = await response.text().catch(() => '');
+      const reason = driveErrorReason(body);
+      console.warn(`[drive] backup download ${fileId} failed: ${response.status} ${reason ?? body.slice(0, 200)}`);
+      return { ok: false, error: describeDownloadFailure(response.status, reason) };
     }
 
     return { ok: true, contents: await response.text() };
-  } catch {
+  } catch (error) {
+    console.warn(`[drive] backup download ${fileId} threw: ${String(error)}`);
     return { ok: false, error: 'Could not download it from Drive. Check your connection.' };
   }
+}
+
+/** Drive's machine-readable reason from an error body, when there is one. */
+function driveErrorReason(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { message?: string; errors?: { reason?: string }[] };
+    };
+    return parsed.error?.errors?.[0]?.reason ?? parsed.error?.message ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** A download failure in words that point at the right fix. */
+function describeDownloadFailure(status: number, reason: string | null): string {
+  if (status === 401) return 'Your Google sign-in has expired. Sign in again and retry.';
+  if (status === 403 || status === 404) {
+    return (
+      'Google Drive did not let this app open that backup. It was probably made by an ' +
+      'earlier version of the app with a different Google sign-in. ' +
+      `(Drive said: ${reason ?? status})`
+    );
+  }
+  return `Drive could not send the backup (${status}${reason ? `: ${reason}` : ''}). Try again.`;
 }
 
 /**
@@ -633,7 +680,7 @@ export async function inviteToFolder(email: string): Promise<InviteResult> {
   if (!token) return { ok: false, error: 'Sign in to Google again to invite someone.' };
 
   const folder = await folderId(token);
-  if (!folder) return { ok: false, error: 'Could not open the money-manager folder in Drive.' };
+  if (!folder) return { ok: false, error: 'Could not open the Dayly folder in Drive.' };
 
   const result = await send(shareFolderRequest(token, folder, trimmed));
   if (!result) {
@@ -668,7 +715,7 @@ export async function revokeMember(permissionId: string): Promise<InviteResult> 
   if (!token) return { ok: false, error: 'Sign in to Google again to manage access.' };
 
   const folder = await folderId(token);
-  if (!folder) return { ok: false, error: 'Could not open the money-manager folder in Drive.' };
+  if (!folder) return { ok: false, error: 'Could not open the Dayly folder in Drive.' };
 
   const result = await send(revokePermissionRequest(token, folder, permissionId));
   // A DELETE returns an empty body on success, which `send` reports as null —
@@ -682,16 +729,42 @@ export async function revokeMember(permissionId: string): Promise<InviteResult> 
  * ---------------------------------------------------------------------------
  */
 
-/** The attachments subfolder, created on first use. */
-async function attachmentsFolderId(token: string): Promise<string | null> {
-  const parent = await folderId(token);
-  if (!parent) return null;
+/**
+ * Folder ids already found or made this session, by path ("Health/Amma/2026").
+ *
+ * An upload pass files many reports into the same few folders; without this
+ * every file would cost a search round trip per folder level.
+ */
+const folderCache = new Map<string, string>();
 
-  const found = parseFolderId(await send(findAttachmentsFolderRequest(token, parent)));
-  if (found) return found;
+/**
+ * The id of a folder path under the app folder, creating what is missing.
+ *
+ * Find-then-create at every level, for the same reason as the app folder: Drive
+ * happily makes a second "2026" beside the first, and a report split across two
+ * identically named folders is one the user cannot find.
+ */
+async function folderPathId(token: string, path: readonly string[]): Promise<string | null> {
+  const root = await folderId(token);
+  if (!root) return null;
+  let parent: string = root;
 
-  const created = await send(createAttachmentsFolderRequest(token, parent));
-  return (created as { id?: string } | null)?.id ?? null;
+  for (let depth = 0; depth < path.length; depth += 1) {
+    const key = path.slice(0, depth + 1).join('/');
+    const cached = folderCache.get(key);
+    if (cached) {
+      parent = cached;
+      continue;
+    }
+    const name = path[depth];
+    const found: string | null =
+      parseFolderId(await send(findChildFolderRequest(token, parent, name))) ??
+      parseFolderId(await send(createChildFolderRequest(token, parent, name)));
+    if (!found) return null;
+    folderCache.set(key, found);
+    parent = found;
+  }
+  return parent;
 }
 
 /**
@@ -708,12 +781,14 @@ async function attachmentsFolderId(token: string): Promise<string | null> {
 export async function uploadAttachment(
   localUri: string,
   filename: string,
+  /** Folders under the app folder — see `attachmentPlacement`. */
+  folders: readonly string[] = ['attachments'],
 ): Promise<{ ok: true; id: string } | { ok: false; error: string; status?: number; code?: string }> {
   const token = await accessToken();
   if (!token) return { ok: false, error: 'Sign in to Google again.', status: 401 };
 
-  const folder = await attachmentsFolderId(token);
-  if (!folder) return { ok: false, error: 'Could not open the attachments folder.' };
+  const folder = await folderPathId(token, folders);
+  if (!folder) return { ok: false, error: `Could not open the ${folders.join('/')} folder in Drive.` };
 
   let bytes: Blob;
   try {
@@ -725,8 +800,12 @@ export async function uploadAttachment(
     return { ok: false, error: 'Photo file could not be read.', code: 'FILE_MISSING' };
   }
 
+  // From the extension first: a local file's blob type is often empty or
+  // generic, and Drive would then store a PDF as an unopenable binary.
+  const contentType = mimeTypeFor(filename) ?? (bytes.type || 'image/jpeg');
+
   try {
-    const start = startImageUploadRequest(token, filename, folder, bytes.type || 'image/jpeg');
+    const start = startImageUploadRequest(token, filename, folder, contentType);
     const startResponse = await fetch(start.url, {
       method: start.method,
       headers: start.headers,
@@ -746,7 +825,7 @@ export async function uploadAttachment(
 
     const put = await fetch(uploadUrl, {
       method: 'PUT',
-      headers: { 'Content-Type': bytes.type || 'image/jpeg' },
+      headers: { 'Content-Type': contentType },
       body: bytes,
     });
 
@@ -767,7 +846,11 @@ export async function uploadAttachment(
  * Null on any failure: the screen falls back to a placeholder, and the next
  * render tries again. Nothing here is worth interrupting the user for.
  */
-export async function downloadAttachment(driveId: string): Promise<string | null> {
+export async function downloadAttachment(
+  driveId: string,
+  /** The file's real extension, when the row knows it (Documents add-on). */
+  extension?: string,
+): Promise<string | null> {
   const token = await accessToken();
   if (!token) return null;
 
@@ -780,8 +863,11 @@ export async function downloadAttachment(driveId: string): Promise<string | null
     if (!response.ok) return null;
 
     ensureCacheDir();
-    const destination = cachedPathFor(driveId);
     const buffer = await response.arrayBuffer();
+    // "%PDF" — the bytes, not a guess from the name, decide the extension.
+    const head = new Uint8Array(buffer.slice(0, 4));
+    const isPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+    const destination = cachedPathFor(driveId, isPdf ? 'pdf' : extension || 'jpg');
     const file = new File(destination);
     if (!file.exists) file.create();
     file.write(new Uint8Array(buffer));

@@ -1,0 +1,10 @@
+{
+  "name": "background-work",
+  "version": "1.0.0",
+  "description": "Keeps a user-started job running after the app leaves the screen (iOS 26 continued processing), with the system's lock-screen progress.",
+  "license": "MIT",
+  "author": "Dayly",
+  "homepage": "https://github.com/expo/expo",
+  "private": true,
+  "main": "index.ts"
+}

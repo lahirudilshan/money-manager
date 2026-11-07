@@ -10,10 +10,22 @@ const PHOTOS_DIR_NAME = 'transaction-photos';
  * meant to be looked at again later must be copied out immediately.
  */
 export async function persistPickedImage(sourceUri: string): Promise<string> {
+  return persistPickedFile(sourceUri, 'jpg');
+}
+
+/**
+ * Same, for any attachment — a PDF from the Files picker as well as a photo.
+ *
+ * The extension is kept because everything downstream keys off it: the Drive
+ * upload's content type, the preview tile, and which viewer iOS opens.
+ */
+export async function persistPickedFile(sourceUri: string, extension: string): Promise<string> {
+  // Only a short alphanumeric extension reaches a file name; anything else is `bin`.
+  const ext = /^[a-z0-9]{1,8}$/i.test(extension) ? extension.toLowerCase() : 'bin';
   const dir = new Directory(Paths.document, PHOTOS_DIR_NAME);
   if (!dir.exists) dir.create({ intermediates: true });
 
-  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
   const destination = new File(dir, filename);
   await new File(sourceUri).copy(destination);
   return destination.uri;

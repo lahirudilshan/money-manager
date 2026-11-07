@@ -23,7 +23,7 @@ Dayly adds its own action to the Shortcuts app, **Send Message to Dayly**.
 A ready-made shortcut, **Dayly App Automation**, holds the Message trigger
 and that action:
 
-**https://www.icloud.com/shortcuts/c44cb7ae629b4993996723f8e07fdfe7**
+**https://www.icloud.com/shortcuts/d95ccb33eadc41988a6b2fab7ca16a42**
 
 Open that link on the iPhone, or tap **Add shortcut** in Dayly (**Settings →
 Auto-detect transactions**). The Shortcuts app opens; follow its on-screen
@@ -50,7 +50,22 @@ transactions kept, while chats and OTPs are dropped. Promos that mention a price
 get through, and the app's classifier rejects them.
 
 To change the shared shortcut, edit it in Shortcuts, share a new iCloud link,
-and update `DAYLY_SHORTCUT_URL` in `app/settings/sms-automation.tsx`.
+and put it in the catalog database. **No app release is needed:**
+
+```sql
+UPDATE app_config SET value = 'https://www.icloud.com/shortcuts/<id>', updated_at = now()
+ WHERE key = 'sms_shortcut_url';
+```
+
+The app reads it from `GET /api/config` each time the setup screen opens and
+caches it. The server caches it for about a minute. The app only accepts an
+`https://www.icloud.com/shortcuts/<32 hex>` link and otherwise keeps its last
+good one. Also update `DEFAULT_SHORTCUT_URL` in
+`src/features/sms/logic/shortcutLink.ts` at the next release: it is only used
+on an install that has never reached the server.
+
+Before publishing a link, check that its action targets the current bundle id
+(see the `rename-app` skill).
 
 ### Moving from the old setup
 

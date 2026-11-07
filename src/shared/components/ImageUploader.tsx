@@ -1,11 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import React from 'react';
-import { ActivityIndicator, Image, Pressable, View } from 'react-native';
-import { deletePersistedImage, persistPickedImage } from '~/shared/lib/imageStorage';
-import { localRef } from '~/shared/lib/imageRef';
+import { ActivityIndicator, Alert, Image, Pressable, View } from 'react-native';
+import {
+  deletePersistedImage,
+  persistPickedFile,
+  persistPickedImage,
+} from '~/shared/lib/imageStorage';
+import { isPdfAttachment, localRef } from '~/shared/lib/imageRef';
 import { resolveImageUri } from '~/shared/lib/imageCache';
+import { attachmentGate } from '~/shared/lib/attachmentGate';
+import { openAttachment, pickPdfFiles } from '~/shared/lib/attachmentPicker';
 import { useTheme } from '../theme/ThemeProvider';
+import { useDriveGate } from './DriveConnectSheet';
 import { Glyph, Label, Text } from './ui';
 
 /**
@@ -28,6 +35,8 @@ export function ImageUploader({
   /** Show the attachment full-screen. Screens with a dedicated viewer pass it
    *  so a receipt can be read at full size. */
   onViewFullScreen,
+  /** Offer a PDF from Files as well as a photo — a receipt that arrived by email. */
+  allowPdf = true,
 }: {
   label?: string;
   value: string | null;
@@ -35,11 +44,41 @@ export function ImageUploader({
   deleteOnReplace?: boolean;
   size?: number;
   onViewFullScreen?: () => void;
+  allowPdf?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
   const [busy, setBusy] = React.useState(false);
+  const drive = useDriveGate();
+
+  /** Swap in a newly saved file, then let the Drive pass pick it up. */
+  function commit(copied: string) {
+    // Replacing leaves the old file orphaned on disk unless it is cleaned up.
+    if (value && deleteOnReplace) deletePersistedImage(value);
+    onChange(localRef(copied));
+    attachmentGate().afterAttach();
+  }
+
+  async function pickPdf() {
+    await drive.ensureDriveChoice();
+    const picked = await pickPdfFiles({ multiple: false });
+    if (!picked.ok) {
+      if (picked.error) Alert.alert('Could not open Files', picked.error);
+      return;
+    }
+    const file = picked.files[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      commit(await persistPickedFile(file.uri, 'pdf'));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function pick(source: 'camera' | 'library') {
+    // Asked once, before the first attachment — see DriveConnectSheet.
+    await drive.ensureDriveChoice();
+
     const permission =
       source === 'camera'
         ? await ImagePicker.requestCameraPermissionsAsync()
@@ -55,8 +94,6 @@ export function ImageUploader({
     setBusy(true);
     try {
       const copied = await persistPickedImage(result.assets[0].uri);
-      // Replacing leaves the old file orphaned on disk unless it is cleaned up.
-      if (value && deleteOnReplace) deletePersistedImage(value);
       /*
        * Stored as a REFERENCE, not a bare path.
        *
@@ -65,10 +102,26 @@ export function ImageUploader({
        * find this row later and record the id it gets back, without the form
        * ever waiting on a network call.
        */
-      onChange(localRef(copied));
+      commit(copied);
     } finally {
       setBusy(false);
     }
+  }
+
+  /*
+   * Three empty slots must still fit one row on a narrow phone, so they are
+   * capped at the default size when the PDF slot is shown — a caller asking for
+   * 140 meant a large preview, not three tiles running off the screen.
+   */
+  const tile = allowPdf ? Math.min(size, 104) : size;
+
+  const resolved = resolveImageUri(value);
+  const isPdf = isPdfAttachment(resolved ?? value);
+
+  /** A PDF has no thumbnail; tapping it opens the system viewer. */
+  function viewAttachment() {
+    if (onViewFullScreen && !isPdf) return onViewFullScreen();
+    if (resolved) void openAttachment(resolved);
   }
 
   function remove() {
@@ -79,22 +132,51 @@ export function ImageUploader({
   return (
     <View style={{ gap: space.sm }}>
       <Label>{label.toUpperCase()}</Label>
+      {drive.sheet}
 
       {value ? (
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: space.md }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: space.md,
+          }}
+        >
           <Pressable
-            onPress={onViewFullScreen}
-            disabled={!onViewFullScreen}
+            onPress={viewAttachment}
+            disabled={!onViewFullScreen && !(isPdf && resolved)}
             accessibilityRole="imagebutton"
-            accessibilityLabel="View attached photo"
-            style={({ pressed }) => ({ opacity: pressed && onViewFullScreen ? 0.8 : 1 })}
+            accessibilityLabel={isPdf ? 'Open attached PDF' : 'View attached photo'}
+            style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1 })}
           >
-            <Image
-              /* The stored value may name a local file, a Drive id, or both —
-                 `resolveImageUri` picks whichever needs no network. */
-              source={{ uri: resolveImageUri(value) ?? undefined }}
-              style={{ width: size, height: size, borderRadius: radius.md }}
-            />
+            {isPdf ? (
+              <View
+                style={{
+                  width: size,
+                  height: size,
+                  borderRadius: radius.md,
+                  backgroundColor: colors.dangerSoft,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: space.xs,
+                }}
+              >
+                <Ionicons name="document-text" size={size * 0.34} color={colors.danger} />
+                <Text variant="label" color={colors.danger}>
+                  PDF
+                </Text>
+                <Text variant="caption" tone="secondary">
+                  Tap to open
+                </Text>
+              </View>
+            ) : (
+              <Image
+                /* The stored value may name a local file, a Drive id, or both —
+                   `resolveImageUri` picks whichever needs no network. */
+                source={{ uri: resolved ?? undefined }}
+                style={{ width: size, height: size, borderRadius: radius.md }}
+              />
+            )}
           </Pressable>
 
           <View style={{ flex: 1, gap: space.sm }}>
@@ -114,7 +196,23 @@ export function ImageUploader({
               compact
               onPress={() => pick('library')}
             />
-            <SlotButton icon="trash-outline" label="Remove" compact tone="danger" onPress={remove} />
+            {allowPdf ? (
+              <SlotButton
+                icon="document-text"
+                label="PDF file"
+                accent={colors.pending}
+                busy={busy}
+                compact
+                onPress={pickPdf}
+              />
+            ) : null}
+            <SlotButton
+              icon="trash-outline"
+              label="Remove"
+              compact
+              tone="danger"
+              onPress={remove}
+            />
           </View>
         </View>
       ) : (
@@ -135,7 +233,7 @@ export function ImageUploader({
             label="Take photo"
             accent={colors.accent}
             busy={busy}
-            size={size}
+            size={tile}
             onPress={() => pick('camera')}
           />
           <SlotButton
@@ -143,9 +241,19 @@ export function ImageUploader({
             label="Choose"
             accent={colors.completed}
             busy={busy}
-            size={size}
+            size={tile}
             onPress={() => pick('library')}
           />
+          {allowPdf ? (
+            <SlotButton
+              icon="document-text"
+              label="PDF file"
+              accent={colors.pending}
+              busy={busy}
+              size={tile}
+              onPress={pickPdf}
+            />
+          ) : null}
         </View>
       )}
     </View>

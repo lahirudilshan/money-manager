@@ -1,9 +1,12 @@
 {
   "expo": {
     "name": "Dayly",
-    "slug": "money-manager",
+    "slug": "dayly",
     "version": "1.0.0",
-    "scheme": "moneymanager",
+    "scheme": [
+      "dayly",
+      "moneymanager"
+    ],
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -17,7 +20,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.moneymanager",
+      "bundleIdentifier": "com.lahirudilshan.dayly",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Dayly uses Face ID to unlock the app, so your accounts and balances stay private.",
         "UIFileSharingEnabled": true,
@@ -28,6 +31,9 @@
               "com.googleusercontent.apps.486010862889-aaps2ikec9a1aigbei98varil468mn9f"
             ]
           }
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "com.lahirudilshan.dayly.work.*"
         ]
       }
     },
@@ -39,7 +45,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.moneymanager"
+      "package": "com.lahirudilshan.dayly"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -67,7 +73,14 @@
       "./plugins/withSmsAppIntent"
     ],
     "extra": {
-      "googleClientId": "486010862889-aaps2ikec9a1aigbei98varil468mn9f.apps.googleusercontent.com"
+      "googleClientId": "486010862889-aaps2ikec9a1aigbei98varil468mn9f.apps.googleusercontent.com",
+      "firebase": {
+        "apiKey": "AIzaSyDvrFAzB7cBfayApw4SSmPg-KEpnFDO49o",
+        "appId": "1:875451597649:ios:1c6d5016107531f0a94970",
+        "projectId": "dayly-b38de",
+        "messagingSenderId": "875451597649",
+        "storageBucket": "dayly-b38de.firebasestorage.app"
+      }
     },
     "description": "Everything you need to track, daily"
   }

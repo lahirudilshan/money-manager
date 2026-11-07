@@ -51,6 +51,21 @@
 export const SNAPSHOT_VERSION = 1;
 
 /**
+ * Tables that are deliberately NOT in any backup, with the reason.
+ *
+ * Every other table the database creates must be in `SNAPSHOT_TABLES` AND in a
+ * backup part — `backupCoverage.test.ts` reads the DDL and fails otherwise.
+ * That test exists because buddy loans and split-payment parts were silently
+ * left out of every backup for months. Adding a table here is a decision, made
+ * in review, not a default.
+ */
+export const NOT_BACKED_UP: Readonly<Record<string, string>> = {
+  sms_log:
+    'Full text of every bank message ever seen — kept on the phone only. It is a ' +
+    'diagnostic history, not data the user entered, and must not travel to Drive.',
+};
+
+/**
  * Tables carried in a snapshot, in DEPENDENCY ORDER.
  *
  * Restore inserts in this order and deletes in reverse, so a foreign key never
@@ -112,6 +127,9 @@ export const SNAPSHOT_TABLES = [
   'health_medicines',
   'health_documents',
   'health_readings',
+  // An analysis before its results, which carry an `analysis_id` foreign key.
+  'health_analyses',
+  'health_lab_results',
   /*
    * Buddy loans — money lent to people. Loans before their repayments, which
    * carry a `loan_id` foreign key.
@@ -124,6 +142,12 @@ export const SNAPSHOT_TABLES = [
    */
   'tracked_items',
   'refills',
+  /*
+   * The Documents add-on. Folders before files — a file names its folder —
+   * though neither is a foreign key (see `docFolders` in schema.ts).
+   */
+  'doc_folders',
+  'doc_files',
   /*
    * The Smart Detect queue — messages waiting for review.
    *
@@ -205,6 +229,9 @@ export const HISTORY_TABLES: readonly SnapshotTable[] = [
   'health_visits',
   'health_documents',
   'health_readings',
+  // A lab result is a dated measurement, exactly like a reading.
+  'health_analyses',
+  'health_lab_results',
   /*
    * Buddy loans are HISTORY, both tables.
    *
@@ -478,7 +505,7 @@ export function parseSnapshot(contents: string): Snapshot | null {
  */
 export function snapshotFilename(now = new Date()): string {
   const stamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  return `money-manager-${stamp}.json`;
+  return `dayly-${stamp}.json`;
 }
 
 /**
@@ -551,7 +578,9 @@ export function titleFor(label: string | undefined, stamp: string): string {
 
 /** Whether a filename is one of ours, for filtering the Drive folder listing. */
 export function isSnapshotFilename(name: string): boolean {
-  return /^money-manager-.*\.json$/i.test(name);
+  // "money-manager-" is the name backups had before the app became Dayly;
+  // those files are still the user's backups and must stay restorable.
+  return /^(dayly|money-manager)-.*\.json$/i.test(name);
 }
 
 /**
@@ -602,7 +631,9 @@ export type BackupPartKey =
   | 'rules'
   | 'history'
   | 'health'
+  | 'buddyloans'
   | 'trackers'
+  | 'documents'
   | 'sms';
 
 export const BACKUP_PARTS: readonly BackupPart[] = [
@@ -639,6 +670,9 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
     hint: 'Every payment recorded, month by month',
     tables: [
       'transactions',
+      // The parts of a split payment. Was in no part, so every backup dropped
+      // them and a restored split came back as one whole, unsplit payment.
+      'transaction_splits',
       'subcategory_states',
       'category_states',
       'fundings',
@@ -672,14 +706,43 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
       'health_medicines',
       'health_documents',
       'health_readings',
+      'health_analyses',
+      'health_lab_results',
     ],
     sensitive: true,
+  },
+  /*
+   * Buddy loans — money lent to people, and what has come back.
+   *
+   * These two tables were listed in the snapshot but belonged to NO part, and
+   * a backup only reads the tables its parts name — so every backup since the
+   * feature shipped silently carried zero loans, and a restore brought none
+   * back. `everySnapshotTableHasAPart` in the tests now fails if any table is
+   * ever left out of every part again.
+   */
+  {
+    key: 'buddyloans',
+    label: 'Buddy loans',
+    hint: 'Money you lent, and the repayments',
+    tables: ['buddy_loans', 'buddy_repayments'],
   },
   {
     key: 'trackers',
     label: 'Usage tracker',
     hint: 'Things you replace, and how long each one lasted',
     tables: ['tracked_items', 'refills'],
+  },
+  /*
+   * Documents — folders and the files in them. The rows travel here; the files
+   * themselves go to Drive through the attachment pass, like every receipt.
+   * Not history: an insurance policy is something you keep, not a record of
+   * money moving, so a setup restore brings it back too.
+   */
+  {
+    key: 'documents',
+    label: 'Documents',
+    hint: 'Your folders, files, descriptions and tags',
+    tables: ['doc_folders', 'doc_files'],
   },
   {
     key: 'sms',
@@ -698,15 +761,17 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
 export const ALL_PARTS: BackupPartKey[] = BACKUP_PARTS.map((part) => part.key);
 
 /**
- * What a new backup ticks by default: everything EXCEPT the sensitive parts.
+ * What a new backup ticks by default: EVERYTHING.
  *
- * Raw bank message text should never leave the phone because a default said so
- * — that is a decision the user makes deliberately, per backup. Everything else
- * defaults on, since leaving data out is the odd case.
+ * It used to leave out the `sensitive` parts — health records and the SMS
+ * review queue — on the principle that private data should leave the phone
+ * only when someone says so per backup. In practice that meant a reinstall
+ * lost a family's medical history because nobody remembered to tick a box.
+ * The backup goes to the user's OWN Google Drive, so the default now protects
+ * everything; parts can still be unticked on the backup screen, and the
+ * `sensitive` flag still marks them there.
  */
-export const DEFAULT_BACKUP_PARTS: BackupPartKey[] = BACKUP_PARTS.filter(
-  (part) => !part.sensitive,
-).map((part) => part.key);
+export const DEFAULT_BACKUP_PARTS: BackupPartKey[] = BACKUP_PARTS.map((part) => part.key);
 
 /**
  * Structure only — the "reuse this plan" selection.
@@ -716,7 +781,9 @@ export const DEFAULT_BACKUP_PARTS: BackupPartKey[] = BACKUP_PARTS.filter(
  * month's unconfirmed bank messages to work through.
  */
 export const SETUP_PARTS: BackupPartKey[] = BACKUP_PARTS.filter(
-  (part) => part.key !== 'history' && part.key !== 'sms',
+  // Buddy loans are history too: a specific sum lent on a specific day, not
+  // structure to carry onto a fresh board (see the history scope above).
+  (part) => part.key !== 'history' && part.key !== 'sms' && part.key !== 'buddyloans',
 ).map((part) => part.key);
 
 /**
@@ -785,7 +852,16 @@ const TABLE_LABELS: Record<string, string> = {
   health_visits: 'Doctor visits',
   health_documents: 'Prescriptions & reports',
   health_readings: 'Readings',
+  buddy_loans: 'Buddy loans',
+  buddy_repayments: 'Buddy loan repayments',
+  transaction_splits: 'Split payment parts',
+  health_analyses: 'Report analyses',
+  health_lab_results: 'Lab results',
   sms_inbox: 'Messages awaiting review',
+  tracked_items: 'Tracked items',
+  refills: 'Refills',
+  doc_folders: 'Folders',
+  doc_files: 'Documents',
 };
 
 function tableLabel(table: string): string {
@@ -844,6 +920,12 @@ export function describeParts(snapshot: Snapshot, parts: readonly BackupPartKey[
   if (has('plan') && count('subcategories') > 0) pieces.push(plural(count('subcategories'), 'bill'));
   if (has('houses') && count('houses') > 0) pieces.push(plural(count('houses'), 'house'));
   if (has('loans') && count('loans') > 0) pieces.push(plural(count('loans'), 'loan'));
+  if (has('buddyloans') && count('buddy_loans') > 0) {
+    pieces.push(plural(count('buddy_loans'), 'buddy loan'));
+  }
+  if (has('documents') && count('doc_files') > 0) {
+    pieces.push(plural(count('doc_files'), 'document'));
+  }
   if (has('history') && count('transactions') > 0) {
     pieces.push(plural(count('transactions'), 'transaction'));
   }

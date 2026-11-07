@@ -6,7 +6,7 @@ import type { Metadata } from 'next';
  * bundle into a deployment that only ever answers with JSON.
  */
 export const metadata: Metadata = {
-  title: 'Money Manager catalog API',
+  title: 'Dayly catalog API',
   robots: { index: false, follow: false },
 };
 

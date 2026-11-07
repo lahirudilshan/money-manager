@@ -242,7 +242,7 @@ export default function OnboardingWelcomeScreen() {
     if (!registry?.ExpoDocumentPicker) {
       Alert.alert(
         'Not available in this build',
-        'Choosing a file needs a rebuild of the app. Sign in with Google, or copy your backup into the money-manager folder in Files.',
+        'Choosing a file needs a rebuild of the app. Sign in with Google, or copy your backup into the Dayly folder in Files.',
       );
       return;
     }
@@ -272,7 +272,7 @@ export default function OnboardingWelcomeScreen() {
       if (!snapshot) {
         Alert.alert(
           'That file is not a backup',
-          'It could not be read as a money-manager backup. Pick the .json file you saved from this app.',
+          'It could not be read as a Dayly backup. Pick the .json file you saved from this app.',
         );
         return;
       }
@@ -351,7 +351,7 @@ export default function OnboardingWelcomeScreen() {
        */
       title: titleFor(
         file.description?.trim(),
-        file.name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
+        file.name.replace(/^(dayly|money-manager)-/i, '').replace(/\.json$/i, ''),
       ),
       // Drive cannot say what is INSIDE without downloading it, so the row
       // shows size instead of the contents summary a local row carries.
@@ -626,7 +626,7 @@ export default function OnboardingWelcomeScreen() {
         <Row gap={space.sm} style={{ alignItems: 'flex-start', paddingHorizontal: space.xs }}>
           <DriveMark size={15} />
           <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-            No backups in this Google account&apos;s money-manager folder.
+            No backups in this Google account&apos;s Dayly folder.
           </Text>
         </Row>
       ) : null}
@@ -706,7 +706,7 @@ function BackupRow({
           <DriveMark size={17} />
         ) : (
           /* The Files app's blue folder — where a local backup actually lives
-             ("On My iPhone → money-manager"), so the row points at the place
+             ("On My iPhone → Dayly"), so the row points at the place
              the user would go to find it. */
           <FilesMark size={18} />
         )}
@@ -790,7 +790,7 @@ function GoogleMark({ size = 20 }: { size?: number }) {
 /**
  * The iOS Files app's blue folder, for a backup stored on the phone.
  *
- * A local file lives at "On My iPhone → money-manager", and the Files app is
+ * A local file lives at "On My iPhone → Dayly", and the Files app is
  * literally where the user would go to find or move it — so its own mark says
  * where the row points far better than a generic document glyph, which read as
  * the same "some file" as everything else on the screen.

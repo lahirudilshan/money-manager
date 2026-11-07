@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { Animated, Easing, StyleSheet, useWindowDimensions, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { useTheme } from '../theme/ThemeProvider';
 import { Text } from './ui';
 
@@ -443,7 +444,7 @@ export function SplashOverlay({
               elevation: 12,
             }}
           >
-            <Ionicons name="wallet" size={MARK_SIZE * 0.46} color="#FFFFFF" />
+            <BrandGlyph size={MARK_SIZE} />
           </LinearGradient>
         </Animated.View>
 
@@ -576,6 +577,50 @@ export const SPLASH_THEME = {
     gradient: ['#1E7FE0', '#1FBFAE'] as const,
   },
 } as const;
+
+/**
+ * The app icon's glyph — the wallet plus the AI sparkles that say the app has
+ * on-device AI — laid out at the same proportions as assets/icon.png, so the
+ * splash and the home-screen icon are one mark. Fractions are of the tile side.
+ */
+function BrandGlyph({ size }: { size: number }) {
+  // The wallet stays centred on the tile; the sparkles arc above it ("crown").
+  const walletSize = size * 0.46;
+  return (
+    <View style={{ width: size, height: size }}>
+      <View
+        style={{
+          position: 'absolute',
+          left: (size - walletSize) / 2,
+          top: (size - walletSize) / 2,
+        }}
+      >
+        <Ionicons name="wallet" size={walletSize} color="#FFFFFF" />
+      </View>
+      <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
+        <Path d={sparkle(size * 0.499, size * 0.2012, size * 0.0449)} fill="#FFFFFF" />
+        <Path d={sparkle(size * 0.3789, size * 0.2461, size * 0.0215)} fill="#FFFFFF" />
+        <Path d={sparkle(size * 0.6211, size * 0.2461, size * 0.0215)} fill="#FFFFFF" />
+      </Svg>
+    </View>
+  );
+}
+
+/** A four-point AI sparkle: slender curved arms, a touch taller than wide. */
+function sparkle(cx: number, cy: number, r: number): string {
+  const rx = r;
+  const ry = r * 1.15;
+  const a = 0.08;
+  const b = 0.3;
+  return [
+    `M ${cx} ${cy - ry}`,
+    `C ${cx + rx * a} ${cy - ry * b} ${cx + rx * b} ${cy - ry * a} ${cx + rx} ${cy}`,
+    `C ${cx + rx * b} ${cy + ry * a} ${cx + rx * a} ${cy + ry * b} ${cx} ${cy + ry}`,
+    `C ${cx - rx * a} ${cy + ry * b} ${cx - rx * b} ${cy + ry * a} ${cx - rx} ${cy}`,
+    `C ${cx - rx * b} ${cy - ry * a} ${cx - rx * a} ${cy - ry * b} ${cx} ${cy - ry}`,
+    'Z',
+  ].join(' ');
+}
 
 function useMarkSize(): number {
   const { width } = useWindowDimensions();

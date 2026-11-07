@@ -106,7 +106,7 @@ export async function runSync(
 
   const folder = await drive.folder(token);
   if (!folder) {
-    return { ok: false, ...empty, error: 'Could not open the money-manager folder in Drive.' };
+    return { ok: false, ...empty, error: 'Could not open the Dayly folder in Drive.' };
   }
 
   /*

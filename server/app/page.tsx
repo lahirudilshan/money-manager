@@ -40,7 +40,7 @@ export default function StatusPage() {
         lineHeight: 1.5,
       }}
     >
-      <h1 style={{ fontSize: 20, margin: '0 0 4px', fontWeight: 600 }}>Money Manager catalog API</h1>
+      <h1 style={{ fontSize: 20, margin: '0 0 4px', fontWeight: 600 }}>Dayly catalog API</h1>
       <p style={{ margin: '0 0 28px', color: MUTED, fontSize: 14 }}>
         Shared merchant → category catalog.
       </p>

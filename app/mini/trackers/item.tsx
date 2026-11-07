@@ -3,8 +3,9 @@ import React, { useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet, Button, GradientButton, Label, Text } from '~/shared/components/ui';
-import { Field } from '~/shared/components/forms';
-import { TRACKER_COLOR, TRACKER_TINT } from '~/features/refills/logic/refills';
+import { Field, IconPicker } from '~/shared/components/forms';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { suggestTrackerIcon, TRACKER_COLOR, TRACKER_TINT } from '~/features/refills/logic/refills';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useAppStore } from '~/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
@@ -56,6 +57,18 @@ export default function TrackedItemForm() {
   const [name, setName] = useState(existing?.name ?? '');
   const [unitLabel, setUnitLabel] = useState(existing?.unitLabel ?? '');
   const [icon, setIcon] = useState<string>(existing?.icon ?? 'cube-outline');
+  /** When the one in use now was started — today unless it began earlier. */
+  const [startedOn, setStartedOn] = useState(new Date());
+  /**
+   * Whether the icon was chosen on purpose (a preset or the picker). Until it
+   * is, typing the name keeps choosing a fitting one — "Gas" → a flame.
+   */
+  const [iconChosen, setIconChosen] = useState(Boolean(existing?.icon && existing.icon !== 'cube-outline'));
+
+  function changeName(next: string) {
+    setName(next);
+    if (!iconChosen) setIcon(suggestTrackerIcon(next) ?? 'cube-outline');
+  }
   const [expectedDays, setExpectedDays] = useState(
     existing?.expectedDays ? String(existing.expectedDays) : '',
   );
@@ -76,6 +89,7 @@ export default function TrackedItemForm() {
     setName(preset.name);
     setUnitLabel(preset.unitLabel);
     setIcon(preset.icon);
+    setIconChosen(true);
     setExpectedDays(String(preset.expectedDays));
   }
 
@@ -91,7 +105,8 @@ export default function TrackedItemForm() {
     };
 
     if (existing) store.updateTrackedItem(existing.id, patch);
-    else store.addTrackedItem(patch);
+    // Adding it starts the current one — see `addTrackedItem`.
+    else store.addTrackedItem(patch, startedOn);
 
     router.back();
   }
@@ -178,10 +193,30 @@ export default function TrackedItemForm() {
       <Field
         label="Name"
         value={name}
-        onChangeText={setName}
+        onChangeText={changeName}
         placeholder="Gas cylinder"
         autoFocus={!existing}
       />
+
+      {/* Chosen from the name as you type; pick another any time. */}
+      <IconPicker
+        value={icon as keyof typeof Ionicons.glyphMap}
+        onChange={(next) => {
+          setIcon(next);
+          setIconChosen(true);
+        }}
+        accent={TRACKER_COLOR}
+      />
+
+      {/* A new item starts its first one: from this date, the next one you log
+          ends it and records exactly how long it lasted. */}
+      {!existing ? (
+        <DatePickerField
+          label="Current one started"
+          value={startedOn}
+          onChange={setStartedOn}
+        />
+      ) : null}
 
       <Field
         label="One of these is"

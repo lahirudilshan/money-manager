@@ -142,3 +142,23 @@ BEGIN
    WHERE h.merchant = p_merchant AND h.hint = p_hint;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Settings the app reads at runtime, so they can change without an app release.
+--
+-- One row per key; GET /api/config serves only the keys it names, so a row
+-- added here is private until the route exposes it. Edit a value straight in
+-- the Neon console — the route caches for about a minute.
+--
+--   sms_shortcut_url  The shared iCloud link behind "Add automation" in
+--                     Settings → Auto-detect transactions. Must be an
+--                     https://www.icloud.com/shortcuts/<id> link; the app
+--                     ignores anything else and keeps its built-in link.
+CREATE TABLE IF NOT EXISTS app_config (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO app_config (key, value)
+VALUES ('sms_shortcut_url', 'https://www.icloud.com/shortcuts/d95ccb33eadc41988a6b2fab7ca16a42')
+ON CONFLICT (key) DO NOTHING;

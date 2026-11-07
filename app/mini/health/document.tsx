@@ -9,6 +9,7 @@ import { ImageUploader } from '~/shared/components/ImageUploader';
 import { healthDocumentRepo, healthVisitRepo } from '../../../src/db/repositories';
 import { DOCUMENT_KIND_LABEL, type DocumentKind } from '../../../src/db/schema';
 import { useModalClose } from '~/shared/hooks/useModalClose';
+import { mergeTags } from '~/features/health/logic/documentSearch';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
@@ -46,25 +47,34 @@ export default function HealthDocumentForm() {
   const person =
     store.healthPeople.find((p) => p.id === params.person) ?? store.healthPeople[0];
 
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [title, setTitle] = useState('');
-  const [kind, setKind] = useState<DocumentKind>('prescription');
-  const [documentDate, setDocumentDate] = useState(new Date());
-  const [summary, setSummary] = useState('');
+  /** The document being edited, when opened with `?id=`. */
+  const existing = params.id ? healthDocumentRepo.byId(params.id) : undefined;
+
+  const [imageUri, setImageUri] = useState<string | null>(existing?.imageUri ?? null);
+  const [title, setTitle] = useState(existing?.title ?? '');
+  const [kind, setKind] = useState<DocumentKind>(existing?.kind ?? 'prescription');
+  const [documentDate, setDocumentDate] = useState(existing?.documentDate ?? new Date());
+  const [summary, setSummary] = useState(existing?.summary ?? '');
+  /** Shown comma-separated; stored space-separated (see documentSearch). */
+  const [tags, setTags] = useState((existing?.tags ?? '').split(' ').filter(Boolean).join(', '));
 
   function save() {
     const trimmed = title.trim();
     if (!person || !trimmed) return;
 
-    healthDocumentRepo.create({
-      personId: person.id,
-      visitId: params.visit ?? null,
+    const fields = {
       title: trimmed,
       kind,
       imageUri,
       documentDate,
       summary: summary.trim() || null,
-    });
+      tags: mergeTags(tags) || null,
+    };
+    if (existing) {
+      healthDocumentRepo.update(existing.id, fields);
+    } else {
+      healthDocumentRepo.create({ ...fields, personId: person.id, visitId: params.visit ?? null });
+    }
 
     store.refresh();
     router.back();
@@ -86,12 +96,12 @@ export default function HealthDocumentForm() {
       asRoute
       scroll
       onClose={closeModal}
-      title="Add a document"
+      title={existing ? 'Edit document' : 'Add a document'}
       icon="camera-outline"
       iconColor={'#8B5CF6'}
       footer={
         <GradientButton
-          label="Save document"
+          label={existing ? 'Save changes' : 'Save document'}
           icon="checkmark"
           disabled={!title.trim()}
           onPress={save}
@@ -157,9 +167,18 @@ export default function HealthDocumentForm() {
         multiline
       />
 
+      {/* Words this should be found by. Reports read by AI get these filled in
+          automatically; add your own — "sugar", "Dr Perera", "annual check". */}
+      <Field
+        label="Tags"
+        value={tags}
+        onChangeText={setTags}
+        placeholder="sugar, cholesterol, annual check"
+      />
+
       <Text variant="caption" tone="muted" style={{ paddingHorizontal: space.xs }}>
-        The photo is stored on this phone only. It is included in a backup just
-        when "Health records" is ticked.
+        Saved on this phone, and filed in your Google Drive under Health → person
+        → kind → year when Drive is connected.
       </Text>
     </BottomSheet>
   );

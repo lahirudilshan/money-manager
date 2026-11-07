@@ -1,3 +1,5 @@
+import { BodyCard } from '~/features/health/components/BodyCard';
+import { formatHeight, formatWaist } from '~/features/health/logic/bodyMeasures';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
@@ -13,12 +15,27 @@ import {
 } from '~/shared/components/ui';
 import { Screen } from '~/shared/components/Screen';
 import {
+  AskBar,
+  CurrentHealthCard,
+  NumbersGrid,
+  SuggestionsCard,
+} from '~/features/health/components/HealthHomeSections';
+import { usePersonHealth } from '~/features/health/components/usePersonHealth';
+import { isOutOfRange, readOverall } from '~/features/health/logic/labReports';
+import { reportTopics, type ReportTopic } from '~/features/health/logic/documentSearch';
+import { conditionStyle } from '~/features/health/components/LabUi';
+import {
+  useDocumentViewer,
+  type ViewableDocument,
+} from '~/shared/components/DocumentViewer';
+import { resolveImageUri } from '~/shared/lib/imageCache';
+import { isPdfAttachment } from '~/shared/lib/imageRef';
+import {
   describeDaysAway,
-  formatReading,
   healthStory,
   healthTimeline,
-  trend,
   upcoming,
+  type StoryAnalysis,
   type StoryBlock,
   type TimelineEntry,
   type TimelineReading,
@@ -26,20 +43,19 @@ import {
 import { formatMoney } from '~/shared/lib/money';
 import {
   healthDocumentRepo,
+  healthLabRepo,
   healthMedicineRepo,
   healthReadingRepo,
   healthVisitRepo,
 } from '../../../src/db/repositories';
 import {
   DOCUMENT_KIND_LABEL,
-  HEALTH_METRIC_LABEL,
-  HEALTH_METRIC_UNIT,
   relationLabel,
   type DocumentKind,
-  type HealthMetric,
 } from '../../../src/db/schema';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
+import { AnalyseRunBanner } from '~/features/health/components/AnalyseRunBanner';
 
 /**
  * One person's health record — what happened, and what the numbers are doing.
@@ -155,7 +171,66 @@ export default function HealthHome() {
   );
 
   /** The timeline folded into episodes and runs — see `healthStory`. */
-  const story = useMemo(() => healthStory(timeline), [timeline]);
+  /** AI read-throughs, so reports scanned together show as one session. */
+  const storyAnalyses = useMemo<StoryAnalysis[]>(() => {
+    if (!person) return [];
+    const results = healthLabRepo.resultsByPerson(person.id);
+    return healthLabRepo.analysesByPerson(person.id).map((analysis) => {
+      let documentIds: string[] = [];
+      try {
+        documentIds = JSON.parse(analysis.documentIds) as string[];
+      } catch {
+        documentIds = [];
+      }
+      return {
+        id: analysis.id,
+        at: analysis.reportDate,
+        headline: analysis.headline,
+        condition: readOverall(analysis.overallJson).condition,
+        flagged: results.filter((r) => r.analysisId === analysis.id && isOutOfRange(r.status)).length,
+        documentIds,
+      };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person, state.healthPeople]);
+
+  const story = useMemo(() => healthStory(timeline, storyAnalyses), [timeline, storyAnalyses]);
+  /** Only what happened — visits and report sets. Readings live in My numbers. */
+  const history = useMemo(() => story.filter(isHistoryEvent), [story]);
+  const visitCount = history.filter((b) => b.kind === 'episode').length;
+  const reportCount = history.length - visitCount;
+
+  /** The original paper behind a timeline entry, for the full-screen viewer. */
+  const documentFor = (documentId: string): ViewableDocument | undefined => {
+    const document = documents.find((d) => d.id === documentId);
+    return document
+      ? { ...document, kindLabel: DOCUMENT_KIND_LABEL[document.kind as DocumentKind] }
+      : undefined;
+  };
+  const { open: openDocument, viewer: documentViewer } = useDocumentViewer();
+
+  /**
+   * What each report is about — "Blood sugar", "Cholesterol" — from the AI's
+   * results, else its tags. Shown on every report in the timeline, so a row
+   * says what it is without being opened.
+   */
+  const topicsByDocument = useMemo(() => {
+    const map = new Map<string, ReportTopic[]>();
+    if (!person) return map;
+    const results = healthLabRepo.resultsByPerson(person.id);
+    for (const document of documents) {
+      map.set(
+        document.id,
+        reportTopics(
+          results.filter((r) => r.documentId === document.id),
+          document.tags,
+        ),
+      );
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [person, documents, state.healthPeople]);
+  const topicsFor = (documentId: string) => topicsByDocument.get(documentId) ?? [];
 
   /** Appointments still ahead — the only forward-looking thing here. */
   const followUps = useMemo(
@@ -163,29 +238,24 @@ export default function HealthHome() {
     [visits],
   );
 
-  /**
-   * The latest figure per metric, with its direction of travel.
-   *
-   * This is the headline the whole feature exists for: someone taking a sugar
-   * reading every month or two wants "132, down from 141" without opening
-   * anything. Computed per metric because a mixed list of measurements cannot
-   * be compared.
-   */
-  const latestByMetric = useMemo(() => {
-    const metrics = [...new Set(readings.map((reading) => reading.metric))] as HealthMetric[];
-
-    return metrics
-      .map((metric) => ({ metric, series: trend(readings, { metric }) }))
-      .filter((entry) => entry.series.latest !== null)
-      // Most recently measured first, so the metric being actively tracked
-      // leads rather than whichever happens to sort first alphabetically.
-      .sort(
-        (a, b) =>
-          (b.series.latest?.at.getTime() ?? 0) - (a.series.latest?.at.getTime() ?? 0),
-      );
-  }, [readings]);
 
   const activeMedicines = medicines.filter((medicine) => medicine.isActive);
+
+  /** Readings and lab results merged into one history per measure. */
+  const health = usePersonHealth(person?.id, state.healthPeople);
+
+  /** Height, weight and waist as chips on the person card, beside blood group. */
+  const bodyChips = useMemo(() => {
+    if (!person) return [];
+    const weight = health.series.find((series) => series.testKey === 'weight')?.latest;
+    const chips: { label: string; text: string; icon: keyof typeof Ionicons.glyphMap }[] = [];
+    if (person.heightCm) chips.push({ label: 'Height', text: formatHeight(person.heightCm, person.lengthUnit), icon: 'resize-outline' });
+    if (weight?.value != null)
+      chips.push({ label: 'Weight', text: `${trimNum(weight.value)} ${weight.unit ?? 'kg'}`, icon: 'scale-outline' });
+    if (person.waistCm) chips.push({ label: 'Waist', text: `Waist ${formatWaist(person.waistCm, person.lengthUnit)}`, icon: 'ellipse-outline' });
+    return chips;
+  }, [person, health.series]);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   if (people.length === 0) {
     return (
@@ -428,8 +498,25 @@ export default function HealthHome() {
 
               {/* Blood group and allergies — what someone opens this for when
                   they cannot scroll. Never below the fold. */}
-              {person.bloodGroup || person.allergies ? (
+              {person.bloodGroup || person.allergies || bodyChips.length > 0 ? (
                 <Row gap={space.sm} style={{ flexWrap: 'wrap' }}>
+                  {bodyChips.map((chip) => (
+                    <Row
+                      key={chip.label}
+                      gap={5}
+                      style={{
+                        paddingHorizontal: space.sm,
+                        paddingVertical: 5,
+                        borderRadius: radius.sm,
+                        backgroundColor: 'rgba(255,255,255,0.22)',
+                      }}
+                    >
+                      <Ionicons name={chip.icon} size={13} color="#FFFFFF" />
+                      <Text variant="caption" color="#FFFFFF" style={{ fontWeight: '800' }}>
+                        {chip.text}
+                      </Text>
+                    </Row>
+                  ))}
                   {person.bloodGroup ? (
                     <Row
                       gap={5}
@@ -450,7 +537,8 @@ export default function HealthHome() {
                     <Row
                       gap={5}
                       style={{
-                        flex: 1,
+                        flexGrow: 1,
+                        flexBasis: '100%',
                         minWidth: 0,
                         paddingHorizontal: space.sm,
                         paddingVertical: 5,
@@ -477,47 +565,63 @@ export default function HealthHome() {
       ) : null}
 
       {/*
-        THE NUMBERS — the answer to "am I better than last time?".
+        The redesigned middle of the screen, in the order the questions come:
 
-        Sits directly under the hero because for the person this feature is
-        actually for — sugar or pressure checked every month or three — it is
-        the whole point. Each card carries the latest figure and how it moved,
-        and opens the full chart.
+          CURRENT HEALTH — "how am I doing?" (latest AI read-through, and what
+                           is out of range across reports AND home readings)
+          ASK            — "what is my sugar level?", answered offline
+          MY NUMBERS     — every measure's latest value and trend, merged from
+                           home readings and lab reports
+          ADD            — scan a report first: it is what fills everything above
+          SUGGESTIONS    — what to watch, what helps, what to ask the doctor
+
+        Then the record itself — follow-ups, the collections, the timeline —
+        which is where you go to look something up, not what you need on arrival.
       */}
-      {latestByMetric.length > 0 ? (
-        <View style={{ gap: space.sm }}>
-          <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
-            <Label>LATEST READINGS</Label>
-            <View style={{ flex: 1 }} />
-            <Pressable
-              onPress={() => router.push(`/mini/health/vitals?person=${person?.id}`)}
-              accessibilityRole="button"
-              hitSlop={8}
-              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-            >
-              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
-                See trends
-              </Text>
-            </Pressable>
-          </Row>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
-          >
-            {latestByMetric.map(({ metric, series }) => (
-              <ReadingCard
-                key={metric}
-                metric={metric}
-                series={series}
-                onPress={() =>
-                  router.push(`/mini/health/vitals?person=${person?.id}&metric=${metric}`)
-                }
-              />
-            ))}
-          </ScrollView>
-        </View>
+      {person ? (
+        <>
+          <CurrentHealthCard personId={person.id} health={health} />
+          <BodyCard
+            person={person}
+            weightSeries={health.series.find((series) => series.testKey === 'weight')}
+            onEdit={() => router.push(`/mini/health/person?id=${person.id}`)}
+          />
+          {health.series.length > 0 ? <AskBar personId={person.id} /> : null}
+          <NumbersGrid personId={person.id} health={health} />
+        </>
       ) : null}
+
+      <View style={{ gap: space.sm }}>
+        <Label>ADD</Label>
+        <Row gap={space.sm}>
+          <QuickAction
+            icon="sparkles-outline"
+            label="Scan report"
+            color={colors.accent}
+            onPress={() => router.push(`/mini/health/analyze?person=${person?.id}`)}
+          />
+          <QuickAction
+            icon="pulse-outline"
+            label="Reading"
+            color="#D6336C"
+            onPress={() => router.push(`/mini/health/reading?person=${person?.id}`)}
+          />
+          <QuickAction
+            icon="medkit-outline"
+            label="Visit"
+            color={colors.completed}
+            onPress={() => router.push(`/mini/health/visit?person=${person?.id}`)}
+          />
+          <QuickAction
+            icon="camera-outline"
+            label="Photo"
+            color="#8B5CF6"
+            onPress={() => router.push(`/mini/health/document?person=${person?.id}`)}
+          />
+        </Row>
+      </View>
+
+      <SuggestionsCard health={health} />
 
       {/* Appointments ahead — the only forward-looking item in the record. */}
       {followUps.length > 0 ? (
@@ -582,81 +686,6 @@ export default function HealthHome() {
       ) : null}
 
       {/*
-        THE STORY — the main thing on this screen.
-
-        Drawn against a vertical rail with a dated node per block, because a
-        health record is read as a sequence and a stack of separate cards does
-        not show sequence at all. Each block is one THING THAT HAPPENED:
-
-          - an episode carries its own contents, so a consultation and the
-            prescription and report it produced read as one event rather than
-            three coincidences on nearby dates;
-          - a run of routine readings collapses to a single line with its
-            direction of travel, so seven home checks stop burying the one
-            consultation that mattered.
-      */}
-      {story.length === 0 ? (
-        <Empty
-          icon="time-outline"
-          title="Nothing recorded yet"
-          message="Add a visit, a reading or a photo of a report and it appears here, newest first."
-        />
-      ) : (
-        <View style={{ gap: space.sm }}>
-          <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
-            <Label>HISTORY</Label>
-            <View style={{ flex: 1 }} />
-            <Text variant="caption" tone="muted">
-              {story.length} {story.length === 1 ? 'entry' : 'entries'}
-            </Text>
-          </Row>
-
-          <View>
-            {story.map((block, index) => (
-              <StoryRow
-                key={block.id}
-                block={block}
-                currency={state.currency}
-                personId={person?.id ?? ''}
-                last={index === story.length - 1}
-              />
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/*
-        ADD — the three things that actually get recorded.
-
-        A visit, a reading, or a photograph of paper. Medicines are added from
-        inside a visit (that is where a prescription comes from) or from the
-        prescriptions list, so they do not need a fourth button competing here.
-      */}
-      <View style={{ gap: space.sm }}>
-        <Label>ADD</Label>
-        <Row gap={space.sm}>
-          <QuickAction
-            icon="medkit-outline"
-            label="Visit"
-            color={colors.accent}
-            onPress={() => router.push(`/mini/health/visit?person=${person?.id}`)}
-          />
-          <QuickAction
-            icon="pulse-outline"
-            label="Reading"
-            color="#D6336C"
-            onPress={() => router.push(`/mini/health/reading?person=${person?.id}`)}
-          />
-          <QuickAction
-            icon="camera-outline"
-            label="Report"
-            color="#8B5CF6"
-            onPress={() => router.push(`/mini/health/document?person=${person?.id}`)}
-          />
-        </Row>
-      </View>
-
-      {/*
         The two collections, as a segmented card rather than two text links.
 
         They were bare blue words floating between sections — easy to miss, and
@@ -665,6 +694,9 @@ export default function HealthHome() {
         match the row treatment used everywhere else on this screen, and give
         the count somewhere to sit that is not glued to the noun.
       */}
+      {/* An AI reading still going after the Analyse screen was left. */}
+      <AnalyseRunBanner personId={person?.id} />
+
       <Surface padded={false} style={{ overflow: 'hidden' }}>
         <BrowseRow
           icon="medical-outline"
@@ -689,7 +721,96 @@ export default function HealthHome() {
           }
           onPress={() => router.push(`/mini/health/documents?person=${person?.id}`)}
         />
+        <Divider />
+        <BrowseRow
+          icon="flask-outline"
+          tint={colors.accent}
+          label="Lab results & AI summaries"
+          detail={
+            health.analysisCount > 0
+              ? `${health.analysisCount} ${health.analysisCount === 1 ? 'report' : 'reports'} read · ${health.series.length} measures`
+              : 'Scan a report to start'
+          }
+          onPress={() => router.push(`/mini/health/labs?person=${person?.id}`)}
+        />
       </Surface>
+
+      {/*
+        THE STORY — the main thing on this screen.
+
+        Drawn against a vertical rail with a dated node per block, because a
+        health record is read as a sequence and a stack of separate cards does
+        not show sequence at all. Each block is one THING THAT HAPPENED:
+
+          - an episode carries its own contents, so a consultation and the
+            prescription and report it produced read as one event rather than
+            three coincidences on nearby dates;
+          - a run of routine readings collapses to a single line with its
+            direction of travel, so seven home checks stop burying the one
+            consultation that mattered.
+      */}
+      {history.length === 0 ? (
+        <Empty
+          icon="time-outline"
+          title="No visits or reports yet"
+          message="Doctor visits and reports read by AI appear here, newest first, with what each one found."
+        />
+      ) : (
+        <View style={{ gap: space.sm }}>
+          <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
+            <Label>HEALTH HISTORY</Label>
+            <View style={{ flex: 1 }} />
+            <Text variant="caption" tone="secondary">
+              {[
+                visitCount > 0 ? `${visitCount} ${visitCount === 1 ? 'visit' : 'visits'}` : null,
+                reportCount > 0
+                  ? `${reportCount} ${reportCount === 1 ? 'report set' : 'report sets'}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
+          </Row>
+
+          <View>
+            {/* The most recent few; the rest one tap away, so a long record
+                does not push everything after it off the end of the screen. */}
+            {(showAllHistory ? history : history.slice(0, HISTORY_PREVIEW)).map(
+              (block, index, shown) => {
+                const previous = shown[index - 1];
+                const newYear = !previous || previous.at.getFullYear() !== block.at.getFullYear();
+                return (
+                  <View key={block.id}>
+                    {newYear ? <YearHeading at={block.at} /> : null}
+                    <HistoryEvent
+                      block={block}
+                      topicsFor={topicsFor}
+                      documentFor={documentFor}
+                      onOpenDocument={openDocument}
+                      currency={state.currency}
+                      first={index === 0}
+                      last={index === shown.length - 1}
+                    />
+                  </View>
+                );
+              },
+            )}
+          </View>
+          {history.length > HISTORY_PREVIEW ? (
+            <Pressable
+              onPress={() => setShowAllHistory((v) => !v)}
+              accessibilityRole="button"
+              hitSlop={8}
+              style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1, alignSelf: 'center' })}
+            >
+              <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
+                {showAllHistory ? 'Show less' : `Show all ${history.length}`}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      )}
+      {documentViewer}
 
       {/*
         Where this data lives, said once at the bottom.
@@ -706,13 +827,17 @@ export default function HealthHome() {
           style={{ marginTop: 1 }}
         />
         <Text variant="caption" tone="muted" style={{ flex: 1 }}>
-          Health records stay on this phone. They are only included in a backup
-          if you tick "Health records" when backing up.
+          Health records stay on this phone, and report photos are copied to your
+          Google Drive when it is connected. Reports are sent to Google Gemini
+          only when you choose to read them with AI.
         </Text>
       </Row>
     </Screen>
   );
 }
+
+/** How many history blocks show before "Show all". */
+const HISTORY_PREVIEW = 5;
 
 /** Whole years since a date — the age shown beside a person's name. */
 function age(bornOn: Date): number {
@@ -738,92 +863,6 @@ function shade(hex: string, factor = 0.72): string {
   return `#${channel(0)}${channel(2)}${channel(4)}`;
 }
 
-/**
- * One metric's latest figure and which way it moved.
- *
- * The direction is deliberately NOT coloured good or bad. Down is better for
- * blood pressure and worse for oxygen, and this app has no business making that
- * call — it records, a doctor interprets.
- */
-function ReadingCard({
-  metric,
-  series,
-  onPress,
-}: {
-  metric: HealthMetric;
-  series: ReturnType<typeof trend>;
-  onPress: () => void;
-}) {
-  const { colors, radius, space } = useTheme();
-  const unit = HEALTH_METRIC_UNIT[metric];
-  const latest = series.latest;
-  if (!latest) return null;
-
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${HEALTH_METRIC_LABEL[metric]} trend`}
-      style={({ pressed }) => ({
-        opacity: pressed ? 0.8 : 1,
-        minWidth: 132,
-        gap: 6,
-        padding: space.md,
-        borderRadius: radius.md,
-        backgroundColor: colors.surface,
-        borderWidth: 1,
-        borderColor: colors.hairline,
-      })}
-    >
-      <Text variant="caption" tone="muted" numberOfLines={1}>
-        {HEALTH_METRIC_LABEL[metric]}
-      </Text>
-      <Row gap={4} style={{ alignItems: 'baseline' }}>
-        <Text variant="figure">
-          {formatReading({
-            metric,
-            value: latest.value,
-            valueSecondary: latest.valueSecondary,
-            unit: null,
-          })}
-        </Text>
-        {unit ? (
-          <Text variant="caption" tone="muted" style={{ fontSize: 10 }}>
-            {unit}
-          </Text>
-        ) : null}
-      </Row>
-      <Row gap={4}>
-        {series.direction && series.change !== null ? (
-          <>
-            <Ionicons
-              name={
-                series.direction === 'up'
-                  ? 'arrow-up'
-                  : series.direction === 'down'
-                    ? 'arrow-down'
-                    : 'remove'
-              }
-              size={12}
-              color={colors.inkMuted}
-            />
-            <Text variant="caption" tone="muted" style={{ fontSize: 10 }}>
-              {series.direction === 'flat'
-                ? 'No change'
-                : `${Math.abs(series.change) % 1 === 0 ? Math.abs(series.change) : Math.abs(series.change).toFixed(1)} since first`}
-            </Text>
-          </>
-        ) : (
-          <Text variant="caption" tone="muted" style={{ fontSize: 10 }}>
-            {latest.at.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
-          </Text>
-        )}
-      </Row>
-    </Pressable>
-  );
-}
-
-/** One of the three "add" buttons. */
 function QuickAction({
   icon,
   label,
@@ -936,319 +975,388 @@ function BrowseRow({
 }
 
 /**
- * One block on the timeline, drawn against the rail.
- *
- * The rail is a hairline running down the left with a node per block, which is
- * what turns a stack of cards into a SEQUENCE — the thing a health record is
- * read as. The node carries the block's colour so the kind is legible before
- * any text is, and the line is omitted on the last block so the timeline ends
- * rather than trailing off.
+ * The blocks the history is made of: things that HAPPENED, each one a doctor
+ * visit or a set of reports. Home readings are numbers, not events — they live
+ * in My numbers with their trend — and a weight check between two consultations
+ * buried the consultations.
  */
-function StoryRow({
+type HistoryBlock = Extract<StoryBlock, { kind: 'episode' | 'session' }> | {
+  kind: 'single';
+  id: string;
+  at: Date;
+  entry: TimelineEntry;
+};
+
+function isHistoryEvent(block: StoryBlock): block is HistoryBlock {
+  // A loose, unread photo is paper, not an answer: it stays in Documents
+  // until it is read, and then arrives here as a session with its verdict.
+  return block.kind === 'episode' || block.kind === 'session';
+}
+
+/**
+ * One event on the history rail.
+ *
+ * Every event has the same anatomy, so a year of them can be scanned:
+ *
+ *   WHAT + WHEN    — "Doctor visit" / "Lab reports", the date
+ *   TITLE          — the diagnosis or reason, or what was tested
+ *   VERDICT        — the AI's read of the reports and how many results were
+ *                    off; "Not read by AI" with the action when it was not
+ *   OUTCOME        — what was prescribed
+ *   ORIGINALS      — the papers themselves, one tap from full screen
+ *
+ * The rail node takes the verdict's colour, so scanning down the rail shows
+ * WHEN things were off without reading a card.
+ */
+function HistoryEvent({
   block,
+  topicsFor,
+  documentFor,
+  onOpenDocument,
   currency,
-  personId,
+  first,
   last,
 }: {
-  block: StoryBlock;
+  block: HistoryBlock;
+  topicsFor: (documentId: string) => ReportTopic[];
+  documentFor: (documentId: string) => ViewableDocument | undefined;
+  onOpenDocument: (document: ViewableDocument) => void;
   currency: string;
-  personId: string;
+  first: boolean;
   last: boolean;
 }) {
-  const { colors, space, radius } = useTheme();
+  const { colors, radius, space } = useTheme();
   const router = useRouter();
 
-  const style =
+  const documents =
     block.kind === 'episode'
-      ? TIMELINE_STYLE.visit
-      : block.kind === 'readings'
-        ? TIMELINE_STYLE.reading
-        : TIMELINE_STYLE[block.entry.kind];
-  const tint = style.color(colors);
+      ? block.records.filter((r) => r.kind === 'document')
+      : block.kind === 'session'
+        ? block.documents
+        : [block.entry];
+  const medicines = block.kind === 'episode' ? block.records.filter((r) => r.kind === 'medicine') : [];
+  const analyses: StoryAnalysis[] =
+    block.kind === 'episode'
+      ? (block.analyses ?? [])
+      : block.kind === 'session'
+        ? [block.analysis]
+        : [];
+  const analysis = analyses[0];
+  const topics = mergeTopics(documents.map((d) => topicsFor(d.refId)));
 
+  const isVisit = block.kind === 'episode';
+  const kindLabel = isVisit
+    ? 'Doctor visit'
+    : documents.length > 1
+      ? 'Lab reports'
+      : block.kind === 'single' && block.entry.documentKind
+        ? (DOCUMENT_KIND_LABEL[block.entry.documentKind as DocumentKind] ?? 'Report')
+        : 'Report';
+  const kindIcon: keyof typeof Ionicons.glyphMap = isVisit ? 'medkit' : 'flask';
+  const kindColor = isVisit ? colors.accent : REPORT_COLOR;
+
+  const title = isVisit
+    ? block.visit.title
+    : block.kind === 'single' && !analysis
+      ? block.entry.title
+      : topics.length > 0
+        ? topics.map((t) => t.label).join(' · ')
+        : documents[0]?.title ?? 'Lab tests';
+  const subtitle = isVisit
+    ? block.visit.detail
+    : `${documents.length} ${documents.length === 1 ? 'page' : 'pages'}${analysis ? ' · read by AI' : ''}`;
+  const cost = isVisit ? block.visit.costMinor : undefined;
+
+  const verdict = analysis
+    ? conditionStyle(
+        (analysis.condition as Parameters<typeof conditionStyle>[0]) ??
+          (analysis.flagged > 0 ? 'fair' : 'good'),
+        colors,
+      )
+    : null;
+
+  /** The detail page: the visit with everything in it, else the AI's read, else the paper. */
   const open = () => {
-    if (block.kind === 'episode') {
-      router.push(`/mini/health/case?id=${block.visit.refId}`);
-      return;
-    }
-    if (block.kind === 'readings') {
-      router.push(`/mini/health/vitals?person=${personId}&metric=${block.metric}`);
-      return;
-    }
-    const entry = block.entry;
-    if (entry.kind === 'medicine') router.push(`/mini/health/medicine?id=${entry.refId}`);
-    else if (entry.kind === 'document') router.push(`/mini/health/documents?person=${personId}`);
-    else router.push(`/mini/health/vitals?person=${personId}`);
+    if (block.kind === 'episode') return router.push(`/mini/health/case?id=${block.visit.refId}`);
+    if (analysis) return router.push(`/mini/health/analysis?id=${analysis.id}`);
+    const doc = documents[0] && documentFor(documents[0].refId);
+    if (doc) onOpenDocument(doc);
   };
 
   return (
-    <Row gap={space.md} style={{ alignItems: 'stretch' }}>
-      {/* The rail: node, then the line down to the next block. */}
-      <View style={{ width: 22, alignItems: 'center' }}>
+    <Row gap={space.sm} style={{ alignItems: 'stretch' }}>
+      {/* The date, read first: day over month, the way a diary is scanned. */}
+      <View style={{ width: 34, alignItems: 'center', paddingTop: space.lg }}>
+        <Text variant="figureLarge" style={{ fontVariant: ['tabular-nums'] }}>
+          {block.at.getDate()}
+        </Text>
+        <Text variant="label" tone="muted">
+          {block.at.toLocaleDateString(undefined, { month: 'short' }).toUpperCase()}
+        </Text>
+      </View>
+
+      {/* The rail: a node in the verdict's colour, the line on to the next event. */}
+      <View style={{ width: 16, alignItems: 'center' }}>
+        <View style={{ width: 2, height: space.lg + 6, backgroundColor: first ? 'transparent' : colors.hairlineStrong }} />
         <View
           style={{
-            width: 12,
-            height: 12,
-            borderRadius: 6,
-            marginTop: 16,
-            backgroundColor: tint,
-            // A ring in the canvas colour so the node reads as sitting ON the
-            // line rather than being a bead threaded onto it.
-            borderWidth: 3,
-            borderColor: colors.canvas,
+            width: 16,
+            height: 16,
+            borderRadius: 8,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: verdict?.bg ?? colors.surfaceSunken,
+            borderWidth: 2,
+            borderColor: verdict?.fg ?? kindColor,
           }}
-        />
-        {!last ? (
-          <View style={{ flex: 1, width: 2, backgroundColor: colors.hairline, marginTop: -2 }} />
-        ) : null}
+        >
+          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: verdict?.fg ?? kindColor }} />
+        </View>
+        <View style={{ flex: 1, width: 2, backgroundColor: last ? 'transparent' : colors.hairlineStrong }} />
       </View>
 
       <View style={{ flex: 1, paddingBottom: space.md }}>
-        {/* The date leads each block — the axis the whole screen is read on. */}
-        <Text variant="caption" tone="muted" style={{ marginBottom: 5, marginTop: 11 }}>
-          {block.at.toLocaleDateString(undefined, {
-            weekday: 'short',
-            day: 'numeric',
-            month: 'short',
-            year: block.at.getFullYear() === new Date().getFullYear() ? undefined : 'numeric',
-          })}
-        </Text>
-
-        <Pressable
-          onPress={open}
-          accessibilityRole="button"
-          style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
-        >
-          <Surface style={{ gap: space.sm }}>
-            {block.kind === 'readings' ? (
-              <ReadingRun block={block} />
-            ) : block.kind === 'episode' ? (
-              <EpisodeBody block={block} currency={currency} />
-            ) : (
-              <SingleBody entry={block.entry} currency={currency} />
-            )}
-          </Surface>
-        </Pressable>
-      </View>
-    </Row>
-  );
-}
-
-/** A consultation, with everything it produced listed underneath. */
-function EpisodeBody({
-  block,
-  currency,
-}: {
-  block: Extract<StoryBlock, { kind: 'episode' }>;
-  currency: string;
-}) {
-  const { colors, space, radius } = useTheme();
-  const { visit, records } = block;
-
-  return (
-    <>
-      <Row gap={space.md}>
-        <View
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: radius.sm,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: colors.accentSoft,
-          }}
-        >
-          <Ionicons name="medkit" size={18} color={colors.accent} />
-        </View>
-        <View style={{ flex: 1, gap: 2 }}>
-          <Text variant="bodyStrong" numberOfLines={2}>
-            {visit.title}
-          </Text>
-          {visit.detail ? (
-            <Text variant="caption" tone="muted" numberOfLines={1}>
-              {visit.detail}
-            </Text>
-          ) : null}
-        </View>
-        {visit.costMinor ? (
-          <Text variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
-            {formatMoney(visit.costMinor, { currency })}
-          </Text>
-        ) : null}
-      </Row>
-
-      {/*
-        What came out of it, indented under the consultation.
-
-        This is the whole point of an episode block: the prescription and the
-        report are consequences of the visit, and showing them inside it says
-        so in a way three sibling rows on nearby dates never could.
-      */}
-      {records.length > 0 ? (
-        <View
-          style={{
-            gap: 7,
-            paddingTop: space.sm,
-            borderTopWidth: 1,
-            borderTopColor: colors.hairline,
-          }}
-        >
-          {records.map((record) => {
-            const recordStyle = TIMELINE_STYLE[record.kind];
-            const recordTint = recordStyle.color(colors);
-            return (
-              <Row key={record.id} gap={space.sm}>
-                <Ionicons name={recordStyle.icon} size={14} color={recordTint} />
-                <Text variant="caption" numberOfLines={1} style={{ flex: 1 }}>
-                  {record.title}
-                </Text>
-                {record.imageUri ? (
-                  <Image
-                    source={{ uri: record.imageUri }}
-                    style={{ width: 20, height: 20, borderRadius: 4 }}
-                  />
-                ) : null}
-              </Row>
-            );
-          })}
-        </View>
-      ) : null}
-    </>
-  );
-}
-
-/**
- * A run of routine readings, as one line with its direction of travel.
- *
- * "7 readings · 148/95 → 129/82" is what a reader wants from six weeks of home
- * checks; the individual rows are on the trends screen for anyone who wants
- * them. Showing them here instead buried the one consultation that mattered
- * under noise nobody reads line by line.
- */
-function ReadingRun({ block }: { block: Extract<StoryBlock, { kind: 'readings' }> }) {
-  const { colors, space, radius } = useTheme();
-  const first = block.entries[0]!;
-  const latest = block.entries[block.entries.length - 1]!;
-  const label = HEALTH_METRIC_LABEL[block.metric as HealthMetric] ?? 'Readings';
-
-  return (
-    <Row gap={space.md}>
-      <View
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: radius.sm,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: '#D6336C1A',
-        }}
-      >
-        <Ionicons name="pulse-outline" size={18} color="#D6336C" />
-      </View>
-      <View style={{ flex: 1, gap: 3 }}>
-        <Text variant="bodyStrong" numberOfLines={1}>
-          {label}
-        </Text>
-        <Row gap={6}>
-          <Text variant="caption" tone="muted">
-            {block.entries.length} readings
-          </Text>
-          {/* First → latest, so the stretch reads in the direction of time. */}
-          <Text variant="caption" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
-            {first.title} → {latest.title}
-          </Text>
-        </Row>
-      </View>
-      <Ionicons name="chevron-forward" size={15} color={colors.inkFaint} />
-    </Row>
-  );
-}
-
-/** A record standing on its own — no visit, no run. */
-function SingleBody({ entry, currency }: { entry: TimelineEntry; currency: string }) {
-  const { colors, space, radius } = useTheme();
-  const style = TIMELINE_STYLE[entry.kind];
-  const tint = style.color(colors);
-
-  return (
-    <Row gap={space.md}>
-      {entry.kind === 'document' && entry.imageUri ? (
-        <Image
-          source={{ uri: entry.imageUri }}
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: radius.sm,
-            backgroundColor: colors.surfaceSunken,
-          }}
-        />
-      ) : (
-        <View
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: radius.sm,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: `${tint}1A`,
-          }}
-        >
-          <Ionicons name={style.icon} size={18} color={tint} />
-        </View>
-      )}
-      <View style={{ flex: 1, gap: 3 }}>
-        <Text variant="bodyStrong" numberOfLines={1}>
-          {entry.title}
-        </Text>
-        <Row gap={6}>
-          <View
-            style={{
-              paddingHorizontal: 6,
-              paddingVertical: 1,
-              borderRadius: 4,
-              backgroundColor: `${tint}1A`,
-            }}
+        <Surface padded={false} style={{ overflow: 'hidden' }}>
+          <Pressable
+            onPress={open}
+            accessibilityRole="button"
+            accessibilityLabel={`${kindLabel}, ${title}`}
+            style={({ pressed }) => ({
+              padding: space.lg,
+              gap: space.md,
+              backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+            })}
           >
-            <Text variant="caption" color={tint} style={{ fontWeight: '800', fontSize: 10 }}>
-              {entry.kind === 'document' && entry.documentKind
-                ? (DOCUMENT_KIND_LABEL[entry.documentKind as DocumentKind] ?? style.label)
-                : style.label}
-            </Text>
-          </View>
-          {entry.detail ? (
-            <Text variant="caption" tone="muted" numberOfLines={1} style={{ flex: 1 }}>
-              {entry.detail}
-            </Text>
+            {/* What and when. */}
+            <Row gap={space.sm}>
+              <Ionicons name={kindIcon} size={14} color={kindColor} />
+              <Text variant="label" tone="muted" style={{ flex: 1 }} numberOfLines={1}>
+                {kindLabel.toUpperCase()}
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+            </Row>
+
+            <View style={{ gap: 2 }}>
+              <Text variant="heading" numberOfLines={2}>
+                {title}
+              </Text>
+              {subtitle || cost ? (
+                <Text variant="caption" tone="secondary" numberOfLines={1}>
+                  {[subtitle, cost ? formatMoney(cost, { currency }) : null]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </Text>
+              ) : null}
+            </View>
+
+            {/* The verdict — what this event said about you. */}
+            {analysis && verdict ? (
+              <View
+                style={{
+                  flexDirection: 'row',
+                  gap: space.sm,
+                  padding: space.md,
+                  borderRadius: radius.md,
+                  backgroundColor: verdict.bg,
+                }}
+              >
+                <Ionicons name={verdict.icon} size={18} color={verdict.fg} style={{ marginTop: 1 }} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text variant="label" color={verdict.fg}>
+                    {analysis.flagged > 0
+                      ? `${verdict.label} · ${analysis.flagged} to check`.toUpperCase()
+                      : `${verdict.label} · all in range`.toUpperCase()}
+                  </Text>
+                  <Text variant="small" numberOfLines={3}>
+                    {analysis.headline}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
+            {/* What was looked at, with anything off marked. */}
+            {topics.length > 0 && (isVisit || block.kind === 'single') ? (
+              <TopicChips topics={topics} />
+            ) : null}
+
+            {/* What came out of it. */}
+            {medicines.length > 0 ? (
+              <Row gap={space.sm} style={{ alignItems: 'flex-start' }}>
+                <Ionicons name="medical" size={15} color={colors.completed} style={{ marginTop: 1 }} />
+                <Text variant="small" tone="secondary" style={{ flex: 1 }} numberOfLines={2}>
+                  <Text variant="small" style={{ fontWeight: '700' }}>
+                    Prescribed{' '}
+                  </Text>
+                  {medicines.map((m) => m.title).join(', ')}
+                </Text>
+              </Row>
+            ) : null}
+          </Pressable>
+
+          {/* The papers themselves, each one tap from full screen. */}
+          {documents.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{
+                gap: space.sm,
+                paddingHorizontal: space.lg,
+                paddingBottom: space.lg,
+              }}
+            >
+              {documents.map((d) => {
+                const doc = documentFor(d.refId);
+                return (
+                  <Pressable
+                    key={d.id}
+                    onPress={() => (doc ? onOpenDocument(doc) : undefined)}
+                    disabled={!doc}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${d.title}`}
+                    style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, width: 52, gap: 4 })}
+                  >
+                    <PaperThumb imageUri={d.imageUri} />
+                    <Text variant="caption" tone="secondary" numberOfLines={1} style={{ fontSize: 11 }}>
+                      {d.title}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           ) : null}
-        </Row>
+
+          {/* A visit whose reports were read: the read is one tap away too. */}
+          {isVisit && analysis ? (
+            <>
+              <Divider />
+              <Pressable
+                onPress={() => router.push(`/mini/health/analysis?id=${analysis.id}`)}
+                accessibilityRole="button"
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: space.sm,
+                  paddingHorizontal: space.lg,
+                  paddingVertical: space.md,
+                  backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                })}
+              >
+                <Ionicons name="document-text-outline" size={16} color={colors.accent} />
+                <Text variant="bodyStrong" tone="accent" style={{ flex: 1 }}>
+                  Read the full analysis
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+              </Pressable>
+            </>
+          ) : null}
+        </Surface>
       </View>
-      {entry.costMinor ? (
-        <Text variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
-          {formatMoney(entry.costMinor, { currency })}
-        </Text>
-      ) : null}
     </Row>
   );
 }
 
+/** A month heading inside the timeline, so a long record has landmarks. */
+function YearHeading({ at }: { at: Date }) {
+  const { space } = useTheme();
+  return (
+    <Row gap={space.sm} style={{ paddingTop: space.sm }}>
+      <View style={{ width: 34 }} />
+      <Label>{String(at.getFullYear())}</Label>
+    </Row>
+  );
+}
+
+/** A page-shaped thumbnail of an original: its photo, or a PDF mark. */
+function PaperThumb({ imageUri }: { imageUri?: string | null }) {
+  const { colors, radius } = useTheme();
+  const path = resolveImageUri(imageUri);
+  const pdf = isPdfAttachment(path ?? imageUri);
+  return (
+    <View
+      style={{
+        width: 52,
+        height: 66,
+        borderRadius: radius.sm,
+        overflow: 'hidden',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: colors.hairline,
+        backgroundColor: pdf ? colors.dangerSoft : colors.surfaceSunken,
+      }}
+    >
+      {path && !pdf ? (
+        <Image source={{ uri: path }} style={{ width: 52, height: 66 }} resizeMode="cover" />
+      ) : (
+        <>
+          <Ionicons
+            name={pdf ? 'document-text' : imageUri ? 'cloud-download-outline' : 'document-text-outline'}
+            size={22}
+            color={pdf ? colors.danger : colors.inkMuted}
+          />
+          {pdf ? (
+            <Text variant="label" color={colors.danger}>
+              PDF
+            </Text>
+          ) : null}
+        </>
+      )}
+    </View>
+  );
+}
+
 /**
- * Per-kind styling for a timeline row — the only place the types differ.
- *
- * `color` is a function of the theme so the types that map onto existing
- * semantic colours follow the palette in both light and dark, while documents
- * and readings carry their own hues — neither has a semantic equivalent, and
- * borrowing one would make a lab report look like a payment.
+ * What a report is about, as small chips — "Blood sugar", "Kidney". A topic
+ * with anything out of range is amber with an icon, so "your sugar report
+ * had something to check" is visible on the timeline itself.
  */
-const TIMELINE_STYLE: Record<
-  TimelineEntry['kind'],
-  {
-    icon: keyof typeof Ionicons.glyphMap;
-    label: string;
-    color: (colors: ReturnType<typeof useTheme>['colors']) => string;
+function TopicChips({ topics }: { topics: ReportTopic[] }) {
+  const { colors, radius } = useTheme();
+  if (topics.length === 0) return null;
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4 }}>
+      {topics.map((topic) => (
+        <View
+          key={topic.label}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 3,
+            paddingHorizontal: 8,
+            paddingVertical: 3,
+            borderRadius: radius.pill,
+            backgroundColor: topic.flagged ? colors.pendingSoft : colors.surfaceSunken,
+          }}
+        >
+          {topic.flagged ? <Ionicons name="alert-circle" size={12} color={colors.pending} /> : null}
+          <Text
+            variant="caption"
+            tone={topic.flagged ? 'ink' : 'secondary'}
+            style={{ fontWeight: topic.flagged ? '700' : '500' }}
+          >
+            {topic.label}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** Topics across several reports, deduplicated, flagged first. */
+function mergeTopics(lists: ReportTopic[][], limit = 4): ReportTopic[] {
+  const merged = new Map<string, boolean>();
+  for (const list of lists) {
+    for (const t of list) merged.set(t.label, (merged.get(t.label) ?? false) || t.flagged);
   }
-> = {
-  visit: { icon: 'medkit-outline', label: 'Visit', color: (c) => c.accent },
-  medicine: { icon: 'medical-outline', label: 'Prescribed', color: (c) => c.completed },
-  document: { icon: 'document-text-outline', label: 'Report', color: () => '#8B5CF6' },
-  reading: { icon: 'pulse-outline', label: 'Reading', color: () => '#D6336C' },
-};
+  return [...merged.entries()]
+    .map(([label, flagged]) => ({ label, flagged }))
+    .sort((a, b) => Number(b.flagged) - Number(a.flagged))
+    .slice(0, limit);
+}
+
+/** The report colour used across the health screens (the "Photo" quick action). */
+const REPORT_COLOR = '#8B5CF6';
+
+function trimNum(n: number): string {
+  return String(Number(n.toFixed(1)));
+}

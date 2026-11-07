@@ -4,6 +4,9 @@ import {
   parseAccountEmail,
   backupsToPrune,
   BACKUP_FOLDER_NAME,
+  LEGACY_FOLDER_NAME,
+  pickFolder,
+  renameFolderRequest,
   createFolderRequest,
   DRIVE_SCOPE,
   findFolderRequest,
@@ -34,14 +37,39 @@ describe('scope', () => {
 });
 
 describe('the backup folder', () => {
-  it('is named money-manager', () => {
-    expect(BACKUP_FOLDER_NAME).toBe('money-manager');
+  it('is named Dayly', () => {
+    expect(BACKUP_FOLDER_NAME).toBe('Dayly');
   });
 
-  it('looks for an existing folder before making one', () => {
-    const request = findFolderRequest(TOKEN);
-    expect(decodeURIComponent(request.url)).toContain("name='money-manager'");
-    expect(decodeURIComponent(request.url)).toContain('mimeType=');
+  it('looks for an existing folder, under the new OR the pre-rename name', () => {
+    /*
+     * Searching only for "Dayly" would miss every existing user's folder,
+     * create an empty one, and strand their backups and sync pairing.
+     */
+    const url = decodeURIComponent(findFolderRequest(TOKEN).url);
+    expect(url).toContain("name='Dayly'");
+    expect(url).toContain(`name='${LEGACY_FOLDER_NAME}'`);
+    expect(url).toContain('mimeType=');
+  });
+
+  it('prefers the old folder when both exist — it holds the history', () => {
+    expect(
+      pickFolder({
+        files: [
+          { id: 'new', name: 'Dayly' },
+          { id: 'old', name: 'money-manager' },
+        ],
+      }),
+    ).toEqual({ id: 'old', name: 'money-manager' });
+    expect(pickFolder({ files: [{ id: 'new', name: 'Dayly' }] })?.id).toBe('new');
+    expect(pickFolder({ files: [] })).toBeNull();
+  });
+
+  it('renames an old folder to Dayly in place', () => {
+    const request = renameFolderRequest(TOKEN, 'old');
+    expect(request.method).toBe('PATCH');
+    expect(request.url).toContain('/old?');
+    expect(request.body).toBe(JSON.stringify({ name: 'Dayly' }));
   });
 
   it('excludes trashed folders from the search', () => {
@@ -57,7 +85,7 @@ describe('the backup folder', () => {
     const request = createFolderRequest(TOKEN);
     expect(request.method).toBe('POST');
     expect(request.body).toContain('application/vnd.google-apps.folder');
-    expect(request.body).toContain('money-manager');
+    expect(request.body).toContain('Dayly');
   });
 
   it('reads the folder id from either a create or a search response', () => {
@@ -70,6 +98,19 @@ describe('the backup folder', () => {
 
 describe('listBackupsRequest', () => {
   const request = listBackupsRequest(TOKEN, 'folder-1');
+
+  it('lists only downloadable backup files, not the folders beside them', () => {
+    /*
+     * The attachments subfolder lives in the same folder and is usually the
+     * newest item, so it topped the restore list — and tapping it failed with
+     * Drive's 403 fileNotDownloadable ("Could not open it").
+     */
+    const q = new URL(request.url).searchParams.get('q') ?? '';
+    expect(q).toContain("mimeType != 'application/vnd.google-apps.folder'");
+    expect(q).toContain("not mimeType contains 'application/vnd.google-apps'");
+    expect(q).toContain("name != 'dayly-sync.json'");
+    expect(q).toContain("name != 'money-manager-sync.json'");
+  });
 
   it('lists only what is inside the backup folder', () => {
     // Scoped by PARENT, so a file the user renamed in Drive is still found.
@@ -92,7 +133,7 @@ describe('listBackupsRequest', () => {
 describe('uploadBackupRequest', () => {
   const request = uploadBackupRequest(
     TOKEN,
-    'money-manager-2026-08-04.json',
+    'dayly-2026-08-04.json',
     '{"version":1}',
     'folder-1',
   );
@@ -110,7 +151,7 @@ describe('uploadBackupRequest', () => {
 
   it('closes the multipart body', () => {
     // An unterminated body is accepted by Drive and stores a truncated file.
-    expect(request.body?.trimEnd().endsWith('--money-manager-backup-boundary--')).toBe(true);
+    expect(request.body?.trimEnd().endsWith('--dayly-backup-boundary--')).toBe(true);
   });
 });
 

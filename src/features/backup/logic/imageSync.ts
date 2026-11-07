@@ -35,6 +35,8 @@ export const IMAGE_TABLES = [
   'health_documents',
   'buddy_loans',
   'buddy_repayments',
+  // Documents add-on: any file type; the extension travels in the local path.
+  'doc_files',
 ] as const;
 
 export type ImageTable = (typeof IMAGE_TABLES)[number];
@@ -177,4 +179,98 @@ export function attachmentFilename(pending: PendingImage): string {
   const extension = pending.localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const safe = /^[a-z0-9]{1,5}$/.test(extension) ? extension : 'jpg';
   return `${pending.table}-${pending.rowId}.${safe}`;
+}
+
+/**
+ * Where an attachment goes in Drive, and what it is called there.
+ *
+ * ## Why health papers get folders and names
+ *
+ * Everything used to land flat in `Dayly/attachments/` as
+ * `health_documents-<uuid>.pdf` — fine for a receipt the app shows inline,
+ * useless for a medical report the user may need to hand a doctor from the
+ * Drive app. A person's papers are therefore filed the way someone would file
+ * them by hand:
+ *
+ *     Dayly/Health/Amma/Lab reports/2026/2026-03-14 Lipid profile.pdf
+ *
+ * Person, then kind, then year — the order people look for paper in. The
+ * date leads the filename so a folder sorts by date. A short id suffix keeps
+ * two same-day reports with the same title apart, and traces a file back to
+ * its row. Other attachments keep the original flat layout.
+ */
+export interface AttachmentPlacement {
+  /** Folder names under the app's Drive folder, outermost first. */
+  folders: string[];
+  filename: string;
+}
+
+/** What is known about a health document when filing it. */
+export interface HealthDocumentMeta {
+  title: string;
+  kind: string;
+  documentDate: Date;
+  personName: string;
+}
+
+const KIND_FOLDER: Record<string, string> = {
+  report: 'Lab reports',
+  prescription: 'Prescriptions',
+  scan: 'Scans',
+  bill: 'Bills',
+  insurance: 'Insurance',
+  vaccination: 'Vaccinations',
+  other: 'Other',
+};
+
+/** Drop characters Drive and the Files app handle badly, and trim length. */
+export function safeName(value: string, max = 60): string {
+  const cleaned = value
+    .replace(/[\/\\:*?"<>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (cleaned || 'Untitled').slice(0, max).trim();
+}
+
+function isoDate(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * What is known about a Documents add-on file when filing it: its title and
+ * the folder path it sits in, outermost first. Drive mirrors the user's own
+ * folders — `Dayly/Documents/Car/Insurance/Policy 2026 (a1b2c3).pdf` — so the
+ * files are as findable from the Drive app as they are in Dayly.
+ */
+export interface DocFileMeta {
+  title: string;
+  folderPath: string[];
+}
+
+export function attachmentPlacement(
+  pending: PendingImage,
+  meta?: HealthDocumentMeta,
+  docMeta?: DocFileMeta,
+): AttachmentPlacement {
+  if (pending.table === 'doc_files' && docMeta) {
+    const extension = attachmentFilename(pending).split('.').pop() ?? 'bin';
+    return {
+      folders: ['Documents', ...docMeta.folderPath.map((name) => safeName(name, 40))],
+      filename: `${safeName(docMeta.title)} (${pending.rowId.slice(0, 6)}).${extension}`,
+    };
+  }
+  if (pending.table === 'health_documents' && meta) {
+    const extension = attachmentFilename(pending).split('.').pop() ?? 'jpg';
+    return {
+      folders: [
+        'Health',
+        safeName(meta.personName, 40),
+        KIND_FOLDER[meta.kind] ?? 'Other',
+        String(meta.documentDate.getFullYear()),
+      ],
+      filename: `${isoDate(meta.documentDate)} ${safeName(meta.title)} (${pending.rowId.slice(0, 6)}).${extension}`,
+    };
+  }
+  return { folders: ['attachments'], filename: attachmentFilename(pending) };
 }

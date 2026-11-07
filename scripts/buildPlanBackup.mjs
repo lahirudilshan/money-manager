@@ -28,7 +28,7 @@
  * re-importing updates rows in place.
  *
  * Run:  node scripts/buildPlanBackup.mjs
- * Out:  backups/money-manager-<timestamp>.json
+ * Out:  backups/dayly-<timestamp>.json
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -39,12 +39,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 /*
  * The filename MATTERS: the restore screen only lists files matching
- * `isSnapshotFilename` — `money-manager-*.json` — so anything else is invisible
+ * `isSnapshotFilename` — `dayly-*.json` — so anything else is invisible
  * in the app no matter how valid its contents. Timestamped like the app's own
  * saves, so it sorts among them naturally.
  */
 const STAMP = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-const OUT = resolve(ROOT, `backups/money-manager-${STAMP}.json`);
+const OUT = resolve(ROOT, `backups/dayly-${STAMP}.json`);
 
 /** Money is stored as INTEGER minor units — never floats. Mirrors shared/lib/money. */
 const minor = (major) => Math.round(major * 100);

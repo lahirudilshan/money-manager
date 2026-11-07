@@ -640,3 +640,92 @@ export function refillRunway(due: NextDue | null): RefillRunway | null {
   if (due.inDays <= DUE_SOON_DAYS) return 'nearly-out';
   return due.inDays <= GETTING_CLOSE_DAYS ? 'getting-close' : 'plenty';
 }
+
+/**
+ * An icon that fits an item's name — "Gas cylinder" → a flame.
+ *
+ * Applied as the name is typed (until the user picks an icon themselves), and
+ * as the fallback for items saved with the generic box, so a list of tracked
+ * things is recognisable by shape rather than a column of identical cubes.
+ * First keyword wins; null when nothing fits.
+ */
+const ICON_KEYWORDS: [RegExp, string][] = [
+  [/\bgas\b|cylinder|lpg|stove/i, 'flame-outline'],
+  [/filter|purifier|cartridge/i, 'funnel-outline'],
+  [/water|bottle|can\b/i, 'water-outline'],
+  [/ink|toner|printer/i, 'print-outline'],
+  [/tooth|brush/i, 'brush-outline'],
+  [/battery|batteries|cell\b/i, 'battery-half-outline'],
+  [/bulb|lamp|light|tube/i, 'bulb-outline'],
+  [/tyre|tire|wheel/i, 'disc-outline'],
+  [/\boil\b|engine|lubricant|coolant/i, 'color-fill-outline'],
+  [/rice|flour|sugar|grocer|dhal|lentil/i, 'nutrition-outline'],
+  [/coffee|tea\b/i, 'cafe-outline'],
+  [/milk|formula/i, 'pint-outline'],
+  [/medicine|tablet|pill|inhaler|insulin|vitamin/i, 'medkit-outline'],
+  [/lens|contact/i, 'eye-outline'],
+  [/soap|shampoo|detergent|wash|cleaner/i, 'sparkles-outline'],
+  [/razor|blade|shav/i, 'cut-outline'],
+  [/diaper|nappy|baby/i, 'happy-outline'],
+  [/dog|cat|pet/i, 'paw-outline'],
+  [/mosquito|insect|coil/i, 'bug-outline'],
+  [/tissue|toilet|paper/i, 'document-outline'],
+  [/phone|mobile|data|recharge|reload/i, 'phone-portrait-outline'],
+  [/fuel|petrol|diesel/i, 'speedometer-outline'],
+  [/plant|fertili[sz]er|garden/i, 'leaf-outline'],
+];
+
+export function suggestTrackerIcon(name: string): string | null {
+  const text = name.trim();
+  if (!text) return null;
+  return ICON_KEYWORDS.find(([pattern]) => pattern.test(text))?.[1] ?? null;
+}
+
+/**
+ * Each tracked item's own colour — an orange flame for gas, sky blue for water.
+ *
+ * The tile used to take the STATUS colour, so every not-started item was the
+ * same grey and every healthy one the same green: the list read as a column of
+ * identical tiles. Status lives in the pill now; the tile says what the thing
+ * is. Colours come from the category palette (see the dayly-ui skill), picked
+ * by icon so the association is the obvious one, and from the name otherwise —
+ * a stable choice, so an item never changes colour between visits.
+ */
+const ICON_COLOR: Record<string, string> = {
+  'flame-outline': '#EA580C', // orange
+  'water-outline': '#0284C7', // sky
+  'funnel-outline': '#0891B2', // cyan
+  'print-outline': '#4F46E5', // indigo
+  'brush-outline': '#0D9488', // teal
+  'battery-half-outline': '#16A34A', // green
+  'bulb-outline': '#D97706', // amber
+  'disc-outline': '#475569', // slate
+  'color-fill-outline': '#57534E', // stone
+  'nutrition-outline': '#65A30D', // lime
+  'cafe-outline': '#CA8A04', // gold
+  'pint-outline': '#2563EB', // blue
+  'medkit-outline': '#E11D48', // rose
+  'medical-outline': '#E11D48', // rose
+  'eye-outline': '#7C3AED', // violet
+  'sparkles-outline': '#C026D3', // fuchsia
+  'cut-outline': '#475569', // slate
+  'happy-outline': '#DB2777', // pink
+  'paw-outline': '#EA580C', // orange
+  'bug-outline': '#059669', // emerald
+  'document-outline': '#57534E', // stone
+  'phone-portrait-outline': '#4F46E5', // indigo
+  'speedometer-outline': '#DC2626', // red
+  'leaf-outline': '#059669', // emerald
+};
+
+const NAME_PALETTE = [
+  '#E11D48', '#EA580C', '#D97706', '#65A30D', '#059669', '#0891B2',
+  '#2563EB', '#4F46E5', '#7C3AED', '#C026D3', '#DB2777', '#0D9488',
+];
+
+export function trackerColor(icon: string | null | undefined, name: string): string {
+  if (icon && ICON_COLOR[icon]) return ICON_COLOR[icon];
+  let hash = 0;
+  for (const ch of name.trim().toLowerCase()) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return NAME_PALETTE[hash % NAME_PALETTE.length];
+}

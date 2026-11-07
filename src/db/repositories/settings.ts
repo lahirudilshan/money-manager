@@ -85,12 +85,18 @@ export const SETTINGS_KEYS = {
    * the test message to the user without them picking themselves every time.
    */
   ownPhoneNumber: 'own_phone_number',
+  /** Last valid Shortcuts link from GET /api/config — see features/sms/logic/shortcutLink.ts. */
+  smsShortcutUrl: 'sms_shortcut_url',
   /** Cursor for incremental catalog pulls — the last row's `updated_at`|`id`. */
   catalogCursor: 'catalog_cursor',
   /** When the catalog last synced, for the Settings status line. */
   catalogSyncedAt: 'catalog_synced_at',
   /** Comma-separated ids of enabled mini apps — see core/miniApps.ts. */
   miniApps: 'mini_apps',
+  /** JSON list of recent search queries, newest first — see features/search. */
+  searchHistory: 'search_history',
+  /** JSON list of result keys recently opened from search, newest first. */
+  searchOpened: 'search_opened',
   /**
    * ISO timestamp of the last successful Drive upload.
    *
@@ -99,6 +105,10 @@ export const SETTINGS_KEYS = {
    * on a network round trip to say something it already knows.
    */
   lastCloudBackupAt: 'last_cloud_backup_at',
+  /** 'false' turns the daily Drive backup off; absent means on. */
+  autoBackup: 'auto_backup_enabled',
+  /** 'daily' | 'weekly' | 'monthly'; absent means daily. */
+  autoBackupFrequency: 'auto_backup_frequency',
   /** ISO timestamp of the last local backup file written. */
   lastLocalBackupAt: 'last_local_backup_at',
 

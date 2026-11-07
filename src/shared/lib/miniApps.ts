@@ -17,7 +17,7 @@
 
 import type { Ionicons } from '@expo/vector-icons';
 
-export type MiniAppId = 'fuel' | 'health' | 'buddyloans' | 'trackers';
+export type MiniAppId = 'fuel' | 'health' | 'buddyloans' | 'trackers' | 'documents';
 
 export interface MiniApp {
   id: MiniAppId;
@@ -63,6 +63,19 @@ export const MINI_APPS: MiniApp[] = [
     icon: 'repeat-outline',
     color: '#7C3AED',
     route: '/mini/trackers',
+  },
+  {
+    id: 'documents',
+    name: 'Documents',
+    description:
+      'Keep PDFs, photos and files in your own folders, with notes and tags. Find any of them from Search on the home screen.',
+    icon: 'folder-open-outline',
+    /*
+     * Gold: a manila-folder yellow, and the one hue no other add-on uses.
+     * Never used as text: the dashboard's Glyph draws it as a tile only.
+     */
+    color: '#CA8A04',
+    route: '/mini/documents',
   },
   {
     id: 'health',

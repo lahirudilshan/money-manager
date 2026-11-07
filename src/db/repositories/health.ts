@@ -1,13 +1,20 @@
 /** Health mini-app: people and their records. */
 
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db } from '~/db/client';
+import type { TestWords } from '~/features/health/logic/labReports';
 import {
+  healthAnalyses,
+  healthLabResults,
   healthDocuments,
   healthMedicines,
   healthPeople,
   healthReadings,
   healthVisits,
+  type HealthAnalysis,
+  type HealthLabResult,
+  type NewHealthAnalysis,
+  type NewHealthLabResult,
   type HealthDocument,
   type HealthMedicine,
   type HealthPerson,
@@ -233,6 +240,10 @@ export const healthVisitRepo = {
 };
 
 export const healthDocumentRepo = {
+  byId(id: string): HealthDocument | undefined {
+    return db.select().from(healthDocuments).where(eq(healthDocuments.id, id)).get();
+  },
+
   byPerson(personId: string): HealthDocument[] {
     return db
       .select()
@@ -272,6 +283,10 @@ export const healthDocumentRepo = {
 };
 
 export const healthReadingRepo = {
+  byId(id: string): HealthReading | undefined {
+    return db.select().from(healthReadings).where(eq(healthReadings.id, id)).get();
+  },
+
   byPerson(personId: string): HealthReading[] {
     return db
       .select()
@@ -318,5 +333,157 @@ export const healthReadingRepo = {
 
   remove(id: string): void {
     db.delete(healthReadings).where(eq(healthReadings.id, id)).run();
+  },
+};
+
+/**
+ * AI lab-report analyses and the per-test results lifted from them.
+ *
+ * Written together, in one transaction: an analysis with half its results is a
+ * report card with rows missing, and nothing on screen could tell the user so.
+ */
+export const healthLabRepo = {
+  createAnalysis(
+    analysis: Omit<NewHealthAnalysis, 'id'>,
+    results: ReadonlyArray<Omit<NewHealthLabResult, 'id' | 'analysisId' | 'personId'>>,
+  ): HealthAnalysis & { resultIds: string[] } {
+    return db.transaction((tx) => {
+      const created = tx
+        .insert(healthAnalyses)
+        .values({ ...analysis, id: createId() })
+        .returning()
+        .get();
+      const resultIds: string[] = [];
+      for (const result of results) {
+        const id = createId();
+        resultIds.push(id);
+        tx.insert(healthLabResults)
+          .values({
+            ...result,
+            id,
+            analysisId: created.id,
+            personId: created.personId,
+          })
+          .run();
+      }
+      return { ...created, resultIds };
+    });
+  },
+
+  /**
+   * Fill in the plain words once the explanation call answers — the numbers
+   * were saved (and shown) before it, so the user is not kept waiting on it.
+   * `results` pairs each row id from `createAnalysis` with its words.
+   */
+  applyExplanation(
+    analysisId: string,
+    overall: Pick<NewHealthAnalysis, 'headline' | 'summary' | 'overallJson'>,
+    results: ReadonlyArray<{
+      id: string;
+      words: Pick<
+        NewHealthLabResult,
+        'meaning' | 'ifHigh' | 'ifLow' | 'bodyArea' | 'explanation' | 'searchTerms'
+      >;
+    }>,
+  ): void {
+    db.transaction((tx) => {
+      tx.update(healthAnalyses)
+        .set({ ...overall, updatedAt: now() })
+        .where(eq(healthAnalyses.id, analysisId))
+        .run();
+      for (const result of results) {
+        tx.update(healthLabResults)
+          .set({ ...result.words, updatedAt: now() })
+          .where(eq(healthLabResults.id, result.id))
+          .run();
+      }
+    });
+  },
+
+  analysesByPerson(personId: string): HealthAnalysis[] {
+    return db
+      .select()
+      .from(healthAnalyses)
+      .where(eq(healthAnalyses.personId, personId))
+      .orderBy(desc(healthAnalyses.reportDate), desc(healthAnalyses.analysedAt))
+      .all();
+  },
+
+  /** When every analysis ran — the daily limit counts these. */
+  analysedAtAll(): Date[] {
+    return db
+      .select({ at: healthAnalyses.analysedAt })
+      .from(healthAnalyses)
+      .all()
+      .map((row) => row.at);
+  },
+
+  analysisById(id: string): HealthAnalysis | undefined {
+    return db.select().from(healthAnalyses).where(eq(healthAnalyses.id, id)).get();
+  },
+
+  resultsByAnalysis(analysisId: string): HealthLabResult[] {
+    return db
+      .select()
+      .from(healthLabResults)
+      .where(eq(healthLabResults.analysisId, analysisId))
+      .orderBy(asc(healthLabResults.category), asc(healthLabResults.testName))
+      .all();
+  },
+
+  /** Every result for one person, oldest first — search and charts read this. */
+  resultsByPerson(personId: string): HealthLabResult[] {
+    return db
+      .select()
+      .from(healthLabResults)
+      .where(eq(healthLabResults.personId, personId))
+      .orderBy(asc(healthLabResults.measuredAt))
+      .all();
+  },
+
+  /** One test's history, oldest first. */
+  resultsByTest(personId: string, testKey: string): HealthLabResult[] {
+    return db
+      .select()
+      .from(healthLabResults)
+      .where(and(eq(healthLabResults.personId, personId), eq(healthLabResults.testKey, testKey)))
+      .orderBy(asc(healthLabResults.measuredAt))
+      .all();
+  },
+
+  /**
+   * What each test means, from the newest earlier result that explained it.
+   *
+   * The meaning of a test is the same for every person, so an analysis only
+   * asks the AI to explain tests this phone has never seen. Read from the
+   * results already stored — no separate cache table to back up or keep in
+   * step.
+   */
+  testWords(testKeys: readonly string[]): Map<string, TestWords> {
+    const words = new Map<string, TestWords>();
+    if (testKeys.length === 0) return words;
+    const rows = db
+      .select({
+        testKey: healthLabResults.testKey,
+        meaning: healthLabResults.meaning,
+        ifHigh: healthLabResults.ifHigh,
+        ifLow: healthLabResults.ifLow,
+        bodyArea: healthLabResults.bodyArea,
+        searchTerms: healthLabResults.searchTerms,
+      })
+      .from(healthLabResults)
+      .where(and(inArray(healthLabResults.testKey, [...testKeys]), isNotNull(healthLabResults.meaning)))
+      .orderBy(desc(healthLabResults.measuredAt))
+      .all();
+    for (const row of rows) {
+      if (words.has(row.testKey)) continue;
+      words.set(row.testKey, { ...row, searchTerms: row.searchTerms ?? '' });
+    }
+    return words;
+  },
+
+  removeAnalysis(id: string): void {
+    // Results go with it — `ON DELETE CASCADE` on `analysis_id`.
+    db.delete(healthAnalyses).where(eq(healthAnalyses.id, id)).run();
   },
 };

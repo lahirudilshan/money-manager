@@ -9,6 +9,7 @@ import {
   daysSince,
   personColor,
   daysUntil,
+  groupLoansByPerson,
   remainingMinor,
   urgencyOf,
   type BuddyLoanLike,
@@ -50,7 +51,8 @@ export default function BuddyLoansHome() {
   const repayments = useAppStore((s) => s.buddyRepayments);
 
   const [filter, setFilter] = useState<Filter>('open');
-
+  /** People whose loans are expanded in the list. */
+  const [openPeople, setOpenPeople] = useState<Set<string>>(new Set());
   /** Repayments grouped once, so each row's balance is a map lookup. */
   const byLoan = useMemo(() => {
     const map = new Map<string, RepaymentLike[]>();
@@ -96,6 +98,8 @@ export default function BuddyLoansHome() {
       return b.lentOn.getTime() - a.lentOn.getTime();
     });
   }, [loans, filter, today]);
+
+  const groups = useMemo(() => groupLoansByPerson(visible), [visible]);
 
   return (
     <Screen
@@ -230,40 +234,173 @@ export default function BuddyLoansHome() {
           actionLabel={loans.length === 0 ? 'Add a loan' : undefined}
           onAction={loans.length === 0 ? () => router.push('/mini/buddyloans/edit') : undefined}
         />
-      ) : (
+      ) : null}
+
+      {visible.length === 0 ? null : (
         <Surface padded={false}>
-          {visible.map((loan, index) => (
-            <React.Fragment key={loan.id}>
-              {/*
-                A full point of the ORDINARY hairline, edge to edge.
-
-                Two independent things were making the old rule invisible: it
-                was sub-pixel (`StyleSheet.hairlineWidth`) AND inset to the
-                name, so it read as a stray mark rather than a line between two
-                loans. Fixing the width and the inset is enough — going up to
-                `hairlineStrong` as well then over-corrected, drawing a rule
-                heavier than the card's own border for a boundary between two
-                rows of the same list.
-
-                Full width rather than inset because the avatar-aligned inset
-                suits a list of uniform one-line rows. These vary in height and
-                now carry a full-width progress bar of their own, which a short
-                rule sat awkwardly against.
-              */}
+          {/*
+            One row per PERSON. A friend with three loans used to be three
+            rows with the same name, which read as a duplicate. Now they are
+            one row with their total; it opens to show each loan.
+          */}
+          {groups.map((group, index) => (
+            <React.Fragment key={group.name}>
               {index > 0 ? (
                 <Divider style={{ height: 1, backgroundColor: colors.hairline }} />
               ) : null}
-              <LoanRow
-                loan={loan}
-                repayments={byLoan.get(loan.id) ?? []}
-                today={today}
-                onPress={() => router.push(`/mini/buddyloans/detail?id=${loan.id}`)}
-              />
+              {group.loans.length === 1 ? (
+                <LoanRow
+                  loan={group.loans[0]}
+                  repayments={byLoan.get(group.loans[0].id) ?? []}
+                  today={today}
+                  onPress={() => router.push(`/mini/buddyloans/detail?id=${group.loans[0].id}`)}
+                />
+              ) : (
+                <PersonGroup
+                  name={group.name}
+                  loans={group.loans}
+                  byLoan={byLoan}
+                  today={today}
+                  open={openPeople.has(group.name)}
+                  onToggle={() =>
+                    setOpenPeople((current) => {
+                      const next = new Set(current);
+                      if (next.has(group.name)) next.delete(group.name);
+                      else next.add(group.name);
+                      return next;
+                    })
+                  }
+                  onOpenLoan={(id) => router.push(`/mini/buddyloans/detail?id=${id}`)}
+                />
+              )}
             </React.Fragment>
           ))}
         </Surface>
       )}
     </Screen>
+  );
+}
+
+/**
+ * A person with several loans: their name, how many loans, and what they owe
+ * in total. Tapping opens the individual loans beneath, each still opening its
+ * own detail — where repayments are recorded against a specific loan.
+ */
+function PersonGroup({
+  name,
+  loans,
+  byLoan,
+  today,
+  open,
+  onToggle,
+  onOpenLoan,
+}: {
+  name: string;
+  loans: BuddyLoan[];
+  byLoan: Map<string, RepaymentLike[]>;
+  today: Date;
+  open: boolean;
+  onToggle: () => void;
+  onOpenLoan: (id: string) => void;
+}) {
+  const { colors, space, radius } = useTheme();
+  const tint = personColor(name, groupColors);
+  const owed = loans
+    .filter((loan) => loan.status === 'outstanding' && loan.direction === 'lent')
+    .reduce(
+      (sum, loan) =>
+        sum + remainingMinor(loan as unknown as BuddyLoanLike, byLoan.get(loan.id) ?? []),
+      0,
+    );
+  const iOwe = loans
+    .filter((loan) => loan.status === 'outstanding' && loan.direction === 'borrowed')
+    .reduce(
+      (sum, loan) =>
+        sum + remainingMinor(loan as unknown as BuddyLoanLike, byLoan.get(loan.id) ?? []),
+      0,
+    );
+  const latest = loans.reduce((a, b) => (a.lentOn > b.lentOn ? a : b));
+
+  return (
+    <View>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${name}, ${loans.length} loans, ${formatMoney(owed)}`}
+        style={({ pressed }) => ({
+          paddingHorizontal: space.lg,
+          paddingVertical: space.md,
+          opacity: pressed ? 0.7 : 1,
+        })}
+      >
+        <Row gap={space.md}>
+          <View
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 20,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: `${tint}1F`,
+            }}
+          >
+            <Text variant="bodyStrong" color={tint}>
+              {name.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text variant="bodyStrong" numberOfLines={1}>
+              {name}
+            </Text>
+            <Text variant="caption" tone="muted">
+              {`${loans.length} loans · latest ${latest.lentOn.toLocaleDateString(undefined, {
+                day: 'numeric',
+                month: 'short',
+              })}`}
+            </Text>
+          </View>
+          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+            {owed > 0 ? (
+              <Text variant="figure" color={colors.completed} style={{ fontVariant: ['tabular-nums'] }}>
+                {formatMoney(owed)}
+              </Text>
+            ) : null}
+            {iOwe > 0 ? (
+              <Text variant="figure" style={{ fontVariant: ['tabular-nums'] }}>
+                {`−${formatMoney(iOwe)}`}
+              </Text>
+            ) : null}
+            <Text variant="caption" tone="muted">
+              {owed > 0 ? 'owes you' : iOwe > 0 ? 'you owe' : 'settled'}
+            </Text>
+          </View>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.inkMuted} />
+        </Row>
+      </Pressable>
+      {open ? (
+        <View
+          style={{
+            marginLeft: space.lg,
+            borderLeftWidth: 2,
+            borderLeftColor: `${tint}55`,
+            borderRadius: radius.sm,
+          }}
+        >
+          {loans.map((loan, index) => (
+            <React.Fragment key={loan.id}>
+              {index > 0 ? <Divider style={{ height: 1, backgroundColor: colors.hairline }} /> : null}
+              <LoanRow
+                loan={loan}
+                repayments={byLoan.get(loan.id) ?? []}
+                today={today}
+                onPress={() => onOpenLoan(loan.id)}
+              />
+            </React.Fragment>
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }
 

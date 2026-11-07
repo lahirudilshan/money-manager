@@ -170,3 +170,29 @@ export async function pushObservations(
     return 0;
   }
 }
+
+/** Settings the server can change without an app release — GET /api/config. */
+export interface RemoteAppConfig {
+  smsShortcutUrl?: string;
+}
+
+/**
+ * Fetch runtime settings. `{}` on any failure or with no API configured, which
+ * callers read as "keep what you have". Only the type is checked here; each
+ * caller validates its own value before using it.
+ */
+export async function fetchAppConfig(): Promise<RemoteAppConfig> {
+  if (!isCatalogConfigured()) return {};
+
+  try {
+    const response = await fetchWithTimeout(`${BASE_URL}/api/config`, SYNC_TIMEOUT_MS, {
+      headers: apiHeaders(),
+    });
+    if (!response.ok) return {};
+
+    const body = (await response.json()) as Record<string, unknown> | null;
+    return typeof body?.smsShortcutUrl === 'string' ? { smsShortcutUrl: body.smsShortcutUrl } : {};
+  } catch {
+    return {};
+  }
+}

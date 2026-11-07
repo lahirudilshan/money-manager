@@ -9,7 +9,19 @@ import { SmartDetectBadge } from '~/features/sms/components/SmartDetectBadge';
 import { SmsDraftCard } from '~/features/sms/components/SmsDraftCard';
 import { UpgradeSheet } from '~/features/onboarding/components/UpgradeSheet';
 import { useTabBarClearance } from '~/shared/components/TabBar';
-import { BottomSheet, Divider, Empty, GradientCard, Glyph, Label, Row, Stat, Surface, Text } from '~/shared/components/ui';
+import {
+  BottomSheet,
+  Divider,
+  Empty,
+  GradientButton,
+  GradientCard,
+  Glyph,
+  Label,
+  Row,
+  Stat,
+  Surface,
+  Text,
+} from '~/shared/components/ui';
 import { formatMoney, toMajor } from '~/shared/lib/money';
 import { formatPeriod, planHealth, shiftPeriod } from '~/features/budget/logic/planning';
 import { canUse } from '~/features/budget/logic/plans';
@@ -17,7 +29,24 @@ import { enabledMiniApps, MINI_APPS, parseEnabled } from '~/shared/lib/miniApps'
 import { HEALTH_VISUALS, shadeHex } from '~/shared/theme';
 import type { Refill as RefillLike, TrackerReminder } from '~/features/refills/logic/refills';
 import { refillRepo } from '~/db/repositories/trackers';
-import { accountLabel, resolveBrand } from '~/shared/data/banks';
+import { SearchBar } from '~/features/search/components/SearchBar';
+import { accountLabel, BANKS, resolveBrand } from '~/shared/data/banks';
+
+/**
+ * The bank a message is from, by its name in the text ("HNB", "Sampath") —
+ * so adding an account from Smart Detect starts with the bank picked. Null
+ * when no bank's name or short name appears.
+ */
+function guessBankId(text: string): string | null {
+  const haystack = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+  const hit = BANKS.find((bank) =>
+    [bank.shortName, bank.name, bank.monogram]
+      .map((n) => n.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+      .filter((n) => n.length >= 3)
+      .some((n) => haystack.includes(` ${n} `)),
+  );
+  return hit?.id ?? null;
+}
 import {
   selectAccountTransfers,
   selectBoardTotals,
@@ -30,12 +59,16 @@ import {
   type BuddyReminderView,
   selectTotalIncome,
   selectUnknownAccounts,
+  type UnknownAccount,
   useAppStore,
   type ReminderView,
 } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { useSalaryRate } from '~/features/rates/logic/useSalaryRate';
 import { describeRateAge, usdNeededFor } from '~/features/rates/logic/bankRates';
+
+/** How many detected messages show before "Show N more". */
+const DRAFT_PREVIEW = 3;
 
 /** Thickness of the gradient edge grouping the Smart Detect section. */
 const DETECT_BORDER = 1.5;
@@ -90,6 +123,9 @@ export default function DashboardScreen() {
   });
   const healthVisual = HEALTH_VISUALS[health];
   const smsDrafts = state.smsDrafts;
+  const [showAllDrafts, setShowAllDrafts] = useState(false);
+  /** The unknown account whose messages are open in a sheet. */
+  const [unknownSheet, setUnknownSheet] = useState<UnknownAccount | null>(null);
 
   /*
    * Check for new messages every time this screen comes into view.
@@ -472,6 +508,9 @@ export default function DashboardScreen() {
         />
       </Row>
 
+      {/* Search everything — opens its own screen; see app/search.tsx. */}
+      <SearchBar />
+
       {/*
         Add-on features the user has switched on — see core/miniApps.ts.
 
@@ -582,9 +621,9 @@ export default function DashboardScreen() {
           {unknownAccounts.slice(0, 2).map((account) => (
             <Pressable
               key={account.tail}
-              onPress={() => router.push('/(tabs)/cards?add=1')}
+              onPress={() => setUnknownSheet(account)}
               accessibilityRole="button"
-              accessibilityLabel={`${account.count} messages from account ending ${account.tail}, which is not in the app. Add it.`}
+              accessibilityLabel={`${account.count} messages from account ending ${account.tail}, which is not in the app. See them.`}
               style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -607,12 +646,18 @@ export default function DashboardScreen() {
                 </Text>
               </View>
               <Text variant="caption" color={colors.accent}>
-                Add
+                See
               </Text>
+              <Ionicons name="chevron-forward" size={14} color={colors.accent} />
             </Pressable>
           ))}
 
-          {smsDrafts.map((draft) => (
+          {/*
+            Collapsed past a few rows. A backlog of twenty detected messages
+            pushed the whole board below the fold; the newest few are what the
+            user acts on first, and the rest are one tap away.
+          */}
+          {(showAllDrafts ? smsDrafts : smsDrafts.slice(0, DRAFT_PREVIEW)).map((draft) => (
             <SmsDraftCard
               key={draft.id}
               draft={draft}
@@ -676,6 +721,35 @@ export default function DashboardScreen() {
               }
             />
           ))}
+          {smsDrafts.length > DRAFT_PREVIEW ? (
+            <Pressable
+              onPress={() => setShowAllDrafts((value) => !value)}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: showAllDrafts }}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                paddingVertical: space.sm,
+                borderRadius: radius.md,
+                backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+              })}
+            >
+              <Ionicons
+                name={showAllDrafts ? 'chevron-up' : 'chevron-down'}
+                size={16}
+                color={colors.accent}
+              />
+              <Text variant="small" color={colors.accent} style={{ fontWeight: '700' }}>
+                {showAllDrafts
+                  ? 'Show fewer'
+                  : `Show ${smsDrafts.length - DRAFT_PREVIEW} more`}
+              </Text>
+            </Pressable>
+          ) : null}
         </LinearGradient>
         </LinearGradient>
       ) : null}
@@ -1099,6 +1173,78 @@ export default function DashboardScreen() {
         </Surface>
       ) : null}
       </ScrollView>
+
+      {/*
+        An unknown account, explained before it is added: the messages that
+        named it, so the user can tell whose account it is — theirs, or a
+        payee's — and only then add it, with the number and bank filled in.
+      */}
+      <BottomSheet
+        visible={unknownSheet !== null}
+        onClose={() => setUnknownSheet(null)}
+        icon="card-outline"
+        eyebrow="Not in Dayly yet"
+        title={unknownSheet ? `Account ending ${unknownSheet.tail.replace('…', '')}` : ''}
+        footer={
+          unknownSheet ? (
+            <GradientButton
+              label="Add this account"
+              icon="add"
+              onPress={() => {
+                const account = unknownSheet;
+                setUnknownSheet(null);
+                const digits = account.tail.replace(/\D/g, '');
+                const bank = guessBankId(account.messages.map((m) => m.raw).join(' '));
+                router.push(
+                  `/(tabs)/cards?add=1&account=${digits}${bank ? `&bank=${bank}` : ''}`,
+                );
+              }}
+            />
+          ) : null
+        }
+      >
+        {unknownSheet ? (
+          <>
+            <Text variant="body" tone="secondary">
+              {`Your bank sent ${unknownSheet.count} ${unknownSheet.count === 1 ? 'message' : 'messages'} about this account. If it is yours, add it so money moving through it is recognised. If it belongs to someone you pay, you can ignore this.`}
+            </Text>
+            <View style={{ gap: space.sm }}>
+              <Label>{unknownSheet.messages.length === 1 ? 'THE MESSAGE' : 'THE MESSAGES'}</Label>
+              {unknownSheet.messages.slice(0, 10).map((sms, index) => (
+                <Surface key={index}>
+                  <View style={{ gap: space.sm }}>
+                    <Row style={{ gap: space.sm, alignItems: 'center' }}>
+                      <Ionicons
+                        name={sms.direction === 'credit' ? 'arrow-down-circle' : 'arrow-up-circle'}
+                        size={18}
+                        color={sms.direction === 'credit' ? colors.completed : colors.inkSecondary}
+                      />
+                      <Text variant="bodyStrong" style={{ flex: 1 }} numberOfLines={1}>
+                        {sms.merchant || (sms.direction === 'credit' ? 'Money in' : 'Money out')}
+                      </Text>
+                      <Text
+                        variant="figure"
+                        color={sms.direction === 'credit' ? colors.completed : colors.ink}
+                        style={{ fontVariant: ['tabular-nums'] }}
+                      >
+                        {`${sms.direction === 'credit' ? '+' : '−'}${formatMoney(sms.amountMinor, sms.currency ? { currency: sms.currency } : undefined)}`}
+                      </Text>
+                    </Row>
+                    {sms.date ? (
+                      <Text variant="caption" tone="muted">
+                        {[sms.date, sms.time].filter(Boolean).join(' · ')}
+                      </Text>
+                    ) : null}
+                    <Text variant="small" tone="secondary" numberOfLines={4}>
+                      {sms.raw}
+                    </Text>
+                  </View>
+                </Surface>
+              ))}
+            </View>
+          </>
+        ) : null}
+      </BottomSheet>
 
       <UpgradeSheet
         visible={upgradeOpen}

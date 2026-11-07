@@ -689,12 +689,14 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
    * between is picked up instead of the draft being stuck with a stale guess.
    */
   loadSmsDrafts() {
+    const recentParsed = smsInboxRepo
+      .recentRawMessages(60)
+      .map((raw) => parseSms(raw))
+      .filter((sms): sms is ParsedSms => sms !== null);
     set({
-      recentAccountFragments: smsInboxRepo
-        .recentRawMessages(60)
-        .map((raw) => parseSms(raw))
-        .filter((sms): sms is ParsedSms => sms !== null)
-        .map((sms) => accountFragmentOf(sms)),
+      recentAccountFragments: recentParsed.map((sms) => accountFragmentOf(sms)),
+      // The messages themselves, so an unknown account can show what named it.
+      recentAccountMessages: recentParsed,
     });
     const { subcategories, categories, cards, merchantRules, currency, usdRate } = get();
 

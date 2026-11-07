@@ -1,8 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState } from 'react';
-import { View } from 'react-native';
-import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Alert, View } from 'react-native';
+import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { Field, PillSelect } from '~/shared/components/forms';
 import { DatePickerField } from '~/shared/components/DatePickerField';
 import { formatReading, trend } from '~/features/health/logic/health';
@@ -39,6 +39,10 @@ const METRICS: HealthMetric[] = [
  * not four separate screens: blood pressure needs two boxes and no context,
  * blood sugar needs one box and a fasting/post-meal choice that changes what
  * the number MEANS, and weight needs neither.
+ *
+ * Opened with `?id=` it edits an existing reading instead, and offers to
+ * delete it — a mistyped 210/80 otherwise sat on the chart forever, dragging
+ * the average and drawing a spike nobody had.
  */
 export default function HealthReadingForm() {
   const { colors, radius, space } = useTheme();
@@ -50,15 +54,24 @@ export default function HealthReadingForm() {
   /** The visit this record is being attached to, when opened from one. */
   const linkedVisit = params.visit ? healthVisitRepo.byId(params.visit) : undefined;
 
-  const person =
-    store.healthPeople.find((p) => p.id === params.person) ?? store.healthPeople[0];
+  /** The reading being edited, when opened from the history list. */
+  const existing = useMemo(
+    () => (params.id ? healthReadingRepo.byId(params.id) : undefined),
+    [params.id],
+  );
 
-  const [metric, setMetric] = useState<HealthMetric>('blood_pressure');
-  const [value, setValue] = useState('');
-  const [secondary, setSecondary] = useState('');
-  const [context, setContext] = useState<ReadingContext | null>(null);
-  const [measuredAt, setMeasuredAt] = useState(new Date());
-  const [note, setNote] = useState('');
+  const person =
+    store.healthPeople.find((p) => p.id === (existing?.personId ?? params.person)) ??
+    store.healthPeople[0];
+
+  const [metric, setMetric] = useState<HealthMetric>(existing?.metric ?? 'blood_pressure');
+  const [value, setValue] = useState(existing ? String(existing.value) : '');
+  const [secondary, setSecondary] = useState(
+    existing?.valueSecondary != null ? String(existing.valueSecondary) : '',
+  );
+  const [context, setContext] = useState<ReadingContext | null>(existing?.context ?? null);
+  const [measuredAt, setMeasuredAt] = useState(existing?.measuredAt ?? new Date());
+  const [note, setNote] = useState(existing?.note ?? '');
 
   const paired = isPairedMetric(metric);
   const unit = HEALTH_METRIC_UNIT[metric];
@@ -94,14 +107,39 @@ export default function HealthReadingForm() {
   const valid =
     Number.isFinite(parsedValue) && (!paired || Number.isFinite(parsedSecondary));
 
-  function save() {
+  function save(confirmedRepeat = false) {
     if (!person || !valid) return;
 
-    healthReadingRepo.create({
-      personId: person.id,
-      // Set when this form was opened from a visit's case page — the figure
-      // was measured in that room, not at home.
-      visitId: params.visit ?? null,
+    /*
+     * A double entry guard. The same figure for the same measure within ten
+     * minutes is almost always one reading saved twice (the sheet seemed not
+     * to respond, so it was filled in again) — and it skews the average and
+     * doubles a point on the chart. Asked, not blocked: two identical real
+     * readings minutes apart do happen.
+     */
+    if (!existing && !confirmedRepeat) {
+      const repeat = healthReadingRepo
+        .byMetric(person.id, metric)
+        .some(
+          (r) =>
+            r.value === parsedValue &&
+            (r.valueSecondary ?? null) === (paired ? parsedSecondary : null) &&
+            Math.abs(r.measuredAt.getTime() - measuredAt.getTime()) < 10 * 60 * 1000,
+        );
+      if (repeat) {
+        Alert.alert(
+          'Already added?',
+          'You saved the same reading a few minutes ago. Add it again?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Add anyway', onPress: () => save(true) },
+          ],
+        );
+        return;
+      }
+    }
+
+    const fields = {
       metric,
       value: parsedValue,
       valueSecondary: paired ? parsedSecondary : null,
@@ -109,10 +147,51 @@ export default function HealthReadingForm() {
       measuredAt,
       context,
       note: note.trim() || null,
-    });
+    };
+
+    if (existing) {
+      healthReadingRepo.update(existing.id, fields);
+    } else {
+      healthReadingRepo.create({
+        ...fields,
+        personId: person.id,
+        // Set when this form was opened from a visit's case page — the figure
+        // was measured in that room, not at home.
+        visitId: params.visit ?? null,
+      });
+    }
 
     store.refresh();
     router.back();
+  }
+
+  function remove() {
+    if (!existing) return;
+    Alert.alert(
+      'Delete this reading?',
+      `${formatReading({
+        metric: existing.metric,
+        value: existing.value,
+        valueSecondary: existing.valueSecondary,
+        unit: existing.unit,
+      })} on ${existing.measuredAt.toLocaleDateString(undefined, {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })} is removed from the chart and history. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            healthReadingRepo.remove(existing.id);
+            store.refresh();
+            router.back();
+          },
+        },
+      ],
+    );
   }
 
   if (!person) {
@@ -131,11 +210,21 @@ export default function HealthReadingForm() {
       asRoute
       scroll
       onClose={closeModal}
-      title="Add a reading"
+      title={existing ? 'Edit reading' : 'Add a reading'}
       icon="pulse-outline"
       iconColor={colors.accent}
       footer={
-        <GradientButton label="Save reading" icon="checkmark" disabled={!valid} onPress={save} />
+        <View style={{ gap: space.sm }}>
+          <GradientButton
+            label={existing ? 'Save changes' : 'Save reading'}
+            icon="checkmark"
+            disabled={!valid}
+            onPress={() => save()}
+          />
+          {existing ? (
+            <Button label="Delete reading" icon="trash-outline" variant="danger" onPress={remove} />
+          ) : null}
+        </View>
       }
     >
       {/*

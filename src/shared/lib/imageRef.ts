@@ -115,3 +115,18 @@ export function needsUpload(stored: string | null | undefined): boolean {
   const ref = parseImageRef(stored);
   return ref.driveId === null && ref.localUri !== null;
 }
+
+/**
+ * Whether an attachment is a PDF rather than a photo.
+ *
+ * Read from the local file's extension, which `persistPickedFile` always sets.
+ * A Drive-only reference on another phone cannot tell until it is downloaded;
+ * that copy is cached under its real extension (see `imageCache.ts`), so pass
+ * the resolved path when there is one.
+ */
+export function isPdfAttachment(storedOrPath: string | null | undefined): boolean {
+  if (!storedOrPath) return false;
+  const { localUri } = parseImageRef(storedOrPath);
+  const path = localUri ?? storedOrPath;
+  return /\.pdf$/i.test(path);
+}

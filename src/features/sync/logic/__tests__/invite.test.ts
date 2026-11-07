@@ -51,6 +51,8 @@ describe('findSharedFolderRequest', () => {
   it('searches what was shared WITH this account', () => {
     const url = decodeURIComponent(findSharedFolderRequest('tok').url);
     expect(url).toContain('sharedWithMe=true');
+    expect(url).toContain("name='Dayly'");
+    // A folder shared before the rename is still found.
     expect(url).toContain("name='money-manager'");
     expect(url).toContain('trashed=false');
   });

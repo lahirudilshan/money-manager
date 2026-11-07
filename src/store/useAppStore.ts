@@ -13,11 +13,24 @@ import {
 } from '~/features/budget/logic/sortOrder';
 import { isFullyRepaid } from '~/features/buddyloans/logic/buddyLoans';
 import { buddyLoanRepo, buddyRepaymentRepo } from '~/db/repositories/buddyLoans';
-import { refillRepo, trackedItemRepo } from '~/db/repositories/trackers';
-import { runSync, type SyncResult } from '~/features/sync/logic/syncDrive';
+import { refillRepo, startUnstartedItems, trackedItemRepo } from '~/db/repositories/trackers';
+import { parseSyncFile, runSync, type SyncResult } from '~/features/sync/logic/syncDrive';
+import { findSyncFileRequest, parseSyncFileId } from '~/features/backup/logic/driveSync';
+import { exportSnapshot, insertMissingRows } from '~/features/backup/logic/backupRepo';
+import { ALL_PARTS, serialiseSnapshot, snapshotFilename } from '~/features/backup/logic/backup';
+import {
+  AUTO_BACKUP_LABEL,
+  autoBackupFrequency,
+  autoBackupsToPrune,
+  FREQUENCY_RULE,
+  isAutoBackupDue,
+} from '~/features/backup/logic/autoBackup';
+import { parseImageRef } from '~/shared/lib/imageRef';
+import { resolveImageUri } from '~/shared/lib/imageCache';
+import type { RecoveryReport } from '~/features/backup/logic/recoverRows';
 import {
   applyUpload,
-  attachmentFilename,
+  attachmentPlacement,
   describeImageSync,
   isRetryable,
   nextBatch,
@@ -25,7 +38,15 @@ import {
   type ImageSyncReport,
   type UploadOutcome,
 } from '~/features/backup/logic/imageSync';
-import { uploadAttachment } from '~/features/backup/logic/googleDrive';
+import {
+  deleteDriveBackup,
+  downloadAttachment,
+  isDriveAvailable,
+  isSignedIn,
+  listDriveBackupsResult,
+  uploadAttachment,
+  uploadBackup,
+} from '~/features/backup/logic/googleDrive';
 import { driveGateway } from '~/features/backup/logic/googleDrive';
 import { deletePersistedImage } from '~/shared/lib/imageStorage';
 
@@ -114,7 +135,12 @@ import {
   migrateLegacyInbox,
   watchInbox,
 } from '~/features/sms/logic/smsInboxFile';
-import { DEBT_CATEGORY_ID, initialiseDatabase, resetDatabase } from '../db/client';
+import { clearTables, DEBT_CATEGORY_ID, initialiseDatabase } from '../db/client';
+import {
+  tablesToClear,
+  type ResetAreaKey,
+  type ResetMode,
+} from '~/features/backup/logic/resetPlan';
 import {
   cardRepo,
   categoryRepo,
@@ -303,6 +329,8 @@ export interface AppState {
    * texting even once its messages have been dealt with.
    */
   recentAccountFragments: string[];
+  /** The recent bank messages those fragments came from, same order. */
+  recentAccountMessages: ParsedSms[];
 
   /**
    * The learned merchant → line map, mirrored from the database so
@@ -392,7 +420,24 @@ export interface AppState {
    * is already saved locally and the user is not waiting on it.
    */
   uploadPendingImages: () => Promise<ImageSyncReport>;
-  addTrackedItem: (input: Omit<NewTrackedItem, 'id'>) => TrackedItem;
+  /**
+   * Add the given tables' missing rows from the Drive sync file — see
+   * recoverRows.ts. Used to bring back buddy loans, which no backup carried.
+   */
+  recoverFromDriveSync: (tables: readonly string[]) => Promise<RecoveryReport>;
+  /** The automatic Drive backup, if due at the chosen frequency — see autoBackup.ts. */
+  runAutoBackup: (appVersion: string) => Promise<'done' | 'skipped' | 'failed'>;
+  /**
+   * Fetch photos and PDFs that are in Drive but not on this phone — after a
+   * restore or on a second phone. Bounded per pass; returns how many arrived.
+   */
+  downloadMissingImages: () => Promise<number>;
+  /**
+   * Add an item AND start its first one — adding it means one is in use from
+   * `startedOn` (today unless given). Logging the next one ends this one and
+   * records exactly how long it lasted.
+   */
+  addTrackedItem: (input: Omit<NewTrackedItem, 'id'>, startedOn?: Date) => TrackedItem;
   updateTrackedItem: (id: string, patch: Partial<NewTrackedItem>) => void;
   /** Archive keeps the price history; only an explicit delete discards it. */
   archiveTrackedItem: (id: string, archived: boolean) => void;
@@ -462,6 +507,11 @@ export interface AppState {
     overrides?: { amountMinor?: Minor },
   ) => string | null;
   resetAllData: () => Promise<void>;
+  /**
+   * Erase part of the data: the records only (setup kept), or chosen areas.
+   * `everything` goes through `resetAllData`, which also restarts setup.
+   */
+  clearData: (mode: ResetMode, areas?: readonly ResetAreaKey[]) => Promise<void>;
   completeOnboarding: () => void;
 
   /** Toggle a bill between pending and paid. */
@@ -979,6 +1029,61 @@ function paidAmountFor(state: AppState, subcategoryId: string): Minor | null {
 
 export { learnTransferAmountsFromHistory, learnBalancesFromHistory, repairAccountTails };
 
+/** True while an automatic backup runs, so a launch and a resume cannot overlap. */
+let autoBackupRunning = false;
+
+/**
+ * How many Drive photos one download pass fetches. A restore of a year of
+ * receipts would otherwise be one long burst; the rest come on the next pass.
+ */
+const IMAGE_DOWNLOAD_BATCH = 25;
+
+/** The pass `uploadPendingImages` is running, so a second call joins it. */
+let uploadInFlight: Promise<ImageSyncReport> | null = null;
+
+/** One bounded upload pass — see `uploadPendingImages`. */
+async function runUploadPass(get: () => AppState): Promise<ImageSyncReport> {
+  const pending = pendingUploads(attachmentRepo.withImages());
+  const batch = nextBatch(pending);
+  if (batch.length === 0) return { uploaded: 0, failed: 0, remaining: 0 };
+
+  const outcomes: UploadOutcome[] = [];
+  for (const item of batch) {
+    // Health papers are filed by person, kind and year — see attachmentPlacement.
+    const placement = attachmentPlacement(
+      item,
+      item.table === 'health_documents' ? attachmentRepo.healthDocumentMeta(item.rowId) : undefined,
+      // Documents add-on files mirror the user's own folders in Drive.
+      item.table === 'doc_files' ? attachmentRepo.docFileMeta(item.rowId) : undefined,
+    );
+    const result = await uploadAttachment(item.localUri, placement.filename, placement.folders);
+
+    if (!result.ok) {
+      outcomes.push({
+        ok: false,
+        table: item.table,
+        rowId: item.rowId,
+        error: result.error,
+        retryable: isRetryable(result),
+      });
+      continue;
+    }
+
+    const outcome = applyUpload(item, result.id);
+    if (outcome.ok) attachmentRepo.setImageRef(item.table, item.rowId, outcome.nextStored);
+    outcomes.push(outcome);
+  }
+
+  /*
+   * No refresh unless something was written. The rows that changed hold a
+   * new reference to the SAME photo, so nothing on screen looks different —
+   * re-reading every slice to redraw identical pixels is work for nothing.
+   */
+  const report = describeImageSync(outcomes, pending.length);
+  if (report.uploaded > 0) get().refreshBoard();
+  return report;
+}
+
 export const useAppStore = create<AppState>((set, get, api) => ({
   ready: false,
   needsOnboarding: false,
@@ -1016,6 +1121,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   plan: 'premium',
   smsDrafts: [],
   recentAccountFragments: [],
+  recentAccountMessages: [],
   merchantRules: [],
   catalogSyncEnabled: true,
   catalogSyncedAt: null,
@@ -1035,6 +1141,12 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     repairGenericCategoryIcons();
     repairCategorySortOrder();
     repairSubcategorySortOrder();
+    // Items added before "adding = first one in use" get their first entry.
+    try {
+      startUnstartedItems();
+    } catch {
+      // The tracker tables are created on first use; nothing to start yet.
+    }
     repairFeePoisonedMerchantRules();
     repairAccountTails();
     learnTransferAmountsFromHistory();
@@ -1261,39 +1373,158 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     return created;
   },
 
-  async uploadPendingImages() {
-    const pending = pendingUploads(attachmentRepo.withImages());
-    const batch = nextBatch(pending);
-    if (batch.length === 0) return { uploaded: 0, failed: 0, remaining: 0 };
+  uploadPendingImages() {
+    /*
+     * One pass at a time. The launch pass and the pass an attach triggers can
+     * overlap, and two passes reading the same pending row would upload the
+     * same file twice — leaving an orphan copy in the user's Drive.
+     */
+    if (uploadInFlight) return uploadInFlight;
+    uploadInFlight = runUploadPass(get).finally(() => {
+      uploadInFlight = null;
+    });
+    return uploadInFlight;
+  },
 
-    const outcomes: UploadOutcome[] = [];
-    for (const item of batch) {
-      const result = await uploadAttachment(item.localUri, attachmentFilename(item));
+  async recoverFromDriveSync(tables) {
+    const empty = { added: {}, found: {} };
+    // Every step logs: a recovery that fails silently is the worst outcome
+    // for someone trying to get lost data back.
+    const log = (message: string) => console.info(`[recover] ${message}`);
 
-      if (!result.ok) {
-        outcomes.push({
-          ok: false,
-          table: item.table,
-          rowId: item.rowId,
-          error: result.error,
-          retryable: isRetryable(result),
-        });
-        continue;
-      }
-
-      const outcome = applyUpload(item, result.id);
-      if (outcome.ok) attachmentRepo.setImageRef(item.table, item.rowId, outcome.nextStored);
-      outcomes.push(outcome);
+    const token = await driveGateway.token();
+    if (!token) {
+      log('no Google token — not signed in, or sign-in failed');
+      return { ok: false, ...empty, error: 'Sign in to Google Drive first (Settings → Backup).' };
     }
 
+    const folder = await driveGateway.folder(token);
+    log(`app folder: ${folder ?? 'not found'}`);
+
     /*
-     * No refresh unless something was written. The rows that changed hold a
-     * new reference to the SAME photo, so nothing on screen looks different —
-     * re-reading every slice to redraw identical pixels is work for nothing.
+     * Candidate sync files: the id this phone remembers (restored from the old
+     * app's settings), then a search by name (current and pre-rename names).
+     * The remembered id can name a file that no longer exists, so a failure
+     * there falls through to the search rather than ending the recovery.
      */
-    const report = describeImageSync(outcomes, pending.length);
-    if (report.uploaded > 0) get().refreshBoard();
-    return report;
+    const candidates: string[] = [];
+    const remembered = settingsRepo.get(SETTINGS_KEYS.syncFileId);
+    if (remembered) candidates.push(remembered);
+    if (folder) {
+      const searched = parseSyncFileId(await driveGateway.send(findSyncFileRequest(token, folder)));
+      if (searched && !candidates.includes(searched)) candidates.push(searched);
+    }
+    log(`sync file candidates: ${candidates.join(', ') || 'none'}`);
+    if (candidates.length === 0) {
+      return { ok: false, ...empty, error: 'No sync file was found in your Google Drive.' };
+    }
+
+    let lastError = 'Could not download the sync file.';
+    for (const fileId of candidates) {
+      const downloaded = await driveGateway.download(fileId);
+      if (!downloaded.ok || !downloaded.contents) {
+        lastError = downloaded.error ?? lastError;
+        log(`download ${fileId} failed: ${lastError}`);
+        continue;
+      }
+      const theirs = parseSyncFile(downloaded.contents);
+      if (!theirs) {
+        lastError = 'The sync file could not be read.';
+        log(`parse ${fileId} failed (${downloaded.contents.length} bytes)`);
+        continue;
+      }
+      log(
+        `file ${fileId}: ${Object.entries(theirs)
+          .filter(([table]) => tables.includes(table))
+          .map(([table, rows]) => `${table}=${rows.length}`)
+          .join(' ') || 'none of the requested tables'}`,
+      );
+
+      const added: Record<string, number> = {};
+      const found: Record<string, number> = {};
+      // In the order given — parents before children (loans before repayments).
+      for (const table of tables) {
+        found[table] = theirs[table]?.length ?? 0;
+        added[table] = insertMissingRows(table, theirs[table] ?? []);
+      }
+      log(`added ${JSON.stringify(added)}`);
+      get().refreshMiniAppData();
+      return { ok: true, added, found };
+    }
+    return { ok: false, ...empty, error: lastError };
+  },
+
+  async runAutoBackup(appVersion) {
+    if (autoBackupRunning) return 'skipped';
+    if (!isDriveAvailable() || !(await isSignedIn())) return 'skipped';
+    const frequency = autoBackupFrequency(settingsRepo.get(SETTINGS_KEYS.autoBackupFrequency));
+    if (
+      !isAutoBackupDue(
+        settingsRepo.get(SETTINGS_KEYS.lastCloudBackupAt),
+        new Date(),
+        settingsRepo.get(SETTINGS_KEYS.autoBackup),
+        frequency,
+      )
+    ) {
+      return 'skipped';
+    }
+
+    autoBackupRunning = true;
+    try {
+      // Photos first: the backup records where each photo lives in Drive, so
+      // the ones still only on this phone are sent before it is written.
+      await get().uploadPendingImages().catch(() => undefined);
+
+      // EVERYTHING — every part, health and the review queue included.
+      const snapshot = exportSnapshot(appVersion, { parts: ALL_PARTS, label: AUTO_BACKUP_LABEL });
+      const result = await uploadBackup(
+        snapshotFilename(new Date(snapshot.createdAt)),
+        serialiseSnapshot(snapshot),
+        snapshot.label,
+      );
+      if (!result.ok) {
+        console.warn(`[auto-backup] upload failed: ${result.error ?? 'unknown'}`);
+        return 'failed';
+      }
+      settingsRepo.set(
+        SETTINGS_KEYS.lastCloudBackupAt,
+        result.uploadedAt ?? new Date().toISOString(),
+      );
+
+      // Keep a fortnight of automatic backups; never touch manual ones.
+      const listing = await listDriveBackupsResult();
+      if (listing.ok) {
+        const keep = FREQUENCY_RULE[frequency].keep;
+        for (const id of autoBackupsToPrune(listing.files, keep)) await deleteDriveBackup(id);
+      }
+      return 'done';
+    } finally {
+      autoBackupRunning = false;
+    }
+  },
+
+  async downloadMissingImages() {
+    if (!isDriveAvailable() || !(await isSignedIn())) return 0;
+    let fetched = 0;
+    let tried = 0;
+    for (const [table, rows] of Object.entries(attachmentRepo.withImages())) {
+      for (const row of rows ?? []) {
+        const { driveId } = parseImageRef(row.image_uri);
+        // A Documents file may be a .docx; it is cached under its own extension.
+        const extension = table === 'doc_files' ? attachmentRepo.docFileExtension(row.id) : undefined;
+        // In Drive, and neither the original nor a cached copy is here.
+        if (!driveId || resolveImageUri(row.image_uri, extension)) continue;
+        if (tried >= IMAGE_DOWNLOAD_BATCH) break;
+        tried += 1;
+        if (await downloadAttachment(driveId, extension)) fetched += 1;
+      }
+    }
+    // Screens resolve images at render; re-read so they pick the files up.
+    if (fetched > 0) {
+      get().refreshBoard();
+      get().refreshMiniAppData();
+    }
+    return fetched;
   },
 
   async runDriveSync() {
@@ -1322,8 +1553,9 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     return result;
   },
 
-  addTrackedItem(input) {
+  addTrackedItem(input, startedOn) {
     const created = trackedItemRepo.create(input);
+    refillRepo.create({ itemId: created.id, filledOn: startedOn ?? new Date(), priceMinor: null });
     get().refreshMiniAppData();
     return created;
   },
@@ -1822,7 +2054,7 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     await cancelAllReminders().catch((error) =>
       console.warn('Reminder cancel skipped:', error),
     );
-    resetDatabase();
+    clearTables(tablesToClear('everything'));
     // Send the user back through onboarding. Marking the wiped app as already
     // onboarded dropped them onto an empty dashboard with no route back to the
     // setup flow — the same state a fresh install starts from, minus the help.
@@ -1831,6 +2063,21 @@ export const useAppStore = create<AppState>((set, get, api) => ({
     // A wipe clears every table, so this is one of the few places that really
     // does need all of it — a board-only reload would leave stale settings,
     // merchant rules and mini-app rows pointing at deleted data.
+    get().refresh();
+  },
+
+  async clearData(mode, areas = []) {
+    if (mode === 'everything') return get().resetAllData();
+    const tables = tablesToClear(mode, areas);
+    if (tables.length === 0) return;
+    // Reminders are scheduled per bill; with bills gone they would fire for
+    // nothing. Settings → Reminders schedules them again for what is left.
+    if (tables.includes('subcategories')) {
+      await cancelAllReminders().catch((error) => console.warn('Reminder cancel skipped:', error));
+    }
+    clearTables(tables);
+    // Tracked items kept without their refills restart from today.
+    if (tables.includes('refills')) startUnstartedItems();
     get().refresh();
   },
 

@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
@@ -12,6 +12,18 @@ import {
   type PersonRelation,
 } from '../../../src/db/schema';
 import { useModalClose } from '~/shared/hooks/useModalClose';
+import { healthReadingRepo } from '~/db/repositories';
+import {
+  cmToFeetInches,
+  cmToInches,
+  feetInchesToCm,
+  inchesToCm,
+  plausibleHeight,
+  plausibleWaist,
+  plausibleWeight,
+  type LengthUnit,
+  type Sex,
+} from '~/features/health/logic/bodyMeasures';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
@@ -63,6 +75,89 @@ export default function HealthPersonForm() {
   const [color, setColor] = useState(existing?.color ?? PERSON_COLORS[0]!);
 
   /*
+   * Body measures. Height, waist and sex live on the person; WEIGHT is a
+   * reading, so it keeps a history — the field shows the latest one, and a
+   * changed value is saved as a new weight reading dated today.
+   */
+  const latestWeight = useMemo(() => {
+    if (!existing) return null;
+    const rows = healthReadingRepo.byMetric(existing.id, 'weight');
+    return rows.length > 0 ? rows[rows.length - 1]! : null;
+  }, [existing]);
+  const [sex, setSex] = useState<Sex | null>(existing?.sex ?? null);
+  /*
+   * Height and waist are typed in the person's chosen unit and stored in cm.
+   * In inches mode height is feet + inches. Switching unit converts whatever
+   * is already typed, so nothing has to be re-entered.
+   */
+  const [unit, setUnit] = useState<LengthUnit>(existing?.lengthUnit ?? 'cm');
+  const initialFtIn = existing?.heightCm ? cmToFeetInches(existing.heightCm) : null;
+  const [height, setHeight] = useState(
+    existing?.heightCm
+      ? unit === 'in'
+        ? String(initialFtIn!.feet)
+        : String(Math.round(existing.heightCm))
+      : '',
+  );
+  const [heightInches, setHeightInches] = useState(
+    initialFtIn && unit === 'in' ? String(initialFtIn.inches) : '',
+  );
+  const [weight, setWeight] = useState(latestWeight ? trimNumber(latestWeight.value) : '');
+  const [waist, setWaist] = useState(
+    existing?.waistCm
+      ? trimNumber(unit === 'in' ? cmToInches(existing.waistCm) : existing.waistCm)
+      : '',
+  );
+
+  /** Height in cm from the fields, whatever unit they are in. */
+  const heightValue = (() => {
+    if (unit === 'cm') return parseMeasure(height);
+    const feet = parseMeasure(height) ?? 0;
+    const inches = parseMeasure(heightInches) ?? 0;
+    return feet + inches > 0 ? feetInchesToCm(feet, inches) : null;
+  })();
+  const heightTyped = height.trim() !== '' || (unit === 'in' && heightInches.trim() !== '');
+  const weightValue = parseMeasure(weight);
+  const waistTyped = parseMeasure(waist);
+  const waistValue = waistTyped === null ? null : unit === 'in' ? inchesToCm(waistTyped) : waistTyped;
+
+  function switchUnit(next: LengthUnit) {
+    if (next === unit) return;
+    if (heightValue !== null) {
+      if (next === 'in') {
+        const { feet, inches } = cmToFeetInches(heightValue);
+        setHeight(String(feet));
+        setHeightInches(String(inches));
+      } else {
+        setHeight(String(Math.round(heightValue)));
+        setHeightInches('');
+      }
+    } else {
+      setHeightInches('');
+    }
+    if (waistValue !== null) setWaist(trimNumber(next === 'in' ? cmToInches(waistValue) : waistValue));
+    setUnit(next);
+  }
+
+  const heightError =
+    heightTyped && (heightValue === null || !plausibleHeight(heightValue))
+      ? unit === 'in'
+        ? 'Height in feet and inches, e.g. 5 ft 6 in'
+        : 'Height in centimetres, e.g. 165'
+      : undefined;
+  const weightError =
+    weight.trim() && (weightValue === null || !plausibleWeight(weightValue))
+      ? 'Weight in kilograms, e.g. 62.5'
+      : undefined;
+  const waistError =
+    waist.trim() && (waistValue === null || !plausibleWaist(waistValue))
+      ? unit === 'in'
+        ? 'Waist in inches, e.g. 32'
+        : 'Waist in centimetres, e.g. 82'
+      : undefined;
+  const bodyError = Boolean(heightError || weightError || waistError);
+
+  /*
    * A year that cannot be one, reported only once something was typed.
    *
    * Blank is valid — date of birth is optional — so an empty field must not
@@ -79,7 +174,7 @@ export default function HealthPersonForm() {
 
   function save() {
     const trimmed = name.trim();
-    if (!trimmed || birthYearError) return;
+    if (!trimmed || birthYearError || bodyError) return;
 
     const patch = {
       name: trimmed,
@@ -93,11 +188,36 @@ export default function HealthPersonForm() {
       bloodGroup: bloodGroup.trim() || null,
       allergies: allergies.trim() || null,
       conditions: conditions.trim() || null,
+      sex,
+      heightCm: heightTyped ? heightValue : null,
+      waistCm: waist.trim() ? waistValue : null,
+      lengthUnit: unit,
       color,
     };
 
-    if (existing) store.updateHealthPerson(existing.id, patch);
-    else store.addHealthPerson(patch);
+    let personId: string;
+    if (existing) {
+      store.updateHealthPerson(existing.id, patch);
+      personId = existing.id;
+    } else {
+      personId = store.addHealthPerson(patch).id;
+    }
+
+    // A new or changed weight becomes a reading, so it has a history and chart.
+    if (weight.trim() && weightValue !== null && weightValue !== latestWeight?.value) {
+      healthReadingRepo.create({
+        personId,
+        metric: 'weight',
+        value: weightValue,
+        valueSecondary: null,
+        unit: 'kg',
+        measuredAt: new Date(),
+        context: null,
+        note: null,
+        visitId: null,
+      });
+      store.refresh();
+    }
 
     router.back();
   }
@@ -135,7 +255,7 @@ export default function HealthPersonForm() {
         <GradientButton
           label={existing ? 'Save changes' : 'Add person'}
           icon="checkmark"
-          disabled={!name.trim() || Boolean(birthYearError)}
+          disabled={!name.trim() || Boolean(birthYearError) || bodyError}
           onPress={save}
         />
       }
@@ -213,6 +333,106 @@ export default function HealthPersonForm() {
         keyboardType="numeric"
         error={birthYearError}
       />
+
+      {/*
+        Body — for BMI, a healthy weight range, resting calories and
+        waist-to-height. All optional; each figure appears once what it needs
+        is filled in.
+      */}
+      <Surface style={{ gap: space.md }}>
+        <View style={{ gap: 2 }}>
+          <Text variant="bodyStrong">Body</Text>
+          <Text variant="caption" tone="muted">
+            Used to work out BMI, a healthy weight, and daily calories.
+          </Text>
+        </View>
+        <PillSelect
+          label="SEX"
+          options={[
+            { key: 'female', label: 'Female' },
+            { key: 'male', label: 'Male' },
+          ]}
+          selectedKey={sex}
+          onSelect={(key) => setSex(key === sex ? null : (key as Sex))}
+        />
+        <PillSelect
+          label="HEIGHT & WAIST IN"
+          options={[
+            { key: 'cm', label: 'Centimetres (cm)' },
+            { key: 'in', label: 'Feet & inches' },
+          ]}
+          selectedKey={unit}
+          onSelect={(key) => switchUnit(key as LengthUnit)}
+        />
+        {unit === 'cm' ? (
+          <Field
+            label="Height (cm)"
+            value={height}
+            onChangeText={setHeight}
+            placeholder="165"
+            keyboardType="decimal-pad"
+            error={heightError}
+          />
+        ) : (
+          <Row gap={space.sm} style={{ alignItems: 'flex-start' }}>
+            <View style={{ flex: 1 }}>
+              <Field
+                label="Height (ft)"
+                value={height}
+                onChangeText={setHeight}
+                placeholder="5"
+                keyboardType="numeric"
+                error={heightError}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Field
+                label="(in)"
+                value={heightInches}
+                onChangeText={setHeightInches}
+                placeholder="6"
+                keyboardType="decimal-pad"
+              />
+            </View>
+          </Row>
+        )}
+        {heightValue !== null && !heightError ? (
+          <Text variant="caption" tone="muted">
+            {unit === 'in'
+              ? `= ${Math.round(heightValue)} cm`
+              : `= ${cmToFeetInches(heightValue).feet}′ ${cmToFeetInches(heightValue).inches}″`}
+          </Text>
+        ) : null}
+        <Row gap={space.sm} style={{ alignItems: 'flex-start' }}>
+          <View style={{ flex: 1 }}>
+            <Field
+              label="Weight (kg)"
+              value={weight}
+              onChangeText={setWeight}
+              placeholder="62.5"
+              keyboardType="decimal-pad"
+              error={weightError}
+            />
+          </View>
+        </Row>
+        <Field
+          label={unit === 'in' ? 'Waist (in) — optional' : 'Waist (cm) — optional'}
+          value={waist}
+          onChangeText={setWaist}
+          placeholder={unit === 'in' ? 'Around the belly button, e.g. 32' : 'Around the belly button, e.g. 82'}
+          keyboardType="decimal-pad"
+          error={waistError}
+        />
+        {latestWeight ? (
+          <Text variant="caption" tone="muted">
+            {`Weight last recorded ${latestWeight.measuredAt.toLocaleDateString(undefined, {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+            })}. A new value is saved as today's weight reading, so the history stays.`}
+          </Text>
+        ) : null}
+      </Surface>
 
       {/*
         Colour as rounded swatches, not pills.
@@ -360,4 +580,14 @@ export default function HealthPersonForm() {
       ) : null}
     </BottomSheet>
   );
+}
+
+/** "62.5" or "62,5" → 62.5; anything else → null. */
+function parseMeasure(text: string): number | null {
+  const n = Number.parseFloat(text.trim().replace(',', '.'));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function trimNumber(n: number): string {
+  return String(Number(n.toFixed(1)));
 }

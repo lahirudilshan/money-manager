@@ -3,11 +3,9 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 import {
-  Divider,
   Empty,
   Label,
   Row,
-  Surface,
   Text,
 } from '~/shared/components/ui';
 import { Screen } from '~/shared/components/Screen';
@@ -16,11 +14,15 @@ import {
   nextDue,
   refillStats,
   refillStatus,
+  suggestTrackerIcon,
+  trackerColor,
+  TRACKER_COLOR,
   type Refill as RefillLike,
   type RefillStatus,
 } from '~/features/refills/logic/refills';
 import { refillRepo } from '~/db/repositories/trackers';
 import { useAppStore } from '~/store/useAppStore';
+import { formatMoney } from '~/shared/lib/money';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
@@ -175,98 +177,17 @@ export default function TrackersHome() {
                     </View>
                   </Row>
 
-                  <Surface padded={false} style={{ paddingVertical: space.xs }}>
-                    {group.map((row, index) => {
-                      const urgent = section.key === 'now';
-                      const accent = urgent
-                        ? row.status === 'overdue'
-                          ? colors.danger
-                          : colors.pending
-                        : colors.completed;
-
-                      return (
-                        <View key={row.item.id}>
-                          {index > 0 ? (
-                            <Divider style={{ marginHorizontal: space.lg }} />
-                          ) : null}
-                          <Pressable
-                            onPress={() => router.push(`/mini/trackers/detail?id=${row.item.id}`)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`${row.item.name}, ${countdown(row.due)}`}
-                            style={({ pressed }) => ({
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              gap: space.md,
-                              paddingHorizontal: space.lg,
-                              paddingVertical: space.md,
-                              opacity: (pressed ? 0.7 : 1) * (row.item.archived ? 0.55 : 1),
-                            })}
-                          >
-                            {/*
-                              The tile carries the STATUS, exactly as the
-                              dashboard's does — the item's own icon inside it,
-                              so the row says both what it is and how urgent it
-                              is without a second element.
-                            */}
-                            <View
-                              style={{
-                                width: 36,
-                                height: 36,
-                                borderRadius: 12,
-                                backgroundColor: urgent
-                                  ? row.status === 'overdue'
-                                    ? colors.dangerSoft
-                                    : colors.pendingSoft
-                                  : colors.completedSoft,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                            >
-                              <Ionicons
-                                name={(row.item.icon as never) ?? 'cube-outline'}
-                                size={19}
-                                color={accent}
-                              />
-                            </View>
-
-                            <View style={{ flex: 1 }}>
-                              <Text variant="bodyStrong" numberOfLines={1}>
-                                {row.item.name}
-                              </Text>
-                              <Row gap={space.xs}>
-                                <Text
-                                  variant="caption"
-                                  color={accent}
-                                  style={{ fontWeight: '700' }}
-                                >
-                                  {countdown(row.due)}
-                                </Text>
-                                <Text variant="caption" tone="muted" numberOfLines={1}>
-                                  · {detailLine(row.stats, row.item.unitLabel)}
-                                </Text>
-                              </Row>
-                            </View>
-
-                            {/*
-                              No trailing figure.
-
-                              It showed how long one USUALLY lasts, which beside
-                              a countdown read as a second, contradictory date —
-                              "2 mo" next to "1 mo 5 d over" — and rendered as a
-                              bare dash on an item with no history yet. The
-                              average has a label on the detail screen; here it
-                              only competed with the number that matters.
-                            */}
-                            <Ionicons
-                              name="chevron-forward"
-                              size={15}
-                              color={colors.inkMuted}
-                            />
-                          </Pressable>
-                        </View>
-                      );
-                    })}
-                  </Surface>
+                  <View style={{ gap: space.sm }}>
+                    {group.map((row) => (
+                      <TrackerCard
+                        key={row.item.id}
+                        row={row}
+                        now={now}
+                        onOpen={() => router.push(`/mini/trackers/detail?id=${row.item.id}`)}
+                        onLog={() => router.push(`/mini/trackers/refill?itemId=${row.item.id}`)}
+                      />
+                    ))}
+                  </View>
                 </View>
               );
             })}
@@ -282,6 +203,291 @@ export default function TrackersHome() {
         ) : null}
       </View>
     </Screen>
+  );
+}
+
+/** A small fact line: a coloured icon and the text. */
+function Fact({
+  icon,
+  color,
+  text,
+  strong = false,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  text: string;
+  strong?: boolean;
+}) {
+  const { space } = useTheme();
+  return (
+    <Row gap={space.sm} align="center">
+      <Ionicons name={icon} size={14} color={color} />
+      <Text
+        variant="caption"
+        tone={strong ? 'ink' : 'secondary'}
+        style={{ flex: 1, fontWeight: strong ? '700' : '500' }}
+        numberOfLines={1}
+      >
+        {text}
+      </Text>
+    </Row>
+  );
+}
+
+/**
+ * One tracked item, as a card: what it is, where the current one stands, and
+ * what its history says.
+ *
+ * The old one-line row squeezed a countdown and a detail into a caption, so an
+ * item said almost nothing at a glance — and an unstarted one said only
+ * "nothing logged yet". The card gives each fact its place:
+ *
+ *   - name and size, with a status pill (word + icon, never colour alone);
+ *   - a PROGRESS BAR for the current one: days in use against how long one
+ *     usually lasts (measured), or the user's estimate until there is a
+ *     measurement — the picture of "how far through this cylinder am I";
+ *   - when the current one started, and when the next is due;
+ *   - how long one lasts and what it costs, once known;
+ *   - for an unstarted item, when it was added and a button to log the first
+ *     one right here, since that one entry is what makes everything else work.
+ */
+function TrackerCard({
+  row,
+  now,
+  onOpen,
+  onLog,
+}: {
+  row: {
+    item: { id: string; name: string; unitLabel: string | null; icon: string | null; expectedDays: number | null; archived: boolean; createdAt: Date };
+    due: ReturnType<typeof nextDue>;
+    status: RefillStatus;
+    stats: ReturnType<typeof refillStats>;
+  };
+  now: Date;
+  onOpen: () => void;
+  onLog: () => void;
+}) {
+  const { colors, space, radius } = useTheme();
+  const { item, due, status, stats } = row;
+  const started = Boolean(stats.lastFilledOn);
+  const itemIcon =
+    item.icon && item.icon !== 'cube-outline'
+      ? item.icon
+      : (suggestTrackerIcon(item.name) ?? 'cube-outline');
+  const itemColor = trackerColor(itemIcon, item.name);
+  /** The countdown is a guess until it rests on several measured lifespans. */
+  const estimated = Boolean(due && (due.basis === 'expected' || due.provisional));
+
+  const tone =
+    status === 'overdue'
+      ? { fg: colors.danger, bg: colors.dangerSoft, icon: 'alert-circle' as const, label: 'OVERDUE' }
+      : status === 'due-soon'
+        ? { fg: colors.pending, bg: colors.pendingSoft, icon: 'time' as const, label: 'DUE SOON' }
+        : status === 'fresh'
+          ? { fg: colors.completed, bg: colors.completedSoft, icon: 'checkmark-circle' as const, label: 'GOOD' }
+          : { fg: colors.inkSecondary, bg: colors.surfaceSunken, icon: 'ellipse-outline' as const, label: 'NOT STARTED' };
+
+  /** How long one lasts: measured if known, else the user's estimate. */
+  const lifetime = stats.averageDays ? Math.round(stats.averageDays) : item.expectedDays;
+  const used = stats.daysOnCurrent ?? 0;
+  const progress = started && lifetime ? Math.min(1, used / lifetime) : null;
+  const daysSinceAdded = Math.max(0, Math.floor((now.getTime() - item.createdAt.getTime()) / 86_400_000));
+  const shortDate = (d: Date) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+  return (
+    <Pressable
+      onPress={onOpen}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.name}, ${tone.label.toLowerCase()}`}
+      style={({ pressed }) => ({
+        padding: space.lg,
+        gap: space.md,
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: colors.hairline,
+        backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
+        opacity: item.archived ? 0.55 : 1,
+      })}
+    >
+      <Row gap={space.md} align="center">
+        {/* The item's own colour and icon; its status is the pill on the right. */}
+        <View
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            backgroundColor: `${itemColor}1F`,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Ionicons name={itemIcon as never} size={20} color={itemColor} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text variant="bodyStrong" numberOfLines={1}>
+            {item.name}
+          </Text>
+          {item.unitLabel ? (
+            <Text variant="caption" tone="muted" numberOfLines={1}>
+              {item.unitLabel}
+            </Text>
+          ) : null}
+        </View>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            paddingHorizontal: space.sm,
+            paddingVertical: 3,
+            borderRadius: radius.pill,
+            backgroundColor: tone.bg,
+          }}
+        >
+          <Ionicons name={tone.icon} size={12} color={tone.fg} />
+          <Text variant="label" color={tone.fg}>
+            {tone.label}
+          </Text>
+        </View>
+      </Row>
+
+      {started ? (
+        <>
+          {/* How far through the current one. */}
+          {progress !== null ? (
+            <View style={{ gap: 6 }}>
+              <View
+                style={{
+                  height: 8,
+                  borderRadius: radius.pill,
+                  backgroundColor: tone.bg,
+                  overflow: 'hidden',
+                }}
+              >
+                <View
+                  style={{
+                    width: `${Math.max(4, progress * 100)}%`,
+                    height: 8,
+                    borderRadius: radius.pill,
+                    backgroundColor: tone.fg,
+                  }}
+                />
+              </View>
+              <Row style={{ justifyContent: 'space-between' }}>
+                <Text variant="caption" tone="secondary">
+                  <Text variant="caption" style={{ fontWeight: '800' }}>{`Day ${used}`}</Text>
+                  {` of ${stats.averageDays ? '' : 'about '}${lifetime}`}
+                </Text>
+                {/* The countdown as a tinted chip: the one number to act on. */}
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 4,
+                    paddingHorizontal: space.sm,
+                    paddingVertical: 2,
+                    borderRadius: radius.pill,
+                    backgroundColor: tone.bg,
+                  }}
+                >
+                  <Ionicons
+                    name={estimated ? 'help-circle-outline' : 'time-outline'}
+                    size={12}
+                    color={tone.fg}
+                  />
+                  <Text variant="caption" color={tone.fg} style={{ fontWeight: '800' }}>
+                    {estimated ? `~${countdown(due)}` : countdown(due)}
+                  </Text>
+                  {/*
+                    Says when the date is a guess. Until one has actually run
+                    out, the countdown rests on the user's own estimate (or a
+                    single lifespan) — it must not look as certain as one
+                    measured over several.
+                  */}
+                  {estimated ? (
+                    <Text variant="caption" color={tone.fg} style={{ fontSize: 10, opacity: 0.85 }}>
+                      {due?.basis === 'expected' ? 'estimate' : 'rough'}
+                    </Text>
+                  ) : null}
+                </View>
+              </Row>
+            </View>
+          ) : (
+            <Text variant="caption" tone="secondary">
+              {`In use for ${describeDays(used)}`}
+            </Text>
+          )}
+
+          {/* Each fact on its own line, with an icon — readable at a glance. */}
+          <View style={{ gap: 6 }}>
+            <Fact
+              icon="play-circle-outline"
+              color={TRACKER_COLOR}
+              text={`Current one since ${shortDate(stats.lastFilledOn as Date)}`}
+            />
+            {due ? (
+              <Fact
+                icon="calendar-outline"
+                color={tone.fg}
+                text={`Next around ${shortDate(due.on)}`}
+                strong
+              />
+            ) : null}
+            {stats.averageDays ? (
+              <Fact
+                icon="hourglass-outline"
+                color={colors.accent}
+                text={`Usually lasts ${describeDays(Math.round(stats.averageDays))}`}
+              />
+            ) : null}
+            {stats.averagePriceMinor ? (
+              <Fact
+                icon="pricetag-outline"
+                color={colors.completed}
+                text={`About ${formatMoney(stats.averagePriceMinor)} each · ${stats.spanCount + 1} bought`}
+              />
+            ) : null}
+          </View>
+        </>
+      ) : (
+        <Row gap={space.md} align="center">
+          <View style={{ flex: 1, gap: 6 }}>
+            <Fact
+              icon="calendar-outline"
+              color={TRACKER_COLOR}
+              text={`Added ${daysSinceAdded === 0 ? 'today' : `${describeDays(daysSinceAdded)} ago`}`}
+            />
+            {item.expectedDays ? (
+              <Fact
+                icon="hourglass-outline"
+                color={colors.accent}
+                text={`Expected to last ${describeDays(item.expectedDays)}`}
+              />
+            ) : null}
+          </View>
+          <Pressable
+            onPress={onLog}
+            accessibilityRole="button"
+            accessibilityLabel={`Log the first ${item.name}`}
+            hitSlop={8}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+              paddingHorizontal: space.md,
+              paddingVertical: 6,
+              borderRadius: radius.pill,
+              backgroundColor: pressed ? colors.accentSoft : colors.surfaceSunken,
+            })}
+          >
+            <Ionicons name="add" size={14} color={colors.accent} />
+            <Text variant="caption" color={colors.accentInk} style={{ fontWeight: '700' }}>
+              Log first refill
+            </Text>
+          </Pressable>
+        </Row>
+      )}
+    </Pressable>
   );
 }
 
@@ -335,40 +541,6 @@ const STATUS_COLOR: Record<RefillStatus, string> = {
   unknown: '#64748B',
 };
 
-/**
- * The one line under the name.
- *
- * Says the most useful true thing available, degrading gracefully: a projection
- * when there is history, how long the current one has run when there is not,
- * and an invitation when the item is brand new. It never guesses.
- */
-/**
- * The left-hand supporting line: what this item IS and how it behaves.
- *
- * Deliberately excludes the countdown, which now has its own column. Mixing
- * the two in one sentence made a line that wrapped to two rows and buried the
- * urgent half mid-phrase.
- */
-function detailLine(
-  stats: ReturnType<typeof refillStats>,
-  unitLabel: string | null | undefined,
-): string {
-  const unit = unitLabel ? `${unitLabel} · ` : '';
-
-  if (!stats.lastFilledOn) return `${unit}nothing logged yet`;
-
-  /*
-   * The detail line IDENTIFIES the item; it does not restate a statistic.
-   *
-   * It used to carry the average duration, which competed with the countdown
-   * column for one line and left both truncated. The average is a detail-screen
-   * figure — here the useful second line is the unit and how many you have
-   * bought, which no other column shows.
-   */
-  const bought = stats.spanCount + 1;
-  const timesLabel = bought === 1 ? 'first one' : `${bought} bought`;
-  return `${unit}${timesLabel}`;
-}
 
 /**
  * The right-hand countdown.

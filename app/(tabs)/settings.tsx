@@ -26,6 +26,7 @@ import {
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { CURRENCIES } from '~/features/rates/logic/currencies';
+import { ClearDataSheet } from '~/features/backup/components/ClearDataSheet';
 
 
 
@@ -51,12 +52,11 @@ export default function SettingsScreen() {
 
   const state = useAppStore();
   const enabled = parseEnabled(state.miniApps);
-  const resetAllData = useAppStore((s) => s.resetAllData);
 
   const views = useMemo(() => selectCategoryViews(state), [state]);
   const totals = useMemo(() => selectBoardTotals(state), [state]);
 
-  const [clearing, setClearing] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
   const [rateText, setRateText] = useState(String(state.usdRate));
   const [syncing, setSyncing] = useState(false);
   const [currencyOpen, setCurrencyOpen] = useState(false);
@@ -247,50 +247,6 @@ export default function SettingsScreen() {
   const unlockMethodSummary = biometricsAvailable
     ? `You'll need ${biometricLabel || 'biometrics'} to open the app`
     : "You'll need your PIN to open the app";
-
-  /**
-   * Confirm once, verify it is really the device's owner, then wipe.
-   *
-   * The type-DELETE step this replaces was a third hurdle on top of the alert
-   * and Face ID, and it guarded nothing the biometric check does not: anyone who
-   * can pass Face ID can also type six letters. The prompt is the deliberate
-   * pause; the biometric is the actual gate.
-   */
-  function beginClear() {
-    // The wipe is async and the row stays tappable while it runs; without this a
-    // second tap would open a second alert over an in-flight reset.
-    if (clearing) return;
-
-    Alert.alert(
-      'Erase everything?',
-      'This permanently deletes every account, category, bill, income, loan, and all history on this device. It cannot be undone, and you will start again from setup.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Erase',
-          style: 'destructive',
-          onPress: async () => {
-            const ok = await confirmWithBiometrics('Confirm it is you to erase all data');
-            if (!ok) return;
-            await confirmClear();
-          },
-        },
-      ],
-    );
-  }
-
-  async function confirmClear() {
-    setClearing(true);
-    try {
-      // Flips `needsOnboarding`, which the root layout watches — the app routes
-      // itself back to the setup flow once this resolves.
-      await resetAllData();
-    } catch (error) {
-      Alert.alert('Could not clear data', error instanceof Error ? error.message : String(error));
-    } finally {
-      setClearing(false);
-    }
-  }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.canvas }}>
@@ -587,15 +543,15 @@ export default function SettingsScreen() {
 
         <Section
           title="DANGER ZONE"
-          note="Everything below acts on the data stored on this device only. There is no cloud backup, so a clear cannot be recovered."
+          note="Everything below acts on the data stored on this device only. A clear cannot be undone unless you have a backup."
         >
           <SettingRow
             icon="trash-outline"
             color={colors.danger}
-            title="Clear all data"
-            subtitle="Deletes cards, categories, income, loans and history"
+            title="Clear data"
+            subtitle="Erase everything, only the records, or areas you choose"
             danger
-            onPress={beginClear}
+            onPress={() => setClearOpen(true)}
           />
         </Section>
 
@@ -606,6 +562,15 @@ export default function SettingsScreen() {
           </Text>
         </View>
       </ScrollView>
+
+      <ClearDataSheet
+        visible={clearOpen}
+        onClose={() => setClearOpen(false)}
+        onBackupFirst={() => {
+          setClearOpen(false);
+          router.push('/settings/backup');
+        }}
+      />
 
       {plansOpen ? <PlansSheet onClose={() => setPlansOpen(false)} /> : null}
 

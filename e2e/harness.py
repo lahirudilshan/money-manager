@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Appium/XCUITest harness for the money-manager end-to-end suite.
+"""Appium/XCUITest harness for the Dayly end-to-end suite.
 
 ## Why this exists
 
@@ -42,7 +42,7 @@ import urllib.request
 
 BASE = os.environ.get("APPIUM_URL", "http://127.0.0.1:4723")
 UDID = os.environ.get("SIM_UDID", "")
-BUNDLE = os.environ.get("APP_BUNDLE", "com.anonymous.moneymanager")
+BUNDLE = os.environ.get("APP_BUNDLE", "com.lahirudilshan.dayly")
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARTIFACTS = os.path.join(REPO, "e2e", "artifacts")
 SNAPSHOTS = os.path.join(REPO, "e2e", "artifacts", "snapshots")
@@ -658,7 +658,7 @@ def start_onboarding(wait=2.0):
 #: bundles its own JS the link is simply ignored.
 DEV_CLIENT_URL = os.environ.get(
     "DEV_CLIENT_URL",
-    "exp+money-manager://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081",
+    "exp+dayly://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081",
 )
 
 
@@ -706,7 +706,7 @@ def fresh_install(wait=14):
         capture_output=True, text=True).stdout.strip()
     if container:
         subprocess.run(
-            f'rm -f "{container}/Library/Application Support/money-manager.db"*',
+            f'rm -f "{container}/Library/Application Support/dayly.db"*',
             shell=True, capture_output=True)
     req("POST", f"/session/{sid()}/execute/sync",
         {"script": "mobile: launchApp", "args": [{"bundleId": BUNDLE}]})
@@ -722,7 +722,7 @@ def _db_path():
     container = subprocess.run(
         ["xcrun", "simctl", "get_app_container", UDID, BUNDLE, "data"],
         capture_output=True, text=True).stdout.strip()
-    return os.path.join(container, "Library", "Application Support", "money-manager.db")
+    return os.path.join(container, "Library", "Application Support", "dayly.db")
 
 
 def snapshot_db(name):
@@ -815,7 +815,7 @@ def db_query(sql):
     container = subprocess.run(
         ["xcrun", "simctl", "get_app_container", UDID, BUNDLE, "data"],
         capture_output=True, text=True).stdout.strip()
-    db = os.path.join(container, "Library", "Application Support", "money-manager.db")
+    db = os.path.join(container, "Library", "Application Support", "dayly.db")
     out = subprocess.run(["sqlite3", db, sql], capture_output=True, text=True)
     return [line for line in out.stdout.strip().split("\n") if line]
 

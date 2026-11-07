@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useDocumentViewer } from '~/shared/components/DocumentViewer';
 import React, { useMemo } from 'react';
 import { Image, Pressable, View } from 'react-native';
 import { Divider, Label, Row, Surface, Text } from '~/shared/components/ui';
@@ -56,6 +57,7 @@ export default function HealthCase() {
   const state = useAppStore();
 
   const visit = params.id ? healthVisitRepo.byId(params.id) : undefined;
+  const { open: openDocument, viewer: documentViewer } = useDocumentViewer();
 
   const medicines = useMemo(
     () => (visit ? healthMedicineRepo.byVisit(visit.id) : []),
@@ -288,7 +290,12 @@ export default function HealthCase() {
                           { day: 'numeric', month: 'short' },
                         )}`
                   }
-                  onPress={() => router.push(`/mini/health/documents?person=${visit.personId}`)}
+                  onPress={() =>
+                    openDocument({
+                      ...document,
+                      kindLabel: DOCUMENT_KIND_LABEL[document.kind as DocumentKind] ?? 'Report',
+                    })
+                  }
                 />
               </View>
             ))}
@@ -330,14 +337,25 @@ export default function HealthCase() {
           />
           <AddToVisit
             icon="camera-outline"
-            label="Report"
+            label="Photo"
             tint="#8B5CF6"
             onPress={() =>
               router.push(`/mini/health/document?person=${visit.personId}&visit=${visit.id}`)
             }
           />
         </Row>
+        {/* Several lab reports from this visit at once, read by AI and kept
+            together under it. */}
+        <AddToVisit
+          icon="sparkles-outline"
+          label="Scan lab reports with AI"
+          tint={colors.accent}
+          onPress={() =>
+            router.push(`/mini/health/analyze?person=${visit.personId}&visit=${visit.id}`)
+          }
+        />
       </View>
+      {documentViewer}
     </Screen>
   );
 }

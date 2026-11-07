@@ -3,8 +3,17 @@ import Svg, { Path } from 'react-native-svg';
 import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
-import { BottomSheet, Divider, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { ActivityIndicator, Alert, Pressable, Switch, TextInput, View } from 'react-native';
+import {
+  BottomSheet,
+  Divider,
+  GradientButton,
+  Label,
+  Row,
+  Segmented,
+  Surface,
+  Text,
+} from '~/shared/components/ui';
 import {
   ALL_PARTS,
   BACKUP_PARTS,
@@ -47,6 +56,23 @@ import {
   uploadBackup,
 } from '~/features/backup/logic/googleDrive';
 import { formatSize as formatDriveSize, type DriveFile } from '~/features/backup/logic/driveSync';
+import {
+  AUTO_BACKUP_FREQUENCIES,
+  autoBackupFrequency,
+  FREQUENCY_RULE,
+  isAutoBackupEnabled,
+  type AutoBackupFrequency,
+} from '~/features/backup/logic/autoBackup';
+
+/** Words and icons for each automatic-backup frequency. */
+const FREQUENCY_COPY: Record<
+  AutoBackupFrequency,
+  { label: string; when: string; icon: 'today-outline' | 'calendar-outline' | 'calendar-number-outline' }
+> = {
+  daily: { label: 'Daily', when: 'once a day', icon: 'today-outline' },
+  weekly: { label: 'Weekly', when: 'once a week', icon: 'calendar-outline' },
+  monthly: { label: 'Monthly', when: 'once a month', icon: 'calendar-number-outline' },
+};
 import { useAppStore } from '../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
@@ -208,6 +234,12 @@ export default function BackupScreen() {
   /** The connected account's email, once known. */
   const [account, setAccount] = useState<string | null>(null);
   const [lastCloud, setLastCloud] = useState<string | null>(null);
+  const [autoBackup, setAutoBackup] = useState(() =>
+    isAutoBackupEnabled(settingsRepo.get(SETTINGS_KEYS.autoBackup)),
+  );
+  const [autoFrequency, setAutoFrequency] = useState(() =>
+    autoBackupFrequency(settingsRepo.get(SETTINGS_KEYS.autoBackupFrequency)),
+  );
   const [lastLocal, setLastLocal] = useState<string | null>(null);
 
   const driveAvailable = isDriveAvailable();
@@ -510,7 +542,7 @@ export default function BackupScreen() {
        */
       title: titleFor(
         file.description?.trim(),
-        file.name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
+        file.name.replace(/^(dayly|money-manager)-/i, '').replace(/\.json$/i, ''),
       ),
       // Drive does not tell us what is INSIDE without downloading it, so the
       // row shows size and age instead of the contents summary a local row
@@ -1018,7 +1050,7 @@ export default function BackupScreen() {
                   <Text variant="caption" tone="muted">
                     {lastCloud
                       ? `Last upload ${relativeTime(lastCloud)}`
-                      : 'Uploads to your "money-manager" folder'}
+                      : 'Uploads to your "Dayly" folder'}
                   </Text>
                 </View>
                 {/*
@@ -1049,6 +1081,49 @@ export default function BackupScreen() {
                       is the one destructive thing this row can do. */}
                   <Ionicons name="close" size={15} color={colors.danger} />
                 </Pressable>
+              </View>
+              <Divider />
+              {/*
+                Automatic backup: on/off, then how often. On by default, daily
+                (see autoBackup.ts). Everything goes — every part, health
+                records and photos included; only the automatic copies are
+                pruned, each frequency keeping a sensible stretch of history.
+              */}
+              <View style={{ paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.md }}>
+                <Row gap={space.md}>
+                  <Ionicons name="time-outline" size={19} color={colors.accent} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text variant="bodyStrong">Automatic backup</Text>
+                    <Text variant="caption" tone="muted">
+                      {autoBackup
+                        ? `Everything, including photos and health records, ${FREQUENCY_COPY[autoFrequency].when} when you open the app. The last ${FREQUENCY_RULE[autoFrequency].keep} automatic copies are kept.`
+                        : 'Off — Drive only gets a backup when you make one here.'}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={autoBackup}
+                    onValueChange={(next) => {
+                      setAutoBackup(next);
+                      settingsRepo.set(SETTINGS_KEYS.autoBackup, next ? 'true' : 'false');
+                    }}
+                    accessibilityLabel="Automatic backup"
+                  />
+                </Row>
+                {autoBackup ? (
+                  <Segmented
+                    options={AUTO_BACKUP_FREQUENCIES.map((key) => ({
+                      key,
+                      label: FREQUENCY_COPY[key].label,
+                      icon: FREQUENCY_COPY[key].icon,
+                    }))}
+                    selectedKey={autoFrequency}
+                    onSelect={(key) => {
+                      const next = autoBackupFrequency(key);
+                      setAutoFrequency(next);
+                      settingsRepo.set(SETTINGS_KEYS.autoBackupFrequency, next);
+                    }}
+                  />
+                ) : null}
               </View>
               <Divider />
               {/*
@@ -1110,7 +1185,7 @@ export default function BackupScreen() {
                 </Row>
                 <Text variant="caption" tone="muted">
                   {driveAvailable
-                    ? 'Uploads to a "money-manager" folder in your Drive'
+                    ? 'Uploads to a "Dayly" folder in your Drive'
                     : blocker === 'needs-rebuild'
                       ? 'Ready — rebuild the app to switch this on'
                       : 'Not set up in this build — see docs/google-drive-backup.md'}
@@ -1671,7 +1746,7 @@ export default function BackupScreen() {
 
         Read-only apart from delete: restoring FROM Drive would mean
         downloading and validating a file the app has never seen, and the Files
-        route already covers that — drop it into the money-manager folder and
+        route already covers that — drop it into the Dayly folder and
         it appears under Restore with the same panel as everything else. This
         sheet answers "what is up there, and can I clear some out?", which is
         what was missing.
@@ -1837,7 +1912,7 @@ export default function BackupScreen() {
                                 change its name between the two screens. */}
                             {titleFor(
                               file.description?.trim(),
-                              file.name.replace(/^money-manager-/, '').replace(/\.json$/i, ''),
+                              file.name.replace(/^(dayly|money-manager)-/i, '').replace(/\.json$/i, ''),
                             )}
                           </Text>
                           {/*

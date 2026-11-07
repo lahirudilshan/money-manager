@@ -312,12 +312,19 @@ export default function HealthVitals() {
                             }}
                           />
                         ) : null}
-                        <Row
-                          gap={space.md}
-                          style={{
+                        {/* Tap to fix or delete a reading entered by mistake. */}
+                        <Pressable
+                          onPress={() => router.push(`/mini/health/reading?id=${reading.id}`)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Edit or delete this reading"
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: space.md,
                             paddingHorizontal: space.lg,
                             paddingVertical: space.md,
-                          }}
+                            backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                          })}
                         >
                           <View style={{ flex: 1, gap: 2 }}>
                             <Text variant="bodyStrong">
@@ -339,7 +346,8 @@ export default function HealthVitals() {
                                 : ''}
                             </Text>
                           </View>
-                        </Row>
+                          <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+                        </Pressable>
                       </View>
                     ))}
                 </Surface>

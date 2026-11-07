@@ -362,3 +362,65 @@ export function personColor(name: string, palette: readonly string[]): string {
 
   return palette[hash % palette.length];
 }
+
+/**
+ * People whose name matches what is being typed, best match first.
+ *
+ * A name starting with the text ranks above one with a later word starting
+ * with it ("Kasun" for "ka" before "Nimal Kalpage"), and that above a plain
+ * substring. Case is ignored. `names` comes most-recent-first, which breaks
+ * ties — the person lent to last week is the likelier one.
+ */
+export function matchPeople(names: readonly string[], query: string, limit = 6): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return names.slice(0, limit);
+
+  const rank = (name: string): number => {
+    const lower = name.toLowerCase();
+    if (lower.startsWith(q)) return 0;
+    if (lower.split(/\s+/).some((word) => word.startsWith(q))) return 1;
+    if (lower.includes(q)) return 2;
+    return -1;
+  };
+
+  return names
+    .map((name, index) => ({ name, index, score: rank(name) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => a.score - b.score || a.index - b.index)
+    .slice(0, limit)
+    .map((entry) => entry.name);
+}
+
+/**
+ * The existing person a typed name refers to, ignoring case and spacing.
+ *
+ * What lets the form say "another loan for Nuwan" — and lets a save use the
+ * stored spelling, so "nuwan" and "Nuwan " never become two people.
+ */
+export function findPerson(names: readonly string[], typed: string): string | null {
+  const key = typed.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!key) return null;
+  return names.find((name) => name.trim().replace(/\s+/g, ' ').toLowerCase() === key) ?? null;
+}
+
+/**
+ * Loans grouped by person, keeping the order the list already chose.
+ *
+ * One friend with three loans was three rows with the same name, which read
+ * as a duplicate. Grouped, they are one person with three loans and one total
+ * — the way the debt is actually thought of. Matching ignores case and extra
+ * spaces, like `findPerson`. A group sits where its first loan sat, so the
+ * list's ordering (overdue first, then newest) still decides who leads.
+ */
+export function groupLoansByPerson<L extends { personName: string }>(
+  loans: readonly L[],
+): { name: string; loans: L[] }[] {
+  const groups = new Map<string, { name: string; loans: L[] }>();
+  for (const loan of loans) {
+    const key = loan.personName.trim().replace(/\s+/g, ' ').toLowerCase();
+    const group = groups.get(key);
+    if (group) group.loans.push(loan);
+    else groups.set(key, { name: loan.personName.trim(), loans: [loan] });
+  }
+  return [...groups.values()];
+}

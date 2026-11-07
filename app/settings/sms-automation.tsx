@@ -6,13 +6,12 @@ import { SMART_DETECT_NAME, SmartDetectBadge } from '~/features/sms/components/S
 import { BottomSheet, Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { describeDrain } from '~/features/sms/logic/smsInbox';
 import { cleanPhoneNumber, openTestAlertComposer } from '~/shared/lib/testAlert';
+import { fetchAppConfig } from '~/shared/lib/catalogApi';
+import { isShortcutLink, resolveShortcutUrl } from '~/features/sms/logic/shortcutLink';
 import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
 import { lastDrainReport, useAppStore } from '../../src/store/useAppStore';
 import { useModalClose } from '~/shared/hooks/useModalClose';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-
-/** The shared "Dayly App Automation" shortcut on iCloud. */
-const DAYLY_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/c44cb7ae629b4993996723f8e07fdfe7';
 
 /**
  * Setup for the iOS Shortcuts automation behind Smart Detect.
@@ -22,7 +21,7 @@ const DAYLY_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/c44cb7ae629b4993996
  * Intent — plugins/ios/SendMessageToDaylyIntent.swift), which drops anything
  * not about money and queues the rest without opening the app.
  *
- * Setup is one shared shortcut (`DAYLY_SHORTCUT_URL`) that already contains
+ * Setup is one shared shortcut (see `shortcutLink.ts`) that already contains
  * the Message trigger and that action. The screen is that one button; the
  * Shortcuts app's own screens take it from there.
  */
@@ -49,14 +48,32 @@ export default function SmsAutomationGuide() {
     refreshInboxCount();
   }, [refreshInboxCount]);
 
+  // The link lives on the server so a new shortcut needs no app release. Start
+  // from the cached one, then take the server's if it answers with a valid link.
+  const [shortcutUrl, setShortcutUrl] = React.useState(() =>
+    resolveShortcutUrl(settingsRepo.get(SETTINGS_KEYS.smsShortcutUrl)),
+  );
+  React.useEffect(() => {
+    let live = true;
+    void fetchAppConfig().then(({ smsShortcutUrl }) => {
+      if (!live || !isShortcutLink(smsShortcutUrl)) return;
+      const url = smsShortcutUrl.trim();
+      settingsRepo.set(SETTINGS_KEYS.smsShortcutUrl, url);
+      setShortcutUrl(url);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   /**
    * Open the shared shortcut. Shortcuts shows it with an Add Shortcut button;
    * the trigger and the "Send Message to Dayly" action come with it.
    */
   function handleInstall() {
     settingsRepo.set(SETTINGS_KEYS.smsInboxEnabled, 'true');
-    void Linking.openURL(DAYLY_SHORTCUT_URL).catch(() =>
-      Alert.alert('Could not open Shortcuts', `Open this link in Safari instead:\n\n${DAYLY_SHORTCUT_URL}`),
+    void Linking.openURL(shortcutUrl).catch(() =>
+      Alert.alert('Could not open Shortcuts', `Open this link in Safari instead:\n\n${shortcutUrl}`),
     );
   }
 
@@ -180,7 +197,7 @@ export default function SmsAutomationGuide() {
      */
     Alert.alert(
       'Nothing has arrived yet',
-      `${describeDrain(summary)}\n\nIf you sent a test alert, open Shortcuts and check that Dayly App Automation is added, and that you ran it once with the play button and chose Allow.`,
+      `${describeDrain(summary)}\n\nIf you sent a test alert, open the Shortcuts app and check that the Dayly App Automation is added, and that you ran it once with the play button and chose Allow.`,
     );
   }
 
@@ -211,14 +228,19 @@ export default function SmsAutomationGuide() {
         <Label>Set up</Label>
         <Surface style={{ gap: space.lg }}>
           <View style={{ gap: 3 }}>
-            <Text variant="heading">Add the Dayly shortcut</Text>
+            <Text variant="heading">Add the Dayly automation</Text>
             <Text variant="small" tone="secondary">
-              The Shortcuts app opens — follow its steps to add it. Works with every bank; Dayly
-              picks out the bank alerts and ignores your other messages.
+              An automation in Apple&apos;s Shortcuts app passes each new message to Dayly, so your
+              bank alerts arrive here on their own. Tap below — the Shortcuts app opens; follow its
+              steps to add it.
+            </Text>
+            <Text variant="small" tone="secondary">
+              Works with every bank. Dayly keeps only the bank alerts and ignores your other
+              messages.
             </Text>
           </View>
 
-          <GradientButton label="Add shortcut" icon="add-circle-outline" onPress={handleInstall} />
+          <GradientButton label="Add automation" icon="add-circle-outline" onPress={handleInstall} />
 
           {/*
             The one step the Shortcuts app does not prompt for: an added
@@ -240,8 +262,8 @@ export default function SmsAutomationGuide() {
             <View style={{ flex: 1, gap: 2 }}>
               <Text variant="bodyStrong">Then run it once</Text>
               <Text variant="small" tone="secondary">
-                In Shortcuts, tap the play button on Dayly App Automation and choose Allow. It runs on
-                its own after that.
+                In the Shortcuts app, tap the play button on Dayly App Automation and choose Allow.
+                After that the automation runs by itself whenever a message arrives.
               </Text>
             </View>
           </Row>
