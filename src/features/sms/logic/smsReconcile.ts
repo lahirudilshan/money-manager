@@ -14,9 +14,11 @@ import {
   MAX_PLAUSIBLE_CHARGE_MINOR,
   isMatchableAccount,
   parentReceiptOf,
+  reversedCharge,
   type ParsedSms,
 } from './smsParser';
 import { resolveCardId } from '~/features/budget/logic/planning';
+import { matchAccountLeg, ownerOfAccount } from './accountMasks';
 import { billMatchesHint, inferCategoryHint, type CategoryHint } from './smsCategoryHints';
 import {
   guessCategories,
@@ -248,6 +250,11 @@ export interface BoardSlice {
     nickname: string | null;
     last4: string | null;
     bankName: string | null;
+    /** Full numbers and the second currency leg — see `matchAccountLeg`. */
+    accountNumber?: string | null;
+    foreignAccountNumber?: string | null;
+    foreignLast4?: string | null;
+    foreignCurrency?: string | null;
   }[];
 }
 
@@ -259,6 +266,15 @@ export function cardForAccount(
   // A fragment shorter than a last-4 cannot identify a card — "50" from HNB's
   // "Ac No:13802XXXXX50" would `endsWith`-match any account ending in 50. See
   // `isMatchableAccount`.
+  /*
+   * The same matcher confirm uses (full numbers, masks, both currency legs)
+   * first. On the device the review card said "••50" for HNB's masked
+   * "13802XXXXX50" and "••7427" for DFCC's USD leg while confirm correctly
+   * filed both on Expenses and Salary — the card misnamed the account the
+   * money was about to move.
+   */
+  const owner = ownerOfAccount(cards, account);
+  if (owner) return owner;
   if (!isMatchableAccount(account)) return undefined;
   return cards.find((card) => card.last4 && account.endsWith(card.last4));
 }
@@ -277,7 +293,8 @@ export function cardForAccount(
  */
 export function accountLabelFor(account: string, cards: BoardSlice['cards']): string {
   const card = cardForAccount(account, cards);
-  if (!card) return account ? `••${account}` : '';
+  if (!card) return account ? `••${digitsTail(account)}` : '';
+  const foreignLeg = matchAccountLeg(cards, account)?.leg === 'foreign';
 
   /*
    * Bank, then the user's own name, then the digits — each part included only
@@ -294,7 +311,18 @@ export function accountLabelFor(account: string, cards: BoardSlice['cards']): st
   const distinct =
     nickname && nickname.toLowerCase() !== bank.toLowerCase() ? nickname : '';
 
-  return [bank, distinct, card.last4 ? `••${card.last4}` : ''].filter(Boolean).join(' ');
+  // The leg the message named: DFCC's USD ...7427 is not "Salary ••5584".
+  const tail = foreignLeg
+    ? (card.foreignLast4 ?? digitsTail(card.foreignAccountNumber ?? ''))
+    : (card.last4 ?? digitsTail(card.accountNumber ?? ''));
+  const currency = foreignLeg && card.foreignCurrency ? card.foreignCurrency : '';
+
+  return [bank, distinct, tail ? `••${tail}` : '', currency].filter(Boolean).join(' ');
+}
+
+/** The last four digits of an account fragment, mask characters dropped. */
+function digitsTail(fragment: string): string {
+  return fragment.replace(/\D/g, '').slice(-4);
 }
 
 /**
@@ -633,6 +661,9 @@ export const CONFIDENT_MATCH_SCORE = 0.4;
  * income line. Returns matches ranked best-first; the top one is pre-selected
  * only if it clears CONFIDENT_MATCH_SCORE.
  */
+/** Tax a bank withholds from interest — "Debit Arrangement" (NDB), "AIT", "WHT". */
+const INTEREST_TAX = /\bdebit\s+arrangement\b|\badvance\s+income\s+tax\b|\bwithholding\s+tax\b|\bWHT\b|\bAIT\b/i;
+
 export function reconcileSms(
   parsed: ParsedSms,
   board: BoardSlice,
@@ -646,6 +677,34 @@ export function reconcileSms(
    */
   money: { currency: string; usdRate: number } = { currency: 'LKR', usdRate: 300 },
 ): SmsDraft {
+  /*
+   * A reversal that reached the queue undoes a charge already logged — so it
+   * belongs on THAT charge's line, as a refund. Matched as the charge, then
+   * handed back carrying the original credit: confirm signs a credit on an
+   * expense line negative, which takes the charge back off the line.
+   */
+  const charge = reversedCharge(parsed);
+  if (charge) return { ...reconcileSms(charge, board, id, rules, money), parsed };
+
+  /*
+   * Tax withheld on interest belongs on the INTEREST line, as a deduction.
+   *
+   * NDB credits 306.54 interest and in the same minute debits 30.65 "Debit
+   * Arrangement" — the 10% withholding. Filed as a bank charge, the interest
+   * line said 306.54 earned while only 275.89 arrived. A debit on an income
+   * line is stored negative (see confirmDraft), so the line reads net. With no
+   * interest line yet it falls through to Bank charges, as before.
+   */
+  if (parsed.direction === 'debit' && parsed.kind === 'bank_charge' && INTEREST_TAX.test(parsed.raw)) {
+    const interestLine = board.subcategories.find(
+      (line) => line.type === 'income' && /\binterest\b/i.test(line.name),
+    );
+    if (interestLine) {
+      const base = reconcileSms({ ...parsed, kind: 'other' }, board, id, [], money);
+      return { ...base, parsed, subcategoryId: interestLine.id, confidence: 'likely' };
+    }
+  }
+
   // A credit is money in (an income line); debit/bill are money out (expense).
   const wantType: 'income' | 'expense' = parsed.direction === 'credit' ? 'income' : 'expense';
 

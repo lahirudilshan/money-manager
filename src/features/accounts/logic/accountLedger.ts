@@ -114,6 +114,8 @@ export interface LedgerTransaction {
   date: Date;
   /** The account it moved through, when not the line's own. */
   cardId?: string | null;
+  /** 'foreign' = the card's other-currency leg, which has no ledger here. */
+  cardLeg?: string | null;
 }
 
 export interface LedgerTransfer {
@@ -344,6 +346,8 @@ export function buildLedgers(input: LedgerInput): Map<string, AccountLedger> {
   for (const txn of transactions) {
     const line = lineById.get(txn.subcategoryId);
     if (!line) continue;
+    // Moved on the other-currency leg: real spending, but not this balance.
+    if (txn.cardLeg === 'foreign') continue;
     const cardId = txn.cardId ?? line.cardId;
     if (!cardId) continue;
     const income = line.type === 'income';

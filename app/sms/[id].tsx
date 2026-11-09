@@ -48,6 +48,7 @@ import {
 } from '~/features/sms/logic/hintCatalog';
 import { extractStatementBill } from '~/features/sms/logic/smsParser';
 import { accountLabelFor } from '~/features/sms/logic/smsReconcile';
+import { accountFragmentOf } from '~/features/sms/logic/accountMasks';
 import { UsageChart } from '~/features/budget/components/UsageChart';
 import { meterReadingRepo } from '../../src/db/repositories';
 import {
@@ -320,7 +321,7 @@ export default function SmsDraftModal() {
 
   // Shared with the draft card, so a matched account is named identically on the
   // row the user tapped and the screen it opened.
-  const accountLabel = accountLabelFor(parsed.account, state.cards);
+  const accountLabel = accountLabelFor(accountFragmentOf(parsed), state.cards);
 
   const kindLabel = {
     purchase: 'Purchase',

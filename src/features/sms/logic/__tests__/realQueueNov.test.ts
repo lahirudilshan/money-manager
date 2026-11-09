@@ -33,13 +33,20 @@ describe('NDB interest and the tax withheld on it', () => {
     expect(reconcileSms(interest, board, 'd').subcategoryId).toBe('interest');
   });
 
-  it('reads "Debit Arrangement" as a bank charge', () => {
-    const tax = parseSms(
+  const tax = () =>
+    parseSms(
       'LKR 30.65 debited from AC XXXXXXXX6796 on 31 Oct 2026 19:03 as Debit Arrangement. Avl Bal 128,717.28 Call 94112448888 for info',
     )!;
-    expect(tax.merchant).toBe('Debit Arrangement');
-    expect(tax.kind).toBe('bank_charge');
-    expect(reconcileSms(tax, board, 'd').subcategoryId).toBe('charges');
+
+  it('files "Debit Arrangement" (the withheld tax) against the interest line', () => {
+    expect(tax().merchant).toBe('Debit Arrangement');
+    expect(tax().kind).toBe('bank_charge');
+    expect(reconcileSms(tax(), board, 'd').subcategoryId).toBe('interest');
+  });
+
+  it('falls back to Bank charges when there is no interest line', () => {
+    const noInterest = { ...board, subcategories: board.subcategories.filter((s) => s.id !== 'interest') };
+    expect(reconcileSms(tax(), noInterest, 'd').subcategoryId).toBe('charges');
   });
 });
 

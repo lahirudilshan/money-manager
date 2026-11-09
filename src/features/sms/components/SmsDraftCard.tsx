@@ -5,6 +5,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { shortWhen } from '~/shared/lib/dates';
 import { formatMoney } from '~/shared/lib/money';
 import { HINT_META } from '~/features/sms/logic/smsCategoryHints';
+import { proposalKeyFor } from '~/features/sms/logic/hintCatalog';
+import { accountFragmentOf } from '~/features/sms/logic/accountMasks';
 import { extractStatementBill, type StatementBill } from '~/features/sms/logic/smsParser';
 import { accountLabelFor, cardForAccount, type SmsDraft } from '~/features/sms/logic/smsReconcile';
 import type { Card } from '~/db/schema';
@@ -84,7 +86,17 @@ export function SmsDraftCard({
   const { colors, radius, space } = useTheme();
 
   const { parsed, hint } = draft;
-  const hintMeta = hint ? HINT_META[hint] : null;
+  /*
+   * Bank interest carries the `income` hint, so the chip read "Income" — which
+   * looks like salary. "Yes, log this" files it under "Interest / dividends"
+   * (see `proposalKeyFor`), so the chip says so.
+   */
+  const hintMeta =
+    proposalKeyFor(draft) === 'interest'
+      ? { label: 'Interest', icon: 'trending-up-outline' }
+      : hint
+        ? HINT_META[hint]
+        : null;
   const isCredit = parsed.direction === 'credit';
   /**
    * Whether "Yes, log this" has somewhere to put the money.
@@ -123,8 +135,9 @@ export function SmsDraftCard({
   // A recognised account is named in full ("HNB Salary ••4150"); an unrecognised
   // one keeps the bare digits. `matchedCard` is kept alongside the label so the
   // row can style the two cases differently.
-  const matchedCard = cardForAccount(parsed.account, cards);
-  const accountLabel = accountLabelFor(parsed.account, cards);
+  const fragment = accountFragmentOf(parsed);
+  const matchedCard = cardForAccount(fragment, cards);
+  const accountLabel = accountLabelFor(fragment, cards);
 
   // Date and time read as one fact, space-joined so they are not split by a dot
   // as though unrelated. The year is dropped for anything in the current year —

@@ -310,6 +310,24 @@ export const smsInboxRepo = {
       .all();
   },
 
+  /**
+   * Every DEBIT the user confirmed, by amount, account and moment — what a
+   * leftover reversal is checked against (see `reversalHasLoggedCharge`).
+   */
+  confirmedDebits(): { amountMinor: number; account: string; date: string | null; time: string | null }[] {
+    return db
+      .select({
+        amountMinor: smsInbox.amountMinor,
+        account: smsInbox.account,
+        date: smsInbox.occurredOn,
+        time: smsInbox.occurredAt,
+      })
+      .from(smsInbox)
+      .where(and(eq(smsInbox.status, 'confirmed'), eq(smsInbox.direction, 'debit')))
+      .all()
+      .map((row) => ({ ...row, amountMinor: row.amountMinor ?? 0, account: row.account ?? '' }));
+  },
+
   /** How many are waiting, for the badge — cheaper than loading the rows. */
   pendingCount(): number {
     const row = db

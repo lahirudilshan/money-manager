@@ -35,6 +35,7 @@ import {
   accountFragmentOf,
   isForeignAccountMessage,
   ownerOfAccount,
+  matchAccountLeg,
 } from '~/features/sms/logic/accountMasks';
 import { alertMoment, checkpointFromSms } from '~/features/accounts/logic/balanceCheckpoints';
 
@@ -48,6 +49,7 @@ import {
   pairInternalTransfers,
   cardPaymentTwins,
   cancelReversals,
+  reversalHasLoggedCharge,
   inferOwnAccounts,
   splitMergedMessages,
   EMPTY_SUMMARY,
@@ -566,7 +568,17 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       return byWhen !== 0 ? byWhen : a.row.receivedAt.getTime() - b.row.receivedAt.getTime();
     });
 
-    const orderedSms = ordered.map((entry) => entry.sms);
+    const allSms = ordered.map((entry) => entry.sms);
+    /*
+     * Reversals first, exactly as the drain does.
+     *
+     * The drain only ever cancels within one batch, and a charge and its
+     * reversal routinely arrive in SEPARATE batches — on the device a 9,000 ATM
+     * debit and its reversal were drained 39 seconds apart, and both then sat
+     * in Smart Detect for the user to log as a spend AND an income. This pass
+     * sees the whole queue, so it is where such a pair finally meets.
+     */
+    const orderedSms = cancelReversals(allSms);
     const internalPairs = pairInternalTransfers(orderedSms, ownAccounts);
     const paired = new Set(internalPairs.flatMap((pair) => [pair.debit, pair.credit]));
     // A card bill paid twice over in the queue — the bank's transfer and the
@@ -601,8 +613,10 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       foreignAccountNumber: view.card.foreignAccountNumber,
     }));
 
+    // Cancelled as a reversal pair: money that never moved funds nothing.
+    const reversed = new Set(allSms.filter((sms) => !orderedSms.includes(sms)));
     for (const entry of ordered) {
-      if (survivors.has(entry.sms)) continue;
+      if (survivors.has(entry.sms) || reversed.has(entry.sms)) continue;
       if (entry.sms.direction !== 'credit') continue;
 
       const destination = moveDestination.get(entry.sms);
@@ -717,10 +731,13 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      * to blank the row — and `pruneQueue` below is what clears those out when
      * they are genuinely noise.
      */
+    const loggedDebits = smsInboxRepo
+      .confirmedDebits()
+      .map((row) => ({ ...row, kind: 'charge', direction: 'debit' }));
     const drafts = smsInboxRepo.pending().map((row) => {
       const reparsed = parseSms(row.raw);
 
-      return reconcileSms(
+      const draft = reconcileSms(
         reparsed ?? {
           direction: (row.direction ?? 'debit') as ParsedSms['direction'],
           kind: (row.kind ?? 'other') as ParsedSms['kind'],
@@ -742,6 +759,20 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         // and record a salary as pocket change.
         { currency, usdRate },
       );
+
+      /*
+       * A reversal is offered as a refund only when its charge was LOGGED —
+       * otherwise one tap would take money off a line that never had it. The
+       * user still chooses; it just is not pre-filled.
+       */
+      if (
+        draft.parsed.kind === 'reversal' &&
+        draft.subcategoryId &&
+        !reversalHasLoggedCharge(draft.parsed, loggedDebits)
+      ) {
+        return { ...draft, subcategoryId: '', hint: null, confidence: 'unknown' as const };
+      }
+      return draft;
     });
 
     /*
@@ -1469,8 +1500,15 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
     const lineCardId = target?.cardId ?? category?.cardId ?? null;
     // Matched on full numbers (and masks), not the stored tail — a stale tail
     // sent the user's Salary (…5584) and Online (…6796) messages nowhere.
-    const messageCardId = ownerOfAccount(get().cards, accountFragmentOf(draft.parsed))?.id ?? null;
+    const messageLeg = matchAccountLeg(get().cards, accountFragmentOf(draft.parsed));
+    const messageCardId = messageLeg?.account.id ?? null;
     const paymentCardId = messageCardId && messageCardId !== lineCardId ? messageCardId : null;
+    /*
+     * The card's OTHER-currency leg (DFCC USD ...7427 behind rupee ...5584).
+     * Recorded so the ledger leaves the rupee balance alone — see `cardLeg` in
+     * schema.ts — and always as an entry, since only an entry can carry it.
+     */
+    const cardLeg = messageLeg?.leg === 'foreign' ? ('foreign' as const) : null;
 
     /*
      * A SPLIT is always recorded as a transaction, whatever its lines are.
@@ -1488,6 +1526,46 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
      * (see `transactionRepo.totalsByPeriod`), so its own line is not
      * double-counted.
      */
+    /*
+     * A SECOND payment on a dated bill whose month already holds one figure.
+     *
+     * The first SMS payment on a monthly bill is stored as the month's single
+     * `actual`, and the branch below used to write the next one over it — two
+     * Dialog reloads on "Mobile / phone bill" left only the second on the
+     * board and in the balance. The month's figure becomes an entry first, so
+     * the new payment is added beside it rather than replacing it.
+     */
+    if (target && !splits) {
+      const monthState = get().history.states.find(
+        (state) => state.subcategoryId === target.id && state.period === occurredPeriod,
+      );
+      const heldFigure = monthState?.status === 'paid' ? (monthState.actualMinor ?? 0) : 0;
+      if (
+        monthState &&
+        heldFigure > 0 &&
+        transactionRepo.bySubcategoryPeriod(target.id, occurredPeriod).length === 0
+      ) {
+        const earlierRaw = monthState.note?.startsWith('From SMS: ')
+          ? monthState.note.slice('From SMS: '.length)
+          : null;
+        const earlier = earlierRaw ? parseSms(earlierRaw) : null;
+        transactionRepo.create({
+          subcategoryId: target.id,
+          period: occurredPeriod,
+          name: earlier?.merchant || target.name,
+          amountMinor: heldFigure,
+          date:
+            (earlier && alertMoment(earlier.date, earlier.time)) ??
+            monthState.completedAt ??
+            monthState.updatedAt ??
+            occurredAt,
+          note: earlierRaw ?? monthState.note ?? null,
+          houseId: monthState.houseId ?? null,
+          cardId: null,
+        });
+      }
+    }
+
     if (splits) {
       const created = transactionRepo.create({
         subcategoryId: splits[0].subcategoryId,
@@ -1501,6 +1579,7 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         note: overrides?.note ?? draft.parsed.raw,
         houseId: overrides?.houseId ?? null,
         cardId: paymentCardId,
+        cardLeg,
       });
 
       transactionSplitRepo.replace(
@@ -1519,6 +1598,7 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
       // account.
       (reversed ||
         paymentCardId !== null ||
+        cardLeg !== null ||
         /*
          * A dated bill that already holds ENTRIES this month: its total is the
          * sum of those entries (see `billActual`), so writing this payment as
@@ -1552,6 +1632,7 @@ export const createSmsSlice: StateCreator<AppState, [], [], SmsSlice> = (set, ge
         note: overrides?.note ?? draft.parsed.raw,
         houseId: overrides?.houseId ?? null,
         cardId: paymentCardId,
+        cardLeg,
       });
     } else {
       /*

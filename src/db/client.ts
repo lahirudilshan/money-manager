@@ -1330,6 +1330,8 @@ function ensureAdditiveColumns(): void {
       'card_id',
       'card_id TEXT REFERENCES cards(id) ON DELETE SET NULL',
     );
+    // Which leg of a dual-currency card it moved on — see `transactions`.
+    ensureColumn('transactions', 'card_leg', 'card_leg TEXT');
     expoDb.execSync(
       `CREATE INDEX IF NOT EXISTS transactions_house_idx ON transactions(house_id, period)`,
     );

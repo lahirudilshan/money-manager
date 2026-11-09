@@ -321,6 +321,14 @@ export const transactions = sqliteTable(
      * to the new account and rewrote both balances' history.
      */
     cardId: text('card_id').references(() => cards.id, { onDelete: 'set null' }),
+    /**
+     * 'foreign' when the money moved on the card's FOREIGN-currency leg — DFCC's
+     * USD ...7427 behind the rupee ...5584 card. The app keeps no ledger for
+     * that leg, so such a payment counts on the board (converted) but must not
+     * move the rupee balance: a USD 1,800 debit filed as spending took
+     * Rs 589,950 out of Salary. Null — every older row — is the primary leg.
+     */
+    cardLeg: text('card_leg', { enum: ['foreign'] }),
     ...timestamps,
   },
   (t) => [

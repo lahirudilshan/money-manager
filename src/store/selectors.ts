@@ -438,6 +438,14 @@ export function selectTotalIncome(state: AppState): Minor {
     state.incomes.map((income) => `${income.name.trim().toLowerCase()}:${income.amountMinor}`),
   );
 
+  /*
+   * Each income line counts what was PLANNED or what actually ARRIVED this
+   * month, whichever is more. Planned alone left received money out: an
+   * "Interest / dividends" line (planned 0, created from a bank's interest
+   * SMS) held 306.54 that the month's income never showed. Taking the larger
+   * keeps an expected salary counted before it lands, without adding it twice
+   * once it has.
+   */
   const onBoard = sumMinor(
     selectCategoryViews(state).flatMap((view) =>
       view.rawSubcategories
@@ -446,7 +454,10 @@ export function selectTotalIncome(state: AppState): Minor {
             line.type === 'income' &&
             !declaredKeys.has(`${line.name.trim().toLowerCase()}:${line.plannedMinor}`),
         )
-        .map((line) => line.plannedMinor),
+        .map((line) => {
+          const actual = view.subcategories.find((p) => p.id === line.id)?.actualMinor ?? 0;
+          return Math.max(line.plannedMinor, actual);
+        }),
     ),
   );
 

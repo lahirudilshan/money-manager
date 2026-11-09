@@ -318,6 +318,14 @@ export interface CancellableEntry {
   direction: string;
   amountMinor: number;
   account: string;
+  /** ISO date and "HH:MM", when the message stated them — see `sameMinute`. */
+  date?: string | null;
+  time?: string | null;
+}
+
+/** Both messages name the same date AND minute. */
+function sameMinute(a: CancellableEntry, b: CancellableEntry): boolean {
+  return !!a.date && !!a.time && a.date === b.date && a.time === b.time;
 }
 
 /**
@@ -358,26 +366,67 @@ export function cancelReversals<T extends CancellableEntry>(entries: readonly T[
      * means the most recent identical charge is consumed — which is what makes
      * the charge/reverse/charge sequence above leave the final charge standing.
      */
+    const undoes = (candidate: T) =>
+      candidate.direction === 'debit' &&
+      candidate.amountMinor === entry.amountMinor &&
+      // Same account, when both messages name one. Some banks omit it on the
+      // reversal, and an amount match alone is strong enough to pair on.
+      (!candidate.account || !entry.account || candidate.account === entry.account);
+
     for (let i = index - 1; i >= 0; i -= 1) {
-      if (dropped.has(i)) continue;
+      if (dropped.has(i) || !undoes(entries[i])) continue;
+      dropped.add(i);
+      dropped.add(index);
+      return;
+    }
 
-      const candidate = entries[i];
-      const matches =
-        candidate.direction === 'debit' &&
-        candidate.amountMinor === entry.amountMinor &&
-        // Same account, when both messages name one. Some banks omit it on the
-        // reversal, and an amount match alone is strong enough to pair on.
-        (!candidate.account || !entry.account || candidate.account === entry.account);
-
-      if (matches) {
-        dropped.add(i);
-        dropped.add(index);
-        break;
-      }
+    /*
+     * Then FORWARD, but only within the reversal's own minute.
+     *
+     * NDB stamps a failed transfer and its reversal with the same minute
+     * ("08 Nov 2026 12:12" on both), and the phone can deliver the reversal
+     * first — on the device the 1,500 reversal landed ahead of its debit in one
+     * batch, so the backward search found nothing and BOTH sat in Smart Detect.
+     * A debit later in the same minute is the one being undone; anything later
+     * than that is a genuine retry and must survive.
+     */
+    for (let i = index + 1; i < entries.length; i += 1) {
+      if (dropped.has(i) || !sameMinute(entries[i], entry) || !undoes(entries[i])) continue;
+      dropped.add(i);
+      dropped.add(index);
+      return;
     }
   });
 
   return entries.filter((_, index) => !dropped.has(index));
+}
+
+/**
+ * Whether a reversal still in the queue undoes a charge the user LOGGED.
+ *
+ * Only then is it a refund of that charge. On the device a 25.00 CEFTS fee at
+ * 16:50 was charged and reversed in the same minute, but the fee's own message
+ * never arrived — so nothing was logged, and filing the reversal as a refund
+ * would have put Bank charges 25 BELOW the truth.
+ *
+ * A reversal stamped with a time names the original's minute (NDB's do: the
+ * failed 15:37 withdrawal is reversed "on ... 15:37"), so it must meet a logged
+ * charge in that same minute. An untimed one — a refund days later — needs a
+ * logged charge of that amount on that account within the window before it.
+ */
+export function reversalHasLoggedCharge(
+  reversal: CancellableEntry,
+  logged: readonly CancellableEntry[],
+  windowDays = 60,
+): boolean {
+  const sameAccount = (a: string) => !a || !reversal.account || a === reversal.account;
+  return logged.some((charge) => {
+    if (charge.amountMinor !== reversal.amountMinor || !sameAccount(charge.account)) return false;
+    if (reversal.time) return sameMinute(charge, reversal);
+    if (!reversal.date || !charge.date) return true;
+    const days = (Date.parse(reversal.date) - Date.parse(charge.date)) / 86_400_000;
+    return days >= 0 && days <= windowDays;
+  });
 }
 
 /**

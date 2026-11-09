@@ -1656,6 +1656,34 @@ function classifyKind(text: string, direction: SmsDirection, amountMinor: number
  * Deliberately conservative: it requires the message to open like a real alert
  * AND to stop before reaching anything a complete one always has.
  */
+/**
+ * The charge a reversal undoes, read back out of the reversal itself.
+ *
+ * "A reversal for ATM Withdrawal Fee of LKR 30.00 credited to AC ...6796"
+ * names what it undoes. When the charge was already LOGGED (so there is no
+ * pending debit for `cancelReversals` to pair it with), the reversal is a
+ * refund of that charge — and the only line it can belong to is the charge's
+ * own. Without this the reversal had no merchant and no kind worth matching,
+ * so Smart Detect offered nothing and the user's Bank charges stayed 30 over.
+ *
+ * Returns the charge as a DEBIT for matching only; the caller keeps the
+ * original credit, which is what makes confirm store it as a refund.
+ */
+export function reversedCharge(parsed: ParsedSms): ParsedSms | null {
+  if (parsed.kind !== 'reversal') return null;
+  const label = parsed.raw.match(
+    /\breversal\s+(?:for|of)\s+(.+?)\s+(?:of|for)\s+(?:LKR|Rs\.?|USD|EUR|GBP)\b/i,
+  )?.[1];
+  if (!label) return null;
+  const merchant = clean(label);
+  return {
+    ...parsed,
+    direction: 'debit',
+    merchant,
+    kind: classifyKind(`debited as ${merchant}`, 'debit', parsed.amountMinor),
+  };
+}
+
 export function looksTruncated(input: string): boolean {
   if (typeof input !== 'string') return false;
   const text = input.trim();

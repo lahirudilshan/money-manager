@@ -145,7 +145,7 @@ describe('wording from the user’s real banks', () => {
     ],
   };
 
-  it('files bank interest as income and the tax on it as a bank charge', () => {
+  it('files bank interest as income and the tax on it against that interest', () => {
     const interest = parseSms(
       'LKR 35.81 credited to Ac No:13802XXXXX40 on 27/09/26 21:05:36 Reason:13802XXXXX40:Int.Pd:31-08-2026 to 27-09-2026 Bal:LKR 23,332.84 Protect from scams *DO NOT SHARE ACCOUNT DETAILS /OTP* Hotline 0112462462',
     )!;
@@ -156,7 +156,8 @@ describe('wording from the user’s real banks', () => {
       'Your A/C No: ********1509 is debited with LKR11.03 on 27 SEP 2026 ref: Advance Income Tax. Your bal is LKR52,022.3. If unauthorized call 0112350035',
     )!;
     expect(tax.kind).toBe('bank_charge');
-    expect(reconcileSms(tax, withIncome, 'd').subcategoryId).toBe('charges');
+    // A debit on the income line: confirm stores it negative, so interest reads net.
+    expect(reconcileSms(tax, withIncome, 'd').subcategoryId).toBe('interest');
   });
 
   it('reads "ATM POS Transaction" at a fuel station as a purchase, not cash', () => {
