@@ -5,12 +5,11 @@ import { Pressable, ScrollView, TextInput, View } from 'react-native';
 import { Screen } from '~/shared/components/Screen';
 import { Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import { healthLabRepo } from '~/db/repositories';
 import type { MetricRow } from '~/features/health/logic/healthMetrics';
 import { usePersonHealth } from '~/features/health/components/usePersonHealth';
 import { useAppStore } from '~/store/useAppStore';
 import {
-  readOverall,
+  isOutOfRange,
   searchLabResults,
   suggestedQuestions,
   type TestGroup,
@@ -18,11 +17,14 @@ import {
 import { HealthChart } from '~/features/health/components/HealthChart';
 import {
   AiDisclaimer,
-  conditionStyle,
   formatLabValue,
   labBand,
   LabStatusPill,
+  labStatusStyle,
 } from '~/features/health/components/LabUi';
+import { categoryLook } from '~/features/health/components/healthCategory';
+import { normalRangeText } from '~/features/health/logic/healthMetrics';
+import { plainName } from '~/features/health/logic/plainTests';
 import { AnalyseRunBanner } from '~/features/health/components/AnalyseRunBanner';
 
 /**
@@ -51,11 +53,6 @@ export default function LabsScreen() {
    */
   const health = usePersonHealth(person?.id, people);
   const rows = useMemo(() => health.series.flatMap((s) => s.history), [health]);
-  const analyses = useMemo(
-    () => (person ? healthLabRepo.analysesByPerson(person.id) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [person, people],
-  );
   const groups = health.series;
   const suggestions = useMemo(() => suggestedQuestions(groups), [groups]);
   const answers = useMemo(() => searchLabResults(query, rows), [query, rows]);
@@ -65,7 +62,22 @@ export default function LabsScreen() {
     const map = new Map<string, TestGroup<MetricRow>[]>();
     for (const group of groups)
       map.set(group.category, [...(map.get(group.category) ?? []), group]);
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+    /*
+     * Groups with something off first, so the screen opens on what needs a
+     * look; then alphabetical. Inside a group, off results lead.
+     */
+    const offCount = (list: TestGroup<MetricRow>[]) =>
+      list.filter((g) => isOutOfRange(g.latest.status) && !goodHdl(g)).length;
+    return [...map.entries()]
+      .map(([category, list]) => {
+        const sorted = [...list].sort(
+          (x, y) =>
+            Number(isOutOfRange(y.latest.status) && !goodHdl(y)) -
+            Number(isOutOfRange(x.latest.status) && !goodHdl(x)),
+        );
+        return [category, sorted] as const;
+      })
+      .sort(([a, la], [b, lb]) => offCount(lb) - offCount(la) || a.localeCompare(b));
   }, [groups]);
 
   if (!person) {
@@ -85,7 +97,11 @@ export default function LabsScreen() {
 
   return (
     <Screen
-      title={people.length > 1 ? `${person.name}’s health numbers` : 'My health numbers'}
+      title={
+        people.length === 1 || /^(me|myself|i)$/i.test(person.name.trim())
+          ? 'My health numbers'
+          : `${person.name.trim().split(' ')[0]}’s health numbers`
+      }
       onBack={() => router.back()}
       footer={
         <GradientButton
@@ -193,101 +209,11 @@ export default function LabsScreen() {
           </View>
         )
       ) : (
-        <>
-          {analyses.length > 0 ? (
-            <View style={{ gap: space.sm }}>
-              <Label>REPORT SUMMARIES</Label>
-              <Surface padded={false} style={{ overflow: 'hidden' }}>
-                {analyses.map((analysis, index) => {
-                  const condition = conditionStyle(
-                    readOverall(analysis.overallJson).condition,
-                    colors,
-                  );
-                  return (
-                    <Pressable
-                      key={analysis.id}
-                      onPress={() => router.push(`/mini/health/analysis?id=${analysis.id}`)}
-                      accessibilityRole="button"
-                      style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        gap: space.md,
-                        alignItems: 'center',
-                        padding: space.md,
-                        borderTopWidth: index === 0 ? 0 : 1,
-                        borderTopColor: colors.hairline,
-                        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-                      })}
-                    >
-                      <View
-                        style={{
-                          width: 40,
-                          height: 40,
-                          borderRadius: radius.md,
-                          backgroundColor: condition.bg,
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <Ionicons name={condition.icon} size={20} color={condition.fg} />
-                      </View>
-                      <View style={{ flex: 1, gap: 2 }}>
-                        <Text variant="bodyStrong" numberOfLines={2}>
-                          {analysis.headline}
-                        </Text>
-                        <Text variant="caption" tone="secondary">
-                          {`${shortDate(analysis.reportDate)} · ${condition.label}`}
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-                    </Pressable>
-                  );
-                })}
-              </Surface>
-            </View>
-          ) : null}
-
+        <View style={{ gap: space.lg }}>
           {byCategory.map(([category, list]) => (
-            <View key={category} style={{ gap: space.sm }}>
-              <Label>{category}</Label>
-              <Surface padded={false} style={{ overflow: 'hidden' }}>
-                {list.map((group, index) => (
-                  <Pressable
-                    key={group.testKey}
-                    onPress={() => openTest(group)}
-                    accessibilityRole="button"
-                    style={({ pressed }) => ({
-                      flexDirection: 'row',
-                      gap: space.md,
-                      alignItems: 'center',
-                      padding: space.md,
-                      borderTopWidth: index === 0 ? 0 : 1,
-                      borderTopColor: colors.hairline,
-                      backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
-                    })}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text variant="bodyStrong" numberOfLines={1}>
-                        {group.testName}
-                      </Text>
-                      <Text variant="caption" tone="secondary">
-                        {group.history.length > 1
-                          ? `${group.history.length} results · last ${shortDate(group.latest.measuredAt)}`
-                          : shortDate(group.latest.measuredAt)}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                      <Text variant="figure" style={{ fontVariant: ['tabular-nums'] }}>
-                        {formatLabValue(group.latest)}
-                      </Text>
-                      <LabStatusPill status={group.latest.status} />
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-                  </Pressable>
-                ))}
-              </Surface>
-            </View>
+            <CategoryCard key={category} category={category} list={list} onOpen={openTest} />
           ))}
-        </>
+        </View>
       )}
     </Screen>
   );
@@ -314,9 +240,9 @@ function AnswerCard({
         <Row style={{ alignItems: 'flex-start', gap: space.md }}>
           <View style={{ flex: 1, gap: 2 }}>
             <Text variant="caption" tone="secondary">
-              {group.category}
+              {categoryLook(group.category).title}
             </Text>
-            <Text variant="heading">{group.testName}</Text>
+            <Text variant="heading">{plainName(group.testKey, group.testName, group.latest.unit)}</Text>
           </View>
           <Ionicons
             name="chevron-forward"
@@ -363,4 +289,132 @@ function round(n: number): string {
 
 function shortDate(date: Date): string {
   return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** A high HDL is good news, not a result to flag. */
+function goodHdl(group: TestGroup<MetricRow>): boolean {
+  return group.testKey === 'hdl_cholesterol' && group.latest.status === 'high';
+}
+
+/**
+ * One body area as a card: its name big with an icon, how it is doing in
+ * words ("2 need a look · 12 normal"), then each test as a plain row. An area
+ * that is all normal starts folded — nothing there needs reading.
+ */
+function CategoryCard({
+  category,
+  list,
+  onOpen,
+}: {
+  category: string;
+  list: readonly TestGroup<MetricRow>[];
+  onOpen: (group: TestGroup) => void;
+}) {
+  const { colors, radius, space } = useTheme();
+  const look = categoryLook(category);
+  const off = list.filter((g) => isOutOfRange(g.latest.status) && !goodHdl(g)).length;
+  const [open, setOpen] = useState(off > 0);
+  const summary =
+    off === 0
+      ? list.length === 1
+        ? 'Normal'
+        : `All ${list.length} normal`
+      : `${off} ${off === 1 ? 'needs' : 'need'} a look · ${list.length - off} normal`;
+
+  return (
+    <Surface padded={false} style={{ overflow: 'hidden' }}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${look.title}, ${summary}`}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: space.md,
+          padding: space.lg,
+          backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+        })}
+      >
+        <View
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: radius.md,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: look.color,
+          }}
+        >
+          <Ionicons name={look.icon} size={22} color="#FFFFFF" />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text variant="title" style={{ fontSize: 19 }}>
+            {look.title}
+          </Text>
+          <Row gap={4}>
+            <Ionicons
+              name={off === 0 ? 'checkmark-circle' : 'alert-circle'}
+              size={14}
+              color={off === 0 ? colors.completed : colors.pending}
+            />
+            <Text variant="small" tone="secondary" style={{ fontWeight: '700' }}>
+              {summary}
+            </Text>
+          </Row>
+        </View>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkMuted} />
+      </Pressable>
+
+      {open
+        ? list.map((group) => {
+            const latest = group.latest;
+            const good = goodHdl(group);
+            const status = labStatusStyle(good ? 'normal' : latest.status, colors);
+            const normal = normalRangeText(latest);
+            return (
+              <Pressable
+                key={group.testKey}
+                onPress={() => onOpen(group)}
+                accessibilityRole="button"
+                accessibilityLabel={`${plainName(group.testKey, group.testName, group.latest.unit)}, ${formatLabValue(latest)}, ${status.label}`}
+                style={({ pressed }) => ({
+                  flexDirection: 'row',
+                  gap: space.md,
+                  alignItems: 'center',
+                  paddingHorizontal: space.lg,
+                  paddingVertical: space.md,
+                  borderTopWidth: 1,
+                  borderTopColor: colors.hairline,
+                  backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                })}
+              >
+                <View style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, backgroundColor: status.fg }} />
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text variant="bodyStrong" numberOfLines={2}>
+                    {plainName(group.testKey, group.testName, group.latest.unit)}
+                  </Text>
+                  <Text variant="caption" tone="secondary" numberOfLines={1}>
+                    {normal ? `Normal: ${normal}` : `Checked ${shortDate(latest.measuredAt)}`}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <Text variant="figure" style={{ fontVariant: ['tabular-nums'] }}>
+                    {formatLabValue(latest)}
+                  </Text>
+                  {good ? (
+                    <Text variant="label" color={colors.completed}>
+                      GOOD
+                    </Text>
+                  ) : (
+                    <LabStatusPill status={latest.status} />
+                  )}
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
+              </Pressable>
+            );
+          })
+        : null}
+    </Surface>
+  );
 }

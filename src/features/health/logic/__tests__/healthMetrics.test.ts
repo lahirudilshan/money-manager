@@ -136,3 +136,14 @@ describe('the home screen', () => {
     expect(changeSincePrevious(series.find((s) => s.testKey === 'heart_rate')!)).toBeNull();
   });
 });
+
+describe('normalRangeText', () => {
+  it('says the normal range in a few words', async () => {
+    const { normalRangeText } = await import('~/features/health/logic/healthMetrics');
+    expect(normalRangeText({ testKey: 'x', refLow: 70, refHigh: 99 })).toBe('70–99');
+    expect(normalRangeText({ testKey: 'x', refLow: null, refHigh: 200 })).toBe('under 200');
+    expect(normalRangeText({ testKey: 'x', refLow: 40, refHigh: null })).toBe('above 40');
+    expect(normalRangeText({ testKey: 'blood_pressure', refLow: 90, refHigh: 119 })).toBe('below 120/80');
+    expect(normalRangeText({ testKey: 'x', refLow: null, refHigh: null })).toBeNull();
+  });
+});

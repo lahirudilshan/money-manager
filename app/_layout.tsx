@@ -1,4 +1,5 @@
-import { Stack, useRouter } from 'expo-router';
+import { Stack, usePathname, useRouter } from 'expo-router';
+import { hasAcceptedTerms } from '~/features/terms/components/termsStore';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -121,6 +122,7 @@ const POST_UNLOCK_PAUSE_MS = 1000;
 function RootNavigator() {
   const theme = useTheme();
   const router = useRouter();
+  const pathname = usePathname();
   const ready = useAppStore((s) => s.ready);
   const needsOnboarding = useAppStore((s) => s.needsOnboarding);
   const initialise = useAppStore((s) => s.initialise);
@@ -546,9 +548,24 @@ function RootNavigator() {
        * it was needed. `welcome` offers the fork; picking "set up a new plan"
        * continues to `/onboarding/index` as before.
        */
-      router.replace('/onboarding/welcome');
+      // Terms first: what happens to their data, and where AI is used.
+      router.replace(hasAcceptedTerms() ? '/onboarding/welcome' : '/onboarding/terms');
     }
   }, [ready, needsOnboarding, router]);
+
+  /*
+   * Someone who set the app up before the terms existed (or before they
+   * changed) sees them once, on the board. Only from the board: a launch that
+   * came in through a link — the Shortcuts `/sms` intake above all — must land
+   * where it was sent, and the terms will be there on the next normal open.
+   */
+  const termsAsked = React.useRef(false);
+  useEffect(() => {
+    if (!ready || needsOnboarding || termsAsked.current) return;
+    if (pathname !== '/') return;
+    termsAsked.current = true;
+    if (!hasAcceptedTerms()) router.replace('/onboarding/terms?then=app');
+  }, [ready, needsOnboarding, pathname, router]);
 
   // Surface the failure rather than spinning forever on a broken database.
   if (startupError) {
@@ -598,6 +615,7 @@ function RootNavigator() {
       */}
       <AppLockGate onUnlocked={handleUnlocked} onWaiting={handleWaiting}>
         {holdContent ? null : (
+        <>
         <Stack
           screenOptions={{
             headerShown: false,
@@ -617,6 +635,11 @@ function RootNavigator() {
           <Stack.Screen name="transaction/ongoing" options={SHEET_ROUTE} />
           <Stack.Screen name="account/[id]" options={SHEET_ROUTE} />
           <Stack.Screen name="search" options={{ animation: 'fade', animationDuration: 160 }} />
+          {/* Ask AI: a full-screen modal sliding up over wherever it was opened. */}
+          <Stack.Screen
+            name="ask"
+            options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }}
+          />
           <Stack.Screen name="sms/index" />
           <Stack.Screen name="sms/new" options={SHEET_ROUTE} />
           <Stack.Screen name="sms/[id]" options={SHEET_ROUTE} />
@@ -629,6 +652,8 @@ function RootNavigator() {
           */}
           <Stack.Screen name="settings/rates" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/backup" options={SHEET_ROUTE} />
+          <Stack.Screen name="settings/ai" options={SHEET_ROUTE} />
+          <Stack.Screen name="settings/terms" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/sync" options={SHEET_ROUTE} />
           <Stack.Screen name="settings/sms-history" options={SHEET_ROUTE} />
           {/*
@@ -699,6 +724,7 @@ function RootNavigator() {
           <Stack.Screen name="mini/health/labs" />
           <Stack.Screen name="mini/health/lab-test" />
         </Stack>
+        </>
         )}
       </AppLockGate>
 

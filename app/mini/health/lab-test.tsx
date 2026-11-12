@@ -9,13 +9,9 @@ import { healthLabRepo } from '~/db/repositories';
 import { useAppStore } from '~/store/useAppStore';
 import { HealthChart } from '~/features/health/components/HealthChart';
 import { usePersonHealth } from '~/features/health/components/usePersonHealth';
-import {
-  AiDisclaimer,
-  LabResultCard,
-  LabStatusPill,
-  labStatusStyle,
-  RangeBar,
-} from '~/features/health/components/LabUi';
+import { AiDisclaimer, LabStatusPill } from '~/features/health/components/LabUi';
+import { PlainResultCard } from '~/features/health/components/PlainResultCard';
+import { plainName } from '~/features/health/logic/plainTests';
 import { changeSincePrevious, typicalBand } from '~/features/health/logic/healthMetrics';
 import { guideFor } from '~/features/health/logic/measureGuide';
 import { MeasureGuideCard } from '~/features/health/components/MeasureGuideCard';
@@ -70,12 +66,11 @@ export default function MetricScreen() {
           return typical ? { low: typical.low ?? 0, high: typical.high } : undefined;
         })();
   const fromHome = series.history.some((r) => r.source === 'reading');
-  const status = labStatusStyle(latest.status, colors);
   const guide = guideFor(key);
 
   return (
     <Screen
-      title={series.testName}
+      title={plainName(key, series.testName, series.latest.unit)}
       onBack={() => router.back()}
       footer={
         fromHome ? (
@@ -88,54 +83,28 @@ export default function MetricScreen() {
         ) : undefined
       }
     >
-      {/* The latest value, explained. */}
+      {/* The latest value, explained in plain words, with what to do. */}
       <View style={{ gap: space.sm }}>
-        <Label>LATEST</Label>
-        {latest.source === 'lab' && explained ? (
-          <LabResultCard result={explained} initiallyOpen />
-        ) : (
-          <Surface>
-            <View style={{ gap: space.md }}>
-              <Row style={{ alignItems: 'flex-end', gap: space.md }}>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text variant="display" style={{ fontVariant: ['tabular-nums'] }}>
-                    {latest.valueText}
-                    {latest.unit ? (
-                      <Text variant="body" tone="secondary">{` ${latest.unit}`}</Text>
-                    ) : null}
-                  </Text>
-                  <Text variant="caption" tone="secondary">
-                    {`Home reading · ${longDate(latest.measuredAt)}`}
-                  </Text>
-                </View>
-                <LabStatusPill status={latest.status} />
-              </Row>
-              <RangeBar
-                value={latest.value}
-                refLow={latest.refLow}
-                refHigh={latest.refHigh}
-                status={latest.status}
-              />
-              {latest.status !== 'unknown' ? (
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    gap: space.sm,
-                    padding: space.md,
-                    borderRadius: radius.md,
-                    backgroundColor: status.bg,
-                  }}
-                >
-                  <Ionicons name={status.icon} size={18} color={status.fg} />
-                  <Text variant="small" style={{ flex: 1 }}>
-                    {homeVerdict(latest.status)}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          </Surface>
-        )}
+        <Label>YOUR LATEST RESULT</Label>
+        <PlainResultCard
+          testKey={key}
+          testName={series.testName}
+          latest={latest}
+          lab={latest.source === 'lab' ? explained : undefined}
+        />
       </View>
+
+      {/* Ask a follow-up about this one test. */}
+      <Button
+        label={`Ask AI about my ${series.testName.toLowerCase()}`}
+        icon="sparkles-outline"
+        variant="secondary"
+        onPress={() =>
+          router.push(
+            `/ask?scope=health&person=${params.person}&q=${encodeURIComponent(`Explain my ${series.testName.toLowerCase()} result simply. What should I do?`)}`,
+          )
+        }
+      />
 
       {/* What each level of this measure means, and does — offline, standard. */}
       {guide ? <MeasureGuideCard guide={guide} status={latest.status} /> : null}
@@ -241,22 +210,6 @@ export default function MetricScreen() {
       <AiDisclaimer />
     </Screen>
   );
-}
-
-/** What a home reading's verdict means, plainly. */
-function homeVerdict(status: string): string {
-  switch (status) {
-    case 'normal':
-      return 'In the normal range for most adults.';
-    case 'borderline':
-      return 'A little above the ideal range. Worth watching, and worth mentioning at your next check-up.';
-    case 'high':
-      return 'Above the normal range. If readings stay this high, talk to your doctor.';
-    case 'low':
-      return 'Below the normal range. If you feel unwell or it keeps happening, talk to your doctor.';
-    default:
-      return '';
-  }
 }
 
 function Figure({ label, value, unit }: { label: string; value: string; unit: string | null }) {

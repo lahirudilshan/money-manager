@@ -482,8 +482,11 @@ const NUMBER_RULES = [
  */
 const WORD_RULES = [
   'Rules for the words (this is the important part):',
-  '- Write for someone with no medical training, at the level of a 12-year-old. Short sentences.',
-  '- If you must use a medical word, explain it in brackets.',
+  '- Write for someone with no medical training, at the level of a 12-year-old. Plain everyday English, so it also reads well for someone whose first language is not English.',
+  '- Short sentences, under 15 words each. No long lists inside a sentence.',
+  '- Use the everyday name first: "blood sugar" not "glucose", "kidneys" not "renal".',
+  '- If you must use a medical word, explain it in brackets in 2–6 everyday words, only the first time it appears in that piece of text.',
+  '- Say what it means for daily life, not how the body works in detail.',
   '- Use "may" and "can"; never state a diagnosis as fact. Do not add a disclaimer — the app shows one.',
 ];
 
@@ -1076,4 +1079,30 @@ function fromResults(results: readonly ParsedResult[], fileIndex: number): strin
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   return top ? (CATEGORY_TITLE[top] ?? null) : null;
+}
+
+/**
+ * The three zones of a printed range, in words: "Under 70", "70–100",
+ * "Over 100". A one-sided range ("< 6") has no low zone, so `low` is null and
+ * the guide shows only the two zones the report actually defines.
+ */
+export function rangeBands(
+  refLow: number | null,
+  refHigh: number | null,
+  unit: string | null,
+): { low: string | null; normal: string; high: string | null } | null {
+  if (refLow === null && refHigh === null) return null;
+  const u = unit ? ` ${unit}` : '';
+  const n = (v: number) => (Number.isInteger(v) ? String(v) : String(Number(v.toFixed(2))));
+  if (refLow !== null && refHigh !== null) {
+    return {
+      low: `Under ${n(refLow)}${u}`,
+      normal: `${n(refLow)}–${n(refHigh)}${u}`,
+      high: `Over ${n(refHigh)}${u}`,
+    };
+  }
+  if (refHigh !== null) {
+    return { low: null, normal: `Under ${n(refHigh)}${u}`, high: `Over ${n(refHigh)}${u}` };
+  }
+  return { low: `Under ${n(refLow as number)}${u}`, normal: `Over ${n(refLow as number)}${u}`, high: null };
 }

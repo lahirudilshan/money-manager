@@ -69,10 +69,14 @@ describe('the configured client id', () => {
      * future client-id change cannot silently break the flow.
      */
     const clientId = appJson.expo.extra.googleClientId;
-    const registered = appJson.expo.ios.infoPlist.CFBundleURLTypes[0].CFBundleURLSchemes[0];
+    // Every scheme iOS will route to the app — the Google one sits beside the app's own.
+    const registered: string[] = appJson.expo.ios.infoPlist.CFBundleURLTypes.flatMap(
+      (t: { CFBundleURLSchemes: string[] }) => t.CFBundleURLSchemes,
+    );
 
     expect(clientId.length).toBeGreaterThan(0);
-    expect(redirectUriFor(clientId).startsWith(`${registered}:`)).toBe(true);
+    const redirect = redirectUriFor(clientId);
+    expect(registered.some((scheme) => redirect.startsWith(`${scheme}:`))).toBe(true);
   });
 });
 

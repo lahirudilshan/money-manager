@@ -1,6 +1,7 @@
+import { recordAiCall, type AllowanceOwner } from './aiQuotaStore';
 import Constants from 'expo-constants';
 import type { FirebaseApp } from 'firebase/app';
-import type { GenerationConfig, GenerativeModel, Part } from 'firebase/ai';
+import type { GenerationConfig, GenerativeModel, Part, Tool } from 'firebase/ai';
 import {
   appCheckExpiry,
   describeGeminiError,
@@ -137,6 +138,154 @@ export interface InlineFile {
   base64: string;
 }
 
+type Generate = (
+  model: string,
+  generationConfig: Record<string, unknown>,
+) => Promise<{ text: string; timing: CallTiming; grounding?: unknown }>;
+
+/**
+ * One way to call a model, whoever pays: the user's own Google key first
+ * (their project, their free allowance), else Dayly's Firebase project.
+ */
+async function prepareGenerator(input: {
+  files: readonly InlineFile[];
+  systemInstruction: string;
+  prompt: string;
+  tools?: readonly Record<string, unknown>[];
+  onLog?: (line: string) => void;
+  onPartial?: (textSoFar: string) => void;
+}): Promise<
+  { ok: true; generate: Generate; owner: AllowanceOwner } | { ok: false; error: string }
+> {
+  const user = await userGeminiKey();
+  if (user) {
+    const restParts = [
+      ...input.files.map((file) => ({ inlineData: { mimeType: file.mimeType, data: file.base64 } })),
+      { text: input.prompt },
+    ];
+    return {
+      ok: true,
+      owner: 'own',
+      generate: (model, generationConfig) =>
+        generateWithUserKey({
+          key: user.key,
+          model,
+          systemInstruction: input.systemInstruction,
+          parts: restParts,
+          generationConfig,
+          tools: input.tools,
+          onPartial: input.onPartial,
+        }),
+    };
+  }
+
+  const cfg = config();
+  if (!cfg || !DEBUG_TOKEN) {
+    return { ok: false, error: 'AI is not available in this version of the app.' };
+  }
+  let firebase: ReturnType<typeof sdk>;
+  let ai: ReturnType<ReturnType<typeof sdk>['ai']['getAI']>;
+  try {
+    firebase = sdk();
+    ai = firebase.ai.getAI(firebaseApp(cfg), { backend: new firebase.ai.GoogleAIBackend() });
+  } catch (error) {
+    return {
+      ok: false,
+      error: `AI could not start on this phone (${error instanceof Error ? error.message : 'unknown error'}).`,
+    };
+  }
+  const parts: Part[] = [
+    ...input.files.map(
+      (file): Part => ({
+        type: 'inlineData',
+        inlineData: { mimeType: file.mimeType, data: file.base64 },
+      }),
+    ),
+    { type: 'text', text: input.prompt },
+  ];
+  return {
+    ok: true,
+    owner: 'shared',
+    generate: (model, generationConfig) =>
+      answerText(
+        firebase.ai.getGenerativeModel(ai, {
+          model,
+          systemInstruction: input.systemInstruction,
+          generationConfig: generationConfig as GenerationConfig,
+          ...(input.tools ? { tools: input.tools as unknown as Tool[] } : {}),
+        }),
+        parts,
+        input.onPartial,
+        input.onLog,
+      ),
+  };
+}
+
+/**
+ * A plain-text answer — "Ask AI" in Health records.
+ *
+ * The caller picks the models for the question (see `routeQuestion`); a
+ * busy, retired or used-up model falls through to the next, and every call
+ * is counted against the same free allowance report reading uses.
+ */
+export async function generateAnswerText(input: {
+  models: readonly string[];
+  systemInstruction: string;
+  prompt: string;
+  /** Ground the answer in Google Search. */
+  web: boolean;
+  onPartial?: (textSoFar: string) => void;
+}): Promise<
+  | { ok: true; text: string; grounding: unknown; model: string; owner: AllowanceOwner }
+  | { ok: false; error: string }
+> {
+  const prepared = await prepareGenerator({
+    files: [],
+    systemInstruction: input.systemInstruction,
+    prompt: input.prompt,
+    tools: input.web ? [{ googleSearch: {} }] : undefined,
+    onPartial: input.onPartial,
+  });
+  if (!prepared.ok) return prepared;
+  const { generate, owner } = prepared;
+
+  let lastError = 'No AI model answered. Try again in a minute.';
+  for (const model of input.models) {
+    let thinking = rejectedThinking.has(model) ? undefined : thinkingConfigFor(model, 'explain');
+    let networkRetried = false;
+    for (;;) {
+      try {
+        const { text, timing, grounding } = await generate(model, {
+          temperature: 0.3,
+          ...(thinking ? { thinkingConfig: thinking } : {}),
+        });
+        recordAiCall(owner, { model, ok: true });
+        if (__DEV__) console.log(`[gemini ask${input.web ? '+web' : ''}] ${model}: ${describeTiming(timing)}`);
+        if (!text.trim()) return { ok: false, error: 'The AI returned nothing. Try asking another way.' };
+        return { ok: true, text, grounding, model, owner };
+      } catch (error) {
+        const status = statusFromError(error);
+        const message = error instanceof Error ? error.message : String(error);
+        recordAiCall(owner, { model, ok: false, status, body: message });
+        if (__DEV__) console.log(`[gemini ask] ${model} failed (${status}): ${message}`);
+        if (thinking && isThinkingConfigError(status, message)) {
+          rejectedThinking.add(model);
+          thinking = undefined;
+          continue;
+        }
+        if (!networkRetried && isTransientNetworkError(status, message)) {
+          networkRetried = true;
+          continue;
+        }
+        lastError = describeGeminiError(status, message);
+        if (!worthAnotherModel(status)) return { ok: false, error: lastError };
+        break;
+      }
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
 /**
  * Send the files and the instruction, returning the parsed JSON reply.
  *
@@ -156,74 +305,9 @@ export async function generateAnalysisJson(input: {
   /** The answer so far, each time more of it arrives. */
   onPartial?: (textSoFar: string) => void;
 }): Promise<{ ok: true; data: unknown; model: string } | { ok: false; error: string }> {
-  type Generate = (
-    model: string,
-    generationConfig: Record<string, unknown>,
-  ) => Promise<{ text: string; timing: CallTiming }>;
-  let generate: Generate;
-
-  // The user's own Google key first: their project, their free allowance.
-  const user = await userGeminiKey();
-  if (user) {
-    const restParts = [
-      ...input.files.map((file) => ({ inlineData: { mimeType: file.mimeType, data: file.base64 } })),
-      { text: input.prompt },
-    ];
-    generate = (model, generationConfig) =>
-      generateWithUserKey({
-        key: user.key,
-        model,
-        systemInstruction: input.systemInstruction,
-        parts: restParts,
-        generationConfig,
-        onPartial: input.onPartial,
-      });
-  } else {
-    const cfg = config();
-    if (!cfg || !DEBUG_TOKEN) {
-      return { ok: false, error: 'AI reading is not available in this version of the app.' };
-    }
-
-    let firebase: ReturnType<typeof sdk>;
-    try {
-      firebase = sdk();
-    } catch (error) {
-      return {
-        ok: false,
-        error: `AI reading could not start on this phone (${error instanceof Error ? error.message : 'unknown error'}).`,
-      };
-    }
-    const { getAI, getGenerativeModel, GoogleAIBackend } = firebase.ai;
-    let ai: ReturnType<typeof getAI>;
-    try {
-      ai = getAI(firebaseApp(cfg), { backend: new GoogleAIBackend() });
-    } catch (error) {
-      return {
-        ok: false,
-        error: `AI reading could not start on this phone (${error instanceof Error ? error.message : 'unknown error'}).`,
-      };
-    }
-    const parts: Part[] = [
-      ...input.files.map(
-        (file): Part => ({
-          type: 'inlineData',
-          inlineData: { mimeType: file.mimeType, data: file.base64 },
-        }),
-      ),
-      { type: 'text', text: input.prompt },
-    ];
-    generate = (model, generationConfig) =>
-      answerText(
-        getGenerativeModel(ai, {
-          model,
-          systemInstruction: input.systemInstruction,
-          generationConfig: generationConfig as GenerationConfig,
-        }),
-        parts,
-        input.onPartial,
-        input.onLog,
-      );
-  }
+  const prepared = await prepareGenerator(input);
+  if (!prepared.ok) return prepared;
+  const { generate, owner } = prepared;
 
   const schema = input.task === 'extract' ? EXTRACTION_JSON_SCHEMA : EXPLANATION_JSON_SCHEMA;
   let lastError = 'No AI model answered. Try again in a minute.';
@@ -244,6 +328,7 @@ export async function generateAnalysisJson(input: {
         });
         // The model name stays out of what the user reads; the dev console
         // keeps it for diagnosing which model was slow.
+        recordAiCall(owner, { model, ok: true });
         input.onLog?.(describeTiming(timing));
         if (__DEV__) console.log(`[gemini ${input.task}] ${model}: ${describeTiming(timing)}`);
         const parsed = parseJsonText(text);
@@ -251,6 +336,7 @@ export async function generateAnalysisJson(input: {
       } catch (error) {
         const status = statusFromError(error);
         const message = error instanceof Error ? error.message : String(error);
+        recordAiCall(owner, { model, ok: false, status, body: message });
         if (__DEV__) console.log(`[gemini ${input.task}] ${model} failed (${status}): ${message}`);
         if (thinking && isThinkingConfigError(status, message)) {
           // Remembered for the rest of the session, so the next call does
@@ -306,7 +392,7 @@ async function answerText(
   parts: Part[],
   onPartial: ((text: string) => void) | undefined,
   onLog: ((line: string) => void) | undefined,
-): Promise<{ text: string; timing: CallTiming }> {
+): Promise<{ text: string; timing: CallTiming; grounding?: unknown }> {
   const startedAt = Date.now();
   if (onPartial && streamingWorks !== false) {
     let text = '';
@@ -319,8 +405,12 @@ async function answerText(
         onPartial(text);
       }
       streamingWorks = true;
-      const usage = await result.response.then((r) => r.usageMetadata ?? null).catch(() => null);
-      return { text, timing: { firstChunkMs, totalMs: Date.now() - startedAt, usage } };
+      const final = await result.response.catch(() => null);
+      return {
+        text,
+        timing: { firstChunkMs, totalMs: Date.now() - startedAt, usage: final?.usageMetadata ?? null },
+        grounding: final?.candidates?.[0]?.groundingMetadata,
+      };
     } catch (error) {
       // An HTTP error (refused, quota, busy) is the same either way: rethrow.
       if (text.length > 0 || statusFromError(error) !== 0 || streamingWorks === true) throw error;
@@ -336,5 +426,6 @@ async function answerText(
       totalMs: Date.now() - startedAt,
       usage: result.response.usageMetadata ?? null,
     },
+    grounding: result.response.candidates?.[0]?.groundingMetadata,
   };
 }

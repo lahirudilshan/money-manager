@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BottomSheet, Button, Divider, Glyph, Label, ListRow, Row, Section, Surface, Text } from '~/shared/components/ui';
@@ -27,6 +27,7 @@ import { settingsRepo, SETTINGS_KEYS } from '../../src/db/repositories';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { CURRENCIES } from '~/features/rates/logic/currencies';
 import { ClearDataSheet } from '~/features/backup/components/ClearDataSheet';
+import { aiUsageToday, isAiEnabled } from '~/features/health/services/aiSettings';
 
 
 
@@ -49,6 +50,16 @@ export default function SettingsScreen() {
   const tabClearance = useTabBarClearance();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  // Re-read on focus: the AI sheet changes these, and a report read elsewhere
+  // uses up one of today's reads.
+  const [aiEnabled, setAiEnabledState] = useState(isAiEnabled());
+  const [aiUsage, setAiUsage] = useState(aiUsageToday());
+  useFocusEffect(
+    useCallback(() => {
+      setAiEnabledState(isAiEnabled());
+      setAiUsage(aiUsageToday());
+    }, []),
+  );
 
   const state = useAppStore();
   const enabled = parseEnabled(state.miniApps);
@@ -387,6 +398,32 @@ export default function SettingsScreen() {
           every real preference below the fold. The set only grows, so the list
           moved into its own sheet where the descriptions have room.
         */}
+        {/* AI in one place: the switch, today's use, and the terms. */}
+        <Section title="AI & PRIVACY" accent={colors.gradientStart} icon="sparkles">
+          <SettingRow
+            icon="sparkles-outline"
+            color={colors.accent}
+            gradient={[colors.gradientStart, colors.gradientEnd]}
+            title="AI features"
+            subtitle={
+              aiEnabled
+                ? aiUsage.unlimited
+                  ? 'On · using your own Google AI'
+                  : `On · ${aiUsage.left} of ${aiUsage.limit} report reads left today`
+                : 'Off · nothing is sent to AI'
+            }
+            valueLabel={aiEnabled ? 'On' : 'Off'}
+            onPress={() => router.push('/settings/ai')}
+          />
+          <SettingRow
+            icon="document-text-outline"
+            color={colors.inkSecondary}
+            title="Terms & privacy"
+            subtitle="How Dayly uses your data, in plain words"
+            onPress={() => router.push('/settings/terms')}
+          />
+        </Section>
+
         <Section title="ADD-ON FEATURES">
           <SettingRow
             icon="grid-outline"

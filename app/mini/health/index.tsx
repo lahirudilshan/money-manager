@@ -1,5 +1,4 @@
 import { BodyCard } from '~/features/health/components/BodyCard';
-import { formatHeight, formatWaist } from '~/features/health/logic/bodyMeasures';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
@@ -7,7 +6,6 @@ import { Image, Pressable, ScrollView, View } from 'react-native';
 import {
   Divider,
   Empty,
-  GradientCard,
   Label,
   Row,
   Surface,
@@ -15,15 +13,16 @@ import {
 } from '~/shared/components/ui';
 import { Screen } from '~/shared/components/Screen';
 import {
-  AskBar,
-  CurrentHealthCard,
-  NumbersGrid,
-  SuggestionsCard,
+  AskAiBar,
+  NumbersList,
+  ReportStoryCard,
+  WeekPlanCard,
 } from '~/features/health/components/HealthHomeSections';
 import { usePersonHealth } from '~/features/health/components/usePersonHealth';
+import { useWeeklyPlan } from '~/features/health/components/useWeeklyPlan';
+import { PersonCard } from '~/features/health/components/PersonCard';
 import { isOutOfRange, readOverall } from '~/features/health/logic/labReports';
 import { reportTopics, type ReportTopic } from '~/features/health/logic/documentSearch';
-import { conditionStyle } from '~/features/health/components/LabUi';
 import {
   useDocumentViewer,
   type ViewableDocument,
@@ -243,18 +242,8 @@ export default function HealthHome() {
 
   /** Readings and lab results merged into one history per measure. */
   const health = usePersonHealth(person?.id, state.healthPeople);
+  const plan = useWeeklyPlan(person, health);
 
-  /** Height, weight and waist as chips on the person card, beside blood group. */
-  const bodyChips = useMemo(() => {
-    if (!person) return [];
-    const weight = health.series.find((series) => series.testKey === 'weight')?.latest;
-    const chips: { label: string; text: string; icon: keyof typeof Ionicons.glyphMap }[] = [];
-    if (person.heightCm) chips.push({ label: 'Height', text: formatHeight(person.heightCm, person.lengthUnit), icon: 'resize-outline' });
-    if (weight?.value != null)
-      chips.push({ label: 'Weight', text: `${trimNum(weight.value)} ${weight.unit ?? 'kg'}`, icon: 'scale-outline' });
-    if (person.waistCm) chips.push({ label: 'Waist', text: `Waist ${formatWaist(person.waistCm, person.lengthUnit)}`, icon: 'ellipse-outline' });
-    return chips;
-  }, [person, health.series]);
   const [showAllHistory, setShowAllHistory] = useState(false);
 
   if (people.length === 0) {
@@ -444,150 +433,28 @@ export default function HealthHome() {
         </ScrollView>
       ) : null}
 
-      {/*
-        The hero — who this is, and the facts that matter in a hurry.
-
-        Modelled on the Dashboard's balance card so the add-on looks like part
-        of the app rather than a bolt-on. Tinted by the person's own colour, so
-        switching family members recolours the screen and you can tell at a
-        glance whose record you are in.
-      */}
+      {/* Who this is, and the facts needed in a hurry. */}
       {person ? (
-        <Pressable
+        <PersonCard
+          person={person}
+          weight={health.series.find((series) => series.testKey === 'weight')?.latest}
           onPress={() => router.push(`/mini/health/person?id=${person.id}`)}
-          accessibilityRole="button"
-          accessibilityLabel={`${person.name}'s profile`}
-          style={({ pressed }) => ({ opacity: pressed ? 0.9 : 1 })}
-        >
-          <GradientCard gradient={[person.color, shade(person.color)]}>
-            <View style={{ gap: space.lg }}>
-              <Row gap={space.md}>
-                <View
-                  style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 22,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: 'rgba(255,255,255,0.22)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {person.imageUri ? (
-                    <Image source={{ uri: person.imageUri }} style={{ width: 44, height: 44 }} />
-                  ) : (
-                    // The same monogram the strip above uses, so the selected
-                    // avatar and the hero read as the same object.
-                    <Text variant="bodyStrong" color="#FFFFFF" style={{ fontSize: 19 }}>
-                      {person.name.trim().charAt(0).toUpperCase()}
-                    </Text>
-                  )}
-                </View>
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text variant="title" color="#FFFFFF" numberOfLines={1}>
-                    {person.name}
-                  </Text>
-                  <Text variant="caption" color="rgba(255,255,255,0.75)">
-                    {[relationLabel(person), person.bornOn ? `${age(person.bornOn)} years` : null]
-                      .filter(Boolean)
-                      .join(' · ') || 'Tap to add details'}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.7)" />
-              </Row>
-
-              {/* Blood group and allergies — what someone opens this for when
-                  they cannot scroll. Never below the fold. */}
-              {person.bloodGroup || person.allergies || bodyChips.length > 0 ? (
-                <Row gap={space.sm} style={{ flexWrap: 'wrap' }}>
-                  {bodyChips.map((chip) => (
-                    <Row
-                      key={chip.label}
-                      gap={5}
-                      style={{
-                        paddingHorizontal: space.sm,
-                        paddingVertical: 5,
-                        borderRadius: radius.sm,
-                        backgroundColor: 'rgba(255,255,255,0.22)',
-                      }}
-                    >
-                      <Ionicons name={chip.icon} size={13} color="#FFFFFF" />
-                      <Text variant="caption" color="#FFFFFF" style={{ fontWeight: '800' }}>
-                        {chip.text}
-                      </Text>
-                    </Row>
-                  ))}
-                  {person.bloodGroup ? (
-                    <Row
-                      gap={5}
-                      style={{
-                        paddingHorizontal: space.sm,
-                        paddingVertical: 5,
-                        borderRadius: radius.sm,
-                        backgroundColor: 'rgba(255,255,255,0.22)',
-                      }}
-                    >
-                      <Ionicons name="water-outline" size={13} color="#FFFFFF" />
-                      <Text variant="caption" color="#FFFFFF" style={{ fontWeight: '800' }}>
-                        {person.bloodGroup}
-                      </Text>
-                    </Row>
-                  ) : null}
-                  {person.allergies ? (
-                    <Row
-                      gap={5}
-                      style={{
-                        flexGrow: 1,
-                        flexBasis: '100%',
-                        minWidth: 0,
-                        paddingHorizontal: space.sm,
-                        paddingVertical: 5,
-                        borderRadius: radius.sm,
-                        backgroundColor: 'rgba(255,255,255,0.22)',
-                      }}
-                    >
-                      <Ionicons name="alert-circle-outline" size={13} color="#FFFFFF" />
-                      <Text
-                        variant="caption"
-                        color="#FFFFFF"
-                        numberOfLines={1}
-                        style={{ fontWeight: '700', flex: 1 }}
-                      >
-                        {person.allergies}
-                      </Text>
-                    </Row>
-                  ) : null}
-                </Row>
-              ) : null}
-            </View>
-          </GradientCard>
-        </Pressable>
+        />
       ) : null}
 
       {/*
-        The redesigned middle of the screen, in the order the questions come:
-
-          CURRENT HEALTH — "how am I doing?" (latest AI read-through, and what
-                           is out of range across reports AND home readings)
-          ASK            — "what is my sugar level?", answered offline
-          MY NUMBERS     — every measure's latest value and trend, merged from
-                           home readings and lab reports
-          ADD            — scan a report first: it is what fills everything above
-          SUGGESTIONS    — what to watch, what helps, what to ask the doctor
-
-        Then the record itself — follow-ups, the collections, the timeline —
-        which is where you go to look something up, not what you need on arrival.
+        Three questions, in the order people ask them:
+          ASK AI                 — "I have a question" (answers anything)
+          WHAT YOUR REPORTS SAY  — simple English: what needs work, the good news
+          YOUR PLAN THIS WEEK    — today's exercise and meals, the week one tap away
+        Then MY NUMBERS for looking things up, and the record itself below.
       */}
       {person ? (
         <>
-          <CurrentHealthCard personId={person.id} health={health} />
-          <BodyCard
-            person={person}
-            weightSeries={health.series.find((series) => series.testKey === 'weight')}
-            onEdit={() => router.push(`/mini/health/person?id=${person.id}`)}
-          />
-          {health.series.length > 0 ? <AskBar personId={person.id} /> : null}
-          <NumbersGrid personId={person.id} health={health} />
+          <AskAiBar personId={person.id} health={health} />
+          <ReportStoryCard personId={person.id} health={health} />
+          {health.series.length > 0 ? <WeekPlanCard personId={person.id} plan={plan} /> : null}
+          <NumbersList personId={person.id} health={health} />
         </>
       ) : null}
 
@@ -595,7 +462,7 @@ export default function HealthHome() {
         <Label>ADD</Label>
         <Row gap={space.sm}>
           <QuickAction
-            icon="sparkles-outline"
+            icon="scan-outline"
             label="Scan report"
             color={colors.accent}
             onPress={() => router.push(`/mini/health/analyze?person=${person?.id}`)}
@@ -621,7 +488,13 @@ export default function HealthHome() {
         </Row>
       </View>
 
-      <SuggestionsCard health={health} />
+      {person ? (
+        <BodyCard
+          person={person}
+          weightSeries={health.series.find((series) => series.testKey === 'weight')}
+          onEdit={() => router.push(`/mini/health/person?id=${person.id}`)}
+        />
+      ) : null}
 
       {/* Appointments ahead — the only forward-looking item in the record. */}
       {followUps.length > 0 ? (
@@ -713,7 +586,7 @@ export default function HealthHome() {
         <BrowseRow
           icon="document-text-outline"
           tint="#8B5CF6"
-          label="Prescriptions & reports"
+          label="Papers and photos"
           detail={
             documents.length > 0
               ? `${documents.length} saved`
@@ -725,10 +598,10 @@ export default function HealthHome() {
         <BrowseRow
           icon="flask-outline"
           tint={colors.accent}
-          label="Lab results & AI summaries"
+          label="All test results"
           detail={
-            health.analysisCount > 0
-              ? `${health.analysisCount} ${health.analysisCount === 1 ? 'report' : 'reports'} read · ${health.series.length} measures`
+            health.series.length > 0
+              ? `${health.series.length} tests, each with its chart`
               : 'Scan a report to start'
           }
           onPress={() => router.push(`/mini/health/labs?person=${person?.id}`)}
@@ -758,13 +631,13 @@ export default function HealthHome() {
       ) : (
         <View style={{ gap: space.sm }}>
           <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
-            <Label>HEALTH HISTORY</Label>
+            <Label>VISITS AND REPORTS</Label>
             <View style={{ flex: 1 }} />
             <Text variant="caption" tone="secondary">
               {[
                 visitCount > 0 ? `${visitCount} ${visitCount === 1 ? 'visit' : 'visits'}` : null,
                 reportCount > 0
-                  ? `${reportCount} ${reportCount === 1 ? 'report set' : 'report sets'}`
+                  ? `${reportCount} ${reportCount === 1 ? 'report' : 'reports'}`
                   : null,
               ]
                 .filter(Boolean)
@@ -837,31 +710,8 @@ export default function HealthHome() {
 }
 
 /** How many history blocks show before "Show all". */
-const HISTORY_PREVIEW = 5;
+const HISTORY_PREVIEW = 3;
 
-/** Whole years since a date — the age shown beside a person's name. */
-function age(bornOn: Date): number {
-  return Math.floor((Date.now() - bornOn.getTime()) / (365.25 * 86_400_000));
-}
-
-/**
- * A darker partner for a person's colour, so the hero has a real gradient.
- *
- * A gradient between one colour and itself is a flat fill. Multiplying each
- * channel keeps the hue and just deepens it, which holds for every colour in
- * the person palette without a second value needing to be stored.
- */
-function shade(hex: string, factor = 0.72): string {
-  const value = hex.replace('#', '');
-  if (value.length !== 6) return hex;
-
-  const channel = (start: number) =>
-    Math.round(Number.parseInt(value.slice(start, start + 2), 16) * factor)
-      .toString(16)
-      .padStart(2, '0');
-
-  return `#${channel(0)}${channel(2)}${channel(4)}`;
-}
 
 function QuickAction({
   icon,
@@ -1055,25 +905,33 @@ function HistoryEvent({
   const kindIcon: keyof typeof Ionicons.glyphMap = isVisit ? 'medkit' : 'flask';
   const kindColor = isVisit ? colors.accent : REPORT_COLOR;
 
+  const [allPapers, setAllPapers] = useState(false);
   const title = isVisit
     ? block.visit.title
-    : block.kind === 'single' && !analysis
-      ? block.entry.title
-      : topics.length > 0
-        ? topics.map((t) => t.label).join(' · ')
-        : documents[0]?.title ?? 'Lab tests';
-  const subtitle = isVisit
-    ? block.visit.detail
-    : `${documents.length} ${documents.length === 1 ? 'page' : 'pages'}${analysis ? ' · read by AI' : ''}`;
+    : documents.length === 1
+      ? documents[0].title
+      : `${documents.length} reports`;
   const cost = isVisit ? block.visit.costMinor : undefined;
+  const date = block.at.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  const subtitle = [
+    date,
+    isVisit ? block.visit.detail : null,
+    cost ? formatMoney(cost, { currency }) : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
-  const verdict = analysis
-    ? conditionStyle(
-        (analysis.condition as Parameters<typeof conditionStyle>[0]) ??
-          (analysis.flagged > 0 ? 'fair' : 'good'),
-        colors,
-      )
-    : null;
+  /*
+   * The verdict in plain words: how many results need a look, never the AI's
+   * "Unclear" condition label, and its headline only when it says something
+   * ("Your reports have been read" does not).
+   */
+  const ok = analysis ? analysis.flagged === 0 : null;
+  const verdictColor = ok === null ? kindColor : ok ? colors.completed : colors.pending;
+  const headline =
+    analysis?.headline && !/^(your )?(reports?|results?) (have|has) been (read|analy[sz]ed)\.?$/i.test(analysis.headline.trim())
+      ? analysis.headline
+      : null;
 
   /** The detail page: the visit with everything in it, else the AI's read, else the paper. */
   const open = () => {
@@ -1083,35 +941,24 @@ function HistoryEvent({
     if (doc) onOpenDocument(doc);
   };
 
+  const PAPERS_PREVIEW = 3;
+  const papers = allPapers ? documents : documents.slice(0, PAPERS_PREVIEW);
+
   return (
     <Row gap={space.sm} style={{ alignItems: 'stretch' }}>
-      {/* The date, read first: day over month, the way a diary is scanned. */}
-      <View style={{ width: 34, alignItems: 'center', paddingTop: space.lg }}>
-        <Text variant="figureLarge" style={{ fontVariant: ['tabular-nums'] }}>
-          {block.at.getDate()}
-        </Text>
-        <Text variant="label" tone="muted">
-          {block.at.toLocaleDateString(undefined, { month: 'short' }).toUpperCase()}
-        </Text>
-      </View>
-
       {/* The rail: a node in the verdict's colour, the line on to the next event. */}
       <View style={{ width: 16, alignItems: 'center' }}>
-        <View style={{ width: 2, height: space.lg + 6, backgroundColor: first ? 'transparent' : colors.hairlineStrong }} />
+        <View style={{ width: 2, height: space.lg + 10, backgroundColor: first ? 'transparent' : colors.hairlineStrong }} />
         <View
           style={{
-            width: 16,
-            height: 16,
-            borderRadius: 8,
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: verdict?.bg ?? colors.surfaceSunken,
-            borderWidth: 2,
-            borderColor: verdict?.fg ?? kindColor,
+            width: 14,
+            height: 14,
+            borderRadius: 7,
+            backgroundColor: verdictColor,
+            borderWidth: 3,
+            borderColor: colors.canvas,
           }}
-        >
-          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: verdict?.fg ?? kindColor }} />
-        </View>
+        />
         <View style={{ flex: 1, width: 2, backgroundColor: last ? 'transparent' : colors.hairlineStrong }} />
       </View>
 
@@ -1120,64 +967,69 @@ function HistoryEvent({
           <Pressable
             onPress={open}
             accessibilityRole="button"
-            accessibilityLabel={`${kindLabel}, ${title}`}
+            accessibilityLabel={`${kindLabel}, ${title}, ${date}`}
             style={({ pressed }) => ({
               padding: space.lg,
               gap: space.md,
               backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
             })}
           >
-            {/* What and when. */}
-            <Row gap={space.sm}>
-              <Ionicons name={kindIcon} size={14} color={kindColor} />
-              <Text variant="label" tone="muted" style={{ flex: 1 }} numberOfLines={1}>
-                {kindLabel.toUpperCase()}
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
-            </Row>
-
-            <View style={{ gap: 2 }}>
-              <Text variant="heading" numberOfLines={2}>
-                {title}
-              </Text>
-              {subtitle || cost ? (
-                <Text variant="caption" tone="secondary" numberOfLines={1}>
-                  {[subtitle, cost ? formatMoney(cost, { currency }) : null]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </Text>
-              ) : null}
-            </View>
-
-            {/* The verdict — what this event said about you. */}
-            {analysis && verdict ? (
+            {/* What, which and when. */}
+            <Row gap={space.md} style={{ alignItems: 'flex-start' }}>
               <View
                 style={{
-                  flexDirection: 'row',
-                  gap: space.sm,
-                  padding: space.md,
+                  width: 40,
+                  height: 40,
                   borderRadius: radius.md,
-                  backgroundColor: verdict.bg,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: `${kindColor}22`,
                 }}
               >
-                <Ionicons name={verdict.icon} size={18} color={verdict.fg} style={{ marginTop: 1 }} />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text variant="label" color={verdict.fg}>
-                    {analysis.flagged > 0
-                      ? `${verdict.label} · ${analysis.flagged} to check`.toUpperCase()
-                      : `${verdict.label} · all in range`.toUpperCase()}
+                <Ionicons name={kindIcon} size={20} color={kindColor} />
+              </View>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="caption" tone="secondary" style={{ fontWeight: '700' }}>
+                  {kindLabel}
+                </Text>
+                <Text variant="heading" numberOfLines={2}>
+                  {title}
+                </Text>
+                <Text variant="caption" tone="secondary" numberOfLines={1}>
+                  {subtitle}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} style={{ marginTop: 2 }} />
+            </Row>
+
+            {/* What it found, in words. */}
+            {analysis ? (
+              <View
+                style={{
+                  gap: 4,
+                  padding: space.md,
+                  borderRadius: radius.md,
+                  backgroundColor: ok ? colors.completedSoft : colors.pendingSoft,
+                }}
+              >
+                <Row gap={6}>
+                  <Ionicons name={ok ? 'checkmark-circle' : 'alert-circle'} size={18} color={verdictColor} />
+                  <Text variant="bodyStrong" style={{ flex: 1 }}>
+                    {ok
+                      ? 'All results are normal'
+                      : `${analysis.flagged} ${analysis.flagged === 1 ? 'result needs' : 'results need'} a look`}
                   </Text>
-                  <Text variant="small" numberOfLines={3}>
-                    {analysis.headline}
+                </Row>
+                {headline ? (
+                  <Text variant="small" tone="secondary" numberOfLines={3} style={{ paddingLeft: 24 }}>
+                    {headline}
                   </Text>
-                </View>
+                ) : null}
               </View>
             ) : null}
 
-            {/* What was looked at, with anything off marked. */}
-            {topics.length > 0 && (isVisit || block.kind === 'single') ? (
-              <TopicChips topics={topics} />
-            ) : null}
+            {/* What was tested, with anything off marked. */}
+            {topics.length > 0 ? <TopicChips topics={topics} /> : null}
 
             {/* What came out of it. */}
             {medicines.length > 0 ? (
@@ -1193,36 +1045,67 @@ function HistoryEvent({
             ) : null}
           </Pressable>
 
-          {/* The papers themselves, each one tap from full screen. */}
-          {documents.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{
-                gap: space.sm,
-                paddingHorizontal: space.lg,
-                paddingBottom: space.lg,
-              }}
-            >
-              {documents.map((d) => {
+          {/* The reports by name, each one tap from full screen. */}
+          {documents.length > 1 || (documents.length === 1 && isVisit) ? (
+            <>
+              <Divider />
+              {papers.map((d, index) => {
                 const doc = documentFor(d.refId);
+                const pdf = isPdfAttachment(resolveImageUri(d.imageUri) ?? d.imageUri);
                 return (
-                  <Pressable
-                    key={d.id}
-                    onPress={() => (doc ? onOpenDocument(doc) : undefined)}
-                    disabled={!doc}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open ${d.title}`}
-                    style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, width: 52, gap: 4 })}
-                  >
-                    <PaperThumb imageUri={d.imageUri} />
-                    <Text variant="caption" tone="secondary" numberOfLines={1} style={{ fontSize: 11 }}>
-                      {d.title}
-                    </Text>
-                  </Pressable>
+                  <View key={d.id}>
+                    {index > 0 ? <Divider style={{ marginLeft: space.lg + 30 + space.md }} /> : null}
+                    <Pressable
+                      onPress={() => (doc ? onOpenDocument(doc) : undefined)}
+                      disabled={!doc}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open ${d.title}`}
+                      style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: space.md,
+                        paddingHorizontal: space.lg,
+                        paddingVertical: space.sm,
+                        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                      })}
+                    >
+                      <PaperThumb imageUri={d.imageUri} small />
+                      <View style={{ flex: 1 }}>
+                        <Text variant="body" numberOfLines={2}>
+                          {d.title}
+                        </Text>
+                        <Text variant="caption" tone="muted">
+                          {pdf ? 'PDF' : 'Photo'}
+                        </Text>
+                      </View>
+                      <Ionicons name="open-outline" size={16} color={colors.inkMuted} />
+                    </Pressable>
+                  </View>
                 );
               })}
-            </ScrollView>
+              {documents.length > PAPERS_PREVIEW ? (
+                <>
+                  <Divider />
+                  <Pressable
+                    onPress={() => setAllPapers((v) => !v)}
+                    accessibilityRole="button"
+                    style={({ pressed }) => ({
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 4,
+                      paddingVertical: space.md,
+                      backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+                    })}
+                  >
+                    <Text variant="small" tone="accent" style={{ fontWeight: '700' }}>
+                      {allPapers ? 'Show fewer' : `Show all ${documents.length} reports`}
+                    </Text>
+                    <Ionicons name={allPapers ? 'chevron-up' : 'chevron-down'} size={14} color={colors.accent} />
+                  </Pressable>
+                </>
+              ) : null}
+            </>
           ) : null}
 
           {/* A visit whose reports were read: the read is one tap away too. */}
@@ -1267,15 +1150,17 @@ function YearHeading({ at }: { at: Date }) {
 }
 
 /** A page-shaped thumbnail of an original: its photo, or a PDF mark. */
-function PaperThumb({ imageUri }: { imageUri?: string | null }) {
+function PaperThumb({ imageUri, small = false }: { imageUri?: string | null; small?: boolean }) {
   const { colors, radius } = useTheme();
+  const w = small ? 30 : 52;
+  const h = small ? 38 : 66;
   const path = resolveImageUri(imageUri);
   const pdf = isPdfAttachment(path ?? imageUri);
   return (
     <View
       style={{
-        width: 52,
-        height: 66,
+        width: w,
+        height: h,
         borderRadius: radius.sm,
         overflow: 'hidden',
         alignItems: 'center',
@@ -1286,15 +1171,15 @@ function PaperThumb({ imageUri }: { imageUri?: string | null }) {
       }}
     >
       {path && !pdf ? (
-        <Image source={{ uri: path }} style={{ width: 52, height: 66 }} resizeMode="cover" />
+        <Image source={{ uri: path }} style={{ width: w, height: h }} resizeMode="cover" />
       ) : (
         <>
           <Ionicons
             name={pdf ? 'document-text' : imageUri ? 'cloud-download-outline' : 'document-text-outline'}
-            size={22}
+            size={small ? 16 : 22}
             color={pdf ? colors.danger : colors.inkMuted}
           />
-          {pdf ? (
+          {pdf && !small ? (
             <Text variant="label" color={colors.danger}>
               PDF
             </Text>
@@ -1357,6 +1242,3 @@ function mergeTopics(lists: ReportTopic[][], limit = 4): ReportTopic[] {
 /** The report colour used across the health screens (the "Photo" quick action). */
 const REPORT_COLOR = '#8B5CF6';
 
-function trimNum(n: number): string {
-  return String(Number(n.toFixed(1)));
-}

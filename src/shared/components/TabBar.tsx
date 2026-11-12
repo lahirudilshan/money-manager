@@ -1,10 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
+import { isAiEnabled } from '~/features/health/services/aiSettings';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 // SDK 56+ forbids importing from `@react-navigation/*` in app code. expo-router
 // vendors those types; this is the path they are declared at.
 import type { BottomTabBarProps } from 'expo-router/build/react-navigation/bottom-tabs/types';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
+import React, { useState } from 'react';
+import { Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeProvider';
 import { Blur, canBlur } from './Blur';
@@ -111,7 +113,7 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   // rather than meeting the blur's hard top line.
   const fadeHeight = blurTop + 16;
   const blurStrips = [blurTop, dockTop * 0.75, dockTop * 0.5];
-  const router = useRouter();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // A custom tab bar must honour `href: null` itself — unlike the default bar,
   // it won't skip hidden routes for us. expo-router consumes `href` before the
@@ -320,9 +322,10 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
           screen (the model has no free-form entry): pick a category and log it.
         */}
           <Pressable
-            onPress={() => router.push('/transaction/new')}
+            onPress={() => setMenuOpen(true)}
             accessibilityRole="button"
-            accessibilityLabel="Add transaction"
+            accessibilityLabel="Add or ask"
+            accessibilityState={{ expanded: menuOpen }}
             hitSlop={6}
             style={({ pressed }) => ({
               width: SLOT,
@@ -347,6 +350,180 @@ export function TabBar({ state, navigation, descriptors }: BottomTabBarProps) {
           </Pressable>
         </View>
       </View>
+
+      <PlusMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        bottom={bottom}
+        tab={state.routes[state.index]?.name}
+      />
     </>
   );
 }
+
+/**
+ * What the + opens: a short menu rising from the button, the + turned into ✕
+ * in the same spot so it reads as one control opening and closing.
+ *
+ *   ┌──────────────────────────────┐
+ *   │ (+)  Add transaction          │
+ *   │      Log a payment or spend   │
+ *   ├──────────────────────────────┤
+ *   │ (✦)  Ask AI                   │
+ *   │      Money, health and more   │
+ *   └──────────────────────────────┘
+ *                                (✕)
+ *
+ * Ask AI opens with the money data on List and Loans, everything allowed
+ * elsewhere, and is left out entirely when AI is switched off.
+ */
+function PlusMenu({
+  visible,
+  onClose,
+  bottom,
+  tab,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  bottom: number;
+  tab: string | undefined;
+}) {
+  const { colors, radius, shadow, space } = useTheme();
+  const router = useRouter();
+  const go = (href: string) => {
+    onClose();
+    router.push(href as never);
+  };
+  const scope = tab === 'list' || tab === 'loans' ? 'money' : 'global';
+  const items: {
+    key: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    title: string;
+    body: string;
+    href: string;
+    gradient: boolean;
+  }[] = [
+    {
+      key: 'add',
+      icon: 'add',
+      title: 'Add transaction',
+      body: 'Log a payment or spending',
+      href: '/transaction/new',
+      gradient: false,
+    },
+    ...(isAiEnabled()
+      ? [
+          {
+            key: 'ask',
+            icon: 'sparkles' as const,
+            title: 'Ask AI',
+            body: scope === 'money' ? 'About your bills and accounts' : 'Money, health and more',
+            href: `/ask?scope=${scope}`,
+            gradient: true,
+          },
+        ]
+      : []),
+  ];
+  // The + sits at the dock's trailing edge, centred in its padding.
+  const plusRight = EDGE_INSET + DOCK_PADDING;
+  const plusBottom = bottom + DOCK_PADDING;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable
+        onPress={onClose}
+        accessibilityLabel="Close menu"
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' }}
+      >
+        <View
+          style={[
+            {
+              position: 'absolute',
+              right: EDGE_INSET,
+              bottom: plusBottom + SLOT + space.md,
+              width: 270,
+              borderRadius: radius.lg,
+              backgroundColor: colors.surfaceRaised,
+              borderWidth: 1,
+              borderColor: colors.hairline,
+              overflow: 'hidden',
+            },
+            shadow.lifted,
+          ]}
+        >
+          {items.map((item, index) => (
+            <Pressable
+              key={item.key}
+              onPress={() => go(item.href)}
+              accessibilityRole="button"
+              accessibilityLabel={item.title}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: space.md,
+                paddingHorizontal: space.lg,
+                paddingVertical: space.md,
+                borderTopWidth: index === 0 ? 0 : 1,
+                borderTopColor: colors.hairline,
+                backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+              })}
+            >
+              {item.gradient ? (
+                <LinearGradient
+                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Ionicons name={item.icon} size={19} color="#FFFFFF" />
+                </LinearGradient>
+              ) : (
+                <View
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 19,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.accentSoft,
+                  }}
+                >
+                  <Ionicons name={item.icon} size={22} color={colors.accent} />
+                </View>
+              )}
+              <View style={{ flex: 1, gap: 1 }}>
+                <Text style={{ fontSize: 15, fontWeight: '700', color: colors.ink }}>{item.title}</Text>
+                <Text style={{ fontSize: 12, color: colors.inkSecondary }} numberOfLines={1}>
+                  {item.body}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* The + become ✕, exactly where the + was. */}
+        <Pressable
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={{
+            position: 'absolute',
+            right: plusRight,
+            bottom: plusBottom,
+            width: SLOT,
+            height: SLOT,
+            borderRadius: SLOT / 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surfaceRaised,
+            borderWidth: 1,
+            borderColor: colors.hairline,
+          }}
+        >
+          <Ionicons name="close" size={22} color={colors.ink} />
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+

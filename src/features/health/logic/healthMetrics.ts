@@ -255,6 +255,23 @@ export function shouldBe(row: {
   return null;
 }
 
+/**
+ * The normal range, short enough for one line beside the value: "70–99",
+ * "under 200", "below 120/80". Null when nothing says what normal is.
+ */
+export function normalRangeText(row: {
+  testKey: string;
+  refLow: number | null;
+  refHigh: number | null;
+}): string | null {
+  if (row.testKey === 'blood_pressure') return 'below 120/80';
+  const { refLow: low, refHigh: high } = row;
+  if (low !== null && high !== null) return `${trimNumber(low)}–${trimNumber(high)}`;
+  if (high !== null) return `under ${trimNumber(high)}`;
+  if (low !== null) return `above ${trimNumber(low)}`;
+  return null;
+}
+
 /*
  * ---------------------------------------------------------------------------
  * Building rows

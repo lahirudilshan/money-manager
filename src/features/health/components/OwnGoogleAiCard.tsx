@@ -22,7 +22,14 @@ import { useActiveAnalyseRun } from '../services/analyseRun';
  * Three states in one card — offer, setting up (a step list, because it takes
  * 20–40 seconds and a bare spinner reads as stuck), and in use.
  */
-export function OwnGoogleAiCard({ onChange }: { onChange?: (inUse: boolean) => void }) {
+export function OwnGoogleAiCard({
+  onChange,
+  embedded = false,
+}: {
+  onChange?: (inUse: boolean) => void;
+  /** Inside the AI settings sheet: no section label, no meter (the sheet has its own). */
+  embedded?: boolean;
+}) {
   const { colors, radius, space } = useTheme();
   const [state, setState] = useState<
     { kind: 'loading' } | { kind: 'off' } | { kind: 'on'; account: string | null }
@@ -81,14 +88,14 @@ export function OwnGoogleAiCard({ onChange }: { onChange?: (inUse: boolean) => v
   if (state.kind === 'on') {
     return (
       <View style={{ gap: space.sm }}>
-        <Label>AI ALLOWANCE</Label>
+        {embedded ? null : <Label>AI ALLOWANCE</Label>}
         <Surface>
           <Row style={{ gap: space.md, alignItems: 'center' }}>
             <Ionicons name="checkmark-circle" size={26} color={colors.completed} />
             <View style={{ flex: 1, gap: 2 }}>
               <Text variant="bodyStrong">Using your Google account</Text>
               <Text variant="caption" tone="secondary">
-                {state.account ? `${state.account} · ` : ''}your own free daily allowance
+                {state.account ? `${state.account} · ` : ''}your own free Gemini, never billed
               </Text>
               <Text variant="caption" tone="secondary">
                 {usedToday === 0
@@ -107,7 +114,7 @@ export function OwnGoogleAiCard({ onChange }: { onChange?: (inUse: boolean) => v
 
   return (
     <View style={{ gap: space.sm }}>
-      <Label>AI ALLOWANCE</Label>
+      {embedded ? null : <Label>AI ALLOWANCE</Label>}
       <Surface>
         <View style={{ gap: space.md }}>
           <Row style={{ gap: space.md, alignItems: 'flex-start' }}>
@@ -124,15 +131,16 @@ export function OwnGoogleAiCard({ onChange }: { onChange?: (inUse: boolean) => v
               <Ionicons name="logo-google" size={20} color={colors.accent} />
             </View>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text variant="bodyStrong">Use your own Google AI allowance</Text>
+              <Text variant="bodyStrong">Get your own free Gemini</Text>
               <Text variant="small" tone="secondary">
-                Sign in once and Dayly sets up Gemini in your Google account. Your reports then use
-                your own free daily allowance, not the one shared by everyone using Dayly.
+                Sign in with your Google email once. Dayly makes a free Gemini AI in your own
+                Google account, so your reports use your own daily allowance — not the one shared
+                by everyone. Dayly never turns on billing, so it stays free.
               </Text>
             </View>
           </Row>
 
-          <AllowanceMeter left={leftToday} />
+          {embedded ? null : <AllowanceMeter left={leftToday} />}
 
           {step ? (
             <View style={{ gap: space.sm }}>
@@ -188,7 +196,8 @@ export function OwnGoogleAiCard({ onChange }: { onChange?: (inUse: boolean) => v
 
           <Text variant="caption" tone="secondary">
             Dayly asks Google for permission to make one project called “Dayly AI” and a key that
-            only this app can use. The permission is used once and not kept.
+            only this app can use. The permission is used once and not kept. Dayly cannot see your
+            Google account, your reports or your searches.
           </Text>
         </View>
       </Surface>

@@ -16,6 +16,7 @@ export default function OnboardingLayout() {
       }}
     >
       {/* The fork: restore an existing backup, or build a new plan. */}
+      <Stack.Screen name="terms" />
       <Stack.Screen name="welcome" />
       <Stack.Screen name="index" />
       <Stack.Screen name="about" />

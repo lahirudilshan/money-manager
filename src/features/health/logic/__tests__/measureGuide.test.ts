@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bandIndexFor, guideFor } from '~/features/health/logic/measureGuide';
+import { adviceFor, bandIndexFor, guideFor } from '~/features/health/logic/measureGuide';
 import { readingStatus } from '~/features/health/logic/healthMetrics';
 
 describe('measure guides', () => {
@@ -36,5 +36,27 @@ describe('measure guides', () => {
     expect(readingStatus('fasting_blood_glucose', 126, null)).toBe('high');
     expect(readingStatus('hba1c', 5.7, null)).toBe('borderline');
     expect(readingStatus('hba1c', 6.5, null)).toBe('high');
+  });
+
+  it('says what to do at every level of every guide', () => {
+    for (const key of ['blood_pressure', 'fasting_blood_glucose', 'post_meal_blood_glucose', 'random_blood_glucose', 'hba1c', 'total_cholesterol', 'ldl_cholesterol', 'hdl_cholesterol', 'triglycerides', 'heart_rate', 'oxygen', 'temperature', 'hemoglobin', 'serum_creatinine', 'tsh', 'weight']) {
+      for (const band of guideFor(key)!.bands) expect(band.todo.length, `${key} ${band.name}`).toBeGreaterThan(5);
+    }
+  });
+
+  it('gives plain advice from the guide, else the AI words and a safe next step', () => {
+    const high = adviceFor('fasting_blood_glucose', 'high');
+    expect(high.levelName).toBe('Diabetes range');
+    expect(high.todo).toMatch(/doctor/);
+    expect(high.urgent).not.toBeNull();
+    const normal = adviceFor('fasting_blood_glucose', 'normal');
+    expect(normal.effects).toBeNull();
+    expect(normal.urgent).toBeNull();
+
+    const other = adviceFor('vitamin_d', 'low', { ifLow: 'Weak bones.' });
+    expect(other.levelName).toBe('Low');
+    expect(other.effects).toBe('Weak bones.');
+    expect(other.todo).toMatch(/doctor/);
+    expect(adviceFor('vitamin_d', 'unknown').todo).toMatch(/Ask your doctor/);
   });
 });

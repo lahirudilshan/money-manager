@@ -1,6 +1,5 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { InteractionManager } from 'react-native';
 import { transactionRepo } from '~/db/repositories/board';
 import { docFileRepo, docFolderRepo } from '~/db/repositories/documents';
 import { fuelEntryRepo, vehicleServiceRepo } from '~/db/repositories/fuel';
@@ -129,11 +128,11 @@ let cache: Loaded | null = null;
 
 /**
  * Warm the cache while the dashboard is idle, so even the FIRST open of Search
- * has data ready. Runs after interactions, so it never delays a dashboard frame.
+ * has data ready. Runs when the JS thread is idle, so it never delays a dashboard frame.
  */
 export function preloadSearchIndex(): void {
   if (cache) return;
-  InteractionManager.runAfterInteractions(() => {
+  requestIdleCallback(() => {
     if (!cache) cache = readAll();
   });
 }
@@ -169,12 +168,12 @@ export function useSearchIndex(): {
 
   const reload = useCallback(() => {
     // After the opening animation, so the box, keyboard and history paint first.
-    const task = InteractionManager.runAfterInteractions(() => {
+    const handle = requestIdleCallback(() => {
       cache = readAll();
       setLoaded(cache);
       setLoading(false);
     });
-    return () => task.cancel();
+    return () => cancelIdleCallback(handle);
   }, []);
 
   // Re-read when an add-on is switched on or a person/vehicle is added.

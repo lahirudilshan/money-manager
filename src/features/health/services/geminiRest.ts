@@ -25,8 +25,10 @@ export async function generateWithUserKey(input: {
   systemInstruction: string;
   parts: ({ inlineData: { mimeType: string; data: string } } | { text: string })[];
   generationConfig: Record<string, unknown>;
+  /** e.g. `[{ googleSearch: {} }]` to ground the answer in Google Search. */
+  tools?: readonly Record<string, unknown>[];
   onPartial?: (text: string) => void;
-}): Promise<{ text: string; timing: CallTiming }> {
+}): Promise<{ text: string; timing: CallTiming; grounding?: unknown }> {
   const startedAt = Date.now();
   const response = await expoFetch(geminiRestUrl(input.model, true), {
     method: 'POST',
@@ -40,6 +42,7 @@ export async function generateWithUserKey(input: {
       systemInstruction: { parts: [{ text: input.systemInstruction }] },
       contents: [{ role: 'user', parts: input.parts }],
       generationConfig: input.generationConfig,
+      ...(input.tools ? { tools: input.tools } : {}),
     }),
   });
 
@@ -47,7 +50,19 @@ export async function generateWithUserKey(input: {
     const body = await response.text();
     let message = body;
     try {
-      message = (JSON.parse(body) as { error?: { message?: string } }).error?.message ?? body;
+      const parsed = JSON.parse(body) as {
+        error?: {
+          message?: string;
+          details?: { violations?: { quotaId?: string; quotaValue?: string }[] }[];
+        };
+      };
+      message = parsed.error?.message ?? body;
+      // Which allowance ran out, and its size — the free-allowance meter in
+      // Settings reads these (see logic/aiQuota.ts).
+      const violation = parsed.error?.details?.flatMap((d) => d.violations ?? [])[0];
+      if (violation?.quotaId) message += ` (quotaId: ${violation.quotaId}`;
+      if (violation?.quotaId && violation.quotaValue) message += `, quotaValue: ${violation.quotaValue}`;
+      if (violation?.quotaId) message += ')';
     } catch {
       // Not JSON — keep the raw text.
     }
@@ -57,6 +72,7 @@ export async function generateWithUserKey(input: {
   let text = '';
   let usage: Record<string, number> | null = null;
   let firstChunkMs: number | null = null;
+  let grounding: unknown;
   const take = (events: unknown[]) => {
     for (const event of events) {
       const piece = responseText(event);
@@ -66,6 +82,9 @@ export async function generateWithUserKey(input: {
         input.onPartial?.(text);
       }
       usage = responseUsage(event) ?? usage;
+      const meta = (event as { candidates?: { groundingMetadata?: unknown }[] })?.candidates?.[0]
+        ?.groundingMetadata;
+      if (meta) grounding = meta;
     }
   };
 
@@ -86,5 +105,5 @@ export async function generateWithUserKey(input: {
     take(readSse(`${await response.text()}\n`).events);
   }
 
-  return { text, timing: { firstChunkMs, totalMs: Date.now() - startedAt, usage } };
+  return { text, timing: { firstChunkMs, totalMs: Date.now() - startedAt, usage }, grounding };
 }

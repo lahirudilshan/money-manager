@@ -27,6 +27,9 @@
         "LSSupportsOpeningDocumentsInPlace": true,
         "CFBundleURLTypes": [
           {
+            "CFBundleURLSchemes": ["dayly", "moneymanager"]
+          },
+          {
             "CFBundleURLSchemes": [
               "com.googleusercontent.apps.486010862889-aaps2ikec9a1aigbei98varil468mn9f"
             ]

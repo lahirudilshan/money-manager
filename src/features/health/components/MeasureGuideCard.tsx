@@ -28,7 +28,7 @@ export function MeasureGuideCard({
 
   return (
     <View style={{ gap: space.sm }}>
-      <Label>{`UNDERSTANDING ${guide.title.toUpperCase()}`}</Label>
+      <Label>{`${guide.title.toUpperCase()} LEVELS`}</Label>
       <Surface>
         <View style={{ gap: space.md }}>
           <Text variant="body" tone="secondary">
@@ -110,6 +110,15 @@ export function MeasureGuideCard({
                         <Ionicons name="body-outline" size={15} color={colors.inkSecondary} style={{ marginTop: 2 }} />
                         <Text variant="small" tone="secondary" style={{ flex: 1 }}>
                           {band.effects}
+                        </Text>
+                      </Row>
+                      <Row style={{ gap: space.sm, alignItems: 'flex-start' }}>
+                        <Ionicons name="footsteps-outline" size={15} color={colors.accent} style={{ marginTop: 2 }} />
+                        <Text variant="small" style={{ flex: 1 }}>
+                          <Text variant="small" style={{ fontWeight: '700' }}>
+                            {'What to do: '}
+                          </Text>
+                          {band.todo}
                         </Text>
                       </Row>
                     </View>

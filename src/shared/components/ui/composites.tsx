@@ -8,6 +8,7 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React from 'react';
 import {
   ActivityIndicator,
@@ -672,6 +673,15 @@ export function AppHeader({
 }) {
   const { colors, space } = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  /*
+   * A screen opened straight from a link (a notification, Shortcuts, Spotlight)
+   * has nothing under it, so `router.back()` is a no-op that logs a GO_BACK
+   * error and leaves the user stuck. Land them on the dashboard instead.
+   */
+  const handleBack = onBack
+    ? () => (router.canGoBack() ? onBack() : router.replace('/'))
+    : undefined;
   return (
     <View
       style={{
@@ -687,7 +697,12 @@ export function AppHeader({
       }}
     >
       {onBack ? (
-        <Pressable onPress={onBack} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back">
+        <Pressable
+          onPress={handleBack}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Ionicons name="chevron-back" size={24} color={colors.ink} />
         </Pressable>
       ) : (

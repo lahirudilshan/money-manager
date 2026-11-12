@@ -18,7 +18,7 @@ import {
 } from '~/features/health/logic/labReports';
 import { parseImageRef } from '~/shared/lib/imageRef';
 import { resolveImageUri } from '~/shared/lib/imageCache';
-import { analysesLeftToday } from './aiSettings';
+import { analysesLeftToday, isAiEnabled } from './aiSettings';
 import {
   generateAnalysisJson,
   isAiAvailable,
@@ -68,6 +68,9 @@ export async function analyseDocuments(input: {
   | { ok: true; analysisId: string; results: number; flagged: number; explained: boolean }
   | { ok: false; error: string }
 > {
+  if (!isAiEnabled()) {
+    return { ok: false, error: 'AI features are turned off. You can turn them on in Settings.' };
+  }
   // Reads the keychain once, so the checks below see the user's own key.
   await userGeminiKey();
   if (!isAiAvailable()) {

@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Pressable, ScrollView, View } from 'react-native';
 import { Screen } from '~/shared/components/Screen';
-import { Button, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
+import { Button, Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useDriveGate } from '~/shared/components/DriveConnectSheet';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { attachmentGate } from '~/shared/lib/attachmentGate';
@@ -23,7 +23,7 @@ import {
   isSignedIn,
   signIn,
 } from '~/features/backup/logic/googleDrive';
-import { giveAiConsent, hasAiConsent } from '~/features/health/services/aiSettings';
+import { giveAiConsent, hasAiConsent, isAiEnabled } from '~/features/health/services/aiSettings';
 import { analyseDocuments } from '~/features/health/services/analyseReports';
 import {
   AnalyseLog,
@@ -90,7 +90,7 @@ export default function AnalyzeReports() {
    */
   const personChosen = people.some((p) => p.id === params.person);
 
-  const [ready, setReady] = useState<'checking' | 'setup' | 'ready'>('checking');
+  const [ready, setReady] = useState<'checking' | 'off' | 'setup' | 'ready'>('checking');
 
   /*
    * Which visit these reports came out of, if any.
@@ -145,11 +145,20 @@ export default function AnalyzeReports() {
     [],
   );
 
-  useEffect(() => {
-    void (async () => {
-      setReady(hasAiConsent() ? 'ready' : 'setup');
-    })();
-  }, []);
+  // On focus, so turning AI on in Settings and coming back opens the screen.
+  useFocusEffect(
+    useCallback(() => {
+      setReady((current) =>
+        current === 'ready' && isAiEnabled()
+          ? current
+          : !isAiEnabled()
+            ? 'off'
+            : hasAiConsent()
+              ? 'ready'
+              : 'setup',
+      );
+    }, []),
+  );
 
   // Opened from saved documents: those are the batch.
   useEffect(() => {
@@ -406,6 +415,20 @@ export default function AnalyzeReports() {
     return (
       <Screen title="Analyse lab reports" onBack={() => router.back()}>
         <ActivityIndicator color={colors.accent} />
+      </Screen>
+    );
+  }
+
+  if (ready === 'off') {
+    return (
+      <Screen title="Analyse lab reports" onBack={() => router.back()}>
+        <Empty
+          icon="sparkles-outline"
+          title="AI is turned off"
+          message="You turned off AI features, so reports are not sent to AI. Your saved reports and results are still here. Turn AI on in Settings to read new reports."
+          actionLabel="Open AI settings"
+          onAction={() => router.push('/settings/ai')}
+        />
       </Screen>
     );
   }

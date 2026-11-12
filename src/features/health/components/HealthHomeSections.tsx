@@ -1,31 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, View } from 'react-native';
-import Svg, { Polyline } from 'react-native-svg';
+import { Pressable, ScrollView, View } from 'react-native';
 import { Divider, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useTheme } from '~/shared/theme/ThemeProvider';
-import {
-  changeSincePrevious,
-  shouldBe,
-  homeSeries,
-  type MetricSeries,
-} from '~/features/health/logic/healthMetrics';
-import { AiDisclaimer, conditionStyle, labStatusStyle } from './LabUi';
+import { homeSeries, normalRangeText, type MetricSeries } from '~/features/health/logic/healthMetrics';
+import { reportStory, type NeedsWork } from '~/features/health/logic/reportStory';
+import { FOCUS_LABEL, planDayIndex, type WeeklyPlan } from '~/features/health/logic/weeklyPlan';
+import { starterQuestions } from '~/features/health/logic/askHealth';
+import { plainName, tidyValue } from '~/features/health/logic/plainTests';
+import { labStatusStyle, RangeBar } from './LabUi';
+import { categoryLook } from './healthCategory';
 import type { PersonHealth } from './usePersonHealth';
 
 /**
- * The sections of the redesigned health home, top to bottom:
+ * The health home, top to bottom — three questions, in the order people ask:
  *
- *   CurrentHealthCard — "how am I doing?", from the latest AI read-through and
- *                       anything out of range, home readings included
- *   AskBar            — the offline "what is my sugar level?" search
- *   NumbersGrid       — the measures that matter, each with its trend
- *   SuggestionsCard   — what to watch, simple things that help, what to ask
+ *   AskAiBar         — "I have a question" (first, because it answers anything)
+ *   ReportStoryCard  — "What did my reports say?" in simple English
+ *   WeekPlanCard     — "What should I do?" — today's exercise and meals
+ *   NumbersList      — every measure as one plain row, for looking things up
  *
- * Ordered by the questions someone opens a health record with, most urgent
- * first. The timeline — the record of everything — moves below them: it is
- * where you go to look something up, not what you need on arrival.
+ * Words before numbers everywhere; "high" and "low" spelled out with an
+ * arrow; the normal range beside every value; a next step on everything off.
  */
 
 const metricHref = (personId: string, key: string) =>
@@ -37,21 +35,109 @@ function shortDate(date: Date): string {
 
 /*
  * ---------------------------------------------------------------------------
- * Current health
+ * Ask AI
  * ---------------------------------------------------------------------------
  */
 
-export function CurrentHealthCard({ personId, health }: { personId: string; health: PersonHealth }) {
+export function AskAiBar({ personId, health }: { personId: string; health: PersonHealth }) {
   const { colors, radius, space } = useTheme();
   const router = useRouter();
-  const { latestAnalysis, overall, flagged, series } = health;
+  const open = (q?: string) =>
+    router.push(`/ask?scope=health&person=${personId}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+  const starters = starterQuestions(
+    health.series.map((x) => ({ testName: plainName(x.testKey, x.testName, x.latest.unit), latest: x.latest })),
+    3,
+  );
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Pressable
+        onPress={() => open()}
+        accessibilityRole="button"
+        accessibilityLabel="Ask AI anything about your health"
+        style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+      >
+        {/* A gradient rim, so the one AI entry reads as the way in. */}
+        <LinearGradient
+          colors={[colors.gradientStart, colors.gradientEnd]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ borderRadius: radius.pill, padding: 1.5 }}
+        >
+          <Row
+            gap={space.sm}
+            style={{
+              paddingLeft: space.md,
+              paddingRight: 6,
+              paddingVertical: 6,
+              borderRadius: radius.pill,
+              backgroundColor: colors.surface,
+            }}
+          >
+            <Ionicons name="sparkles" size={18} color={colors.gradientStart} />
+            <Text variant="body" tone="secondary" style={{ flex: 1 }} numberOfLines={1}>
+              Ask AI anything about your health…
+            </Text>
+            <LinearGradient
+              colors={[colors.gradientStart, colors.gradientEnd]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
+            </LinearGradient>
+          </Row>
+        </LinearGradient>
+      </Pressable>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: space.sm, paddingRight: space.lg }}
+      >
+        {starters.map((q) => (
+          <Pressable
+            key={q}
+            onPress={() => open(q)}
+            accessibilityRole="button"
+            style={({ pressed }) => ({
+              paddingHorizontal: space.md,
+              paddingVertical: 7,
+              borderRadius: radius.pill,
+              backgroundColor: pressed ? colors.surfaceSunken : colors.accentSoft,
+            })}
+          >
+            <Text variant="caption" color={colors.accentInk} style={{ fontWeight: '700' }}>
+              {q}
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * What your reports say
+ * ---------------------------------------------------------------------------
+ */
+
+export function ReportStoryCard({ personId, health }: { personId: string; health: PersonHealth }) {
+  const { colors, radius, space } = useTheme();
+  const router = useRouter();
   const scan = () => router.push(`/mini/health/analyze?person=${personId}`);
 
-  // Nothing measured and nothing scanned: an invitation, not an empty verdict.
-  if (!latestAnalysis && series.length === 0) {
+  if (health.series.length === 0) {
     return (
       <View style={{ gap: space.sm }}>
-        <Label>CURRENT HEALTH</Label>
+        <Label>WHAT YOUR REPORTS SAY</Label>
         <Surface onPress={scan}>
           <Row style={{ gap: space.md, alignItems: 'flex-start' }}>
             <View
@@ -64,13 +150,13 @@ export function CurrentHealthCard({ personId, health }: { personId: string; heal
                 justifyContent: 'center',
               }}
             >
-              <Ionicons name="sparkles" size={22} color={colors.accent} />
+              <Ionicons name="scan-outline" size={22} color={colors.accent} />
             </View>
             <View style={{ flex: 1, gap: space.xs }}>
-              <Text variant="heading">Understand your health in simple words</Text>
+              <Text variant="heading">Scan a report to start</Text>
               <Text variant="small" tone="secondary">
-                Scan your lab reports and AI explains every result — what is normal, what is high or
-                low, and what it affects. Add home readings too, and see it all in one place.
+                Take a photo of a lab report. Dayly tells you what it says in simple words, and gives
+                you a plan for the week.
               </Text>
               <Row style={{ gap: 4, marginTop: space.xs }}>
                 <Text variant="bodyStrong" tone="accent">
@@ -85,85 +171,369 @@ export function CurrentHealthCard({ personId, health }: { personId: string; heal
     );
   }
 
-  /*
-   * The verdict. With an analysis, its words; without one, a plain reading of
-   * the numbers — never a made-up diagnosis, just "N things are out of range".
-   */
-  const condition = conditionStyle(
-    overall?.condition ?? (flagged.length > 0 ? 'fair' : 'good'),
-    colors,
-  );
-  /*
-   * Said once, plainly. The condition is the title; the line under it is the
-   * count — no separate headline repeating it, no "needs a look" label over
-   * rows that already say what is wrong.
-   */
-  const subtitle = latestAnalysis
-    ? `From reports on ${shortDate(latestAnalysis.reportDate)}`
-    : flagged.length > 0
-      ? `${flagged.length === 1 ? '1 reading needs' : `${flagged.length} readings need`} a look`
-      : 'Your recent readings are all in the normal range';
-  const shownFlags = flagged.slice(0, 4);
-  const moreFlags = flagged.length - shownFlags.length;
+  const story = reportStory(health.series);
+  const total = health.series.length;
+  const offCount = story.needsWork.length;
+  const normalCount = total - offCount;
+  const shown = story.needsWork.slice(0, 3);
+  const more = story.needsWork.length - shown.length;
 
   return (
     <View style={{ gap: space.sm }}>
-      <Label>CURRENT HEALTH</Label>
+      <Label>WHAT YOUR REPORTS SAY</Label>
       <Surface padded={false} style={{ overflow: 'hidden' }}>
-        <View style={{ padding: space.lg, gap: space.md }}>
-          <Row style={{ gap: space.md, alignItems: 'center' }}>
+        <View style={{ padding: space.lg, gap: space.lg }}>
+          {/* The score: one number and one bar, before any words. */}
+          <View style={{ gap: space.sm }}>
+            <Row style={{ alignItems: 'flex-end', gap: space.sm }}>
+              <Text variant="display" style={{ fontVariant: ['tabular-nums'] }}>
+                {`${normalCount}/${total}`}
+              </Text>
+              <Text variant="body" tone="secondary" style={{ paddingBottom: 5, flex: 1 }}>
+                results normal
+              </Text>
+            </Row>
             <View
               style={{
-                width: 44,
-                height: 44,
-                borderRadius: radius.md,
-                backgroundColor: condition.bg,
-                alignItems: 'center',
-                justifyContent: 'center',
+                flexDirection: 'row',
+                height: 10,
+                gap: 3,
+                borderRadius: radius.pill,
+                overflow: 'hidden',
               }}
             >
-              <Ionicons name={condition.icon} size={24} color={condition.fg} />
+              {normalCount > 0 ? <View style={{ flex: normalCount, backgroundColor: colors.completed }} /> : null}
+              {offCount > 0 ? <View style={{ flex: offCount, backgroundColor: colors.pending }} /> : null}
             </View>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text variant="title">{condition.label}</Text>
-              <Text variant="small" tone="secondary">
-                {subtitle}
+            {story.upTo ? (
+              <Text variant="caption" tone="secondary">
+                {`Up to ${shortDate(story.upTo)}`}
               </Text>
-            </View>
-          </Row>
+            ) : null}
+          </View>
 
-          {latestAnalysis ? (
-            <View style={{ gap: space.xs }}>
-              <Text variant="heading">{latestAnalysis.headline}</Text>
-              {latestAnalysis.summary ? (
-                <Text variant="body" tone="secondary" numberOfLines={4}>
-                  {latestAnalysis.summary}
-                </Text>
+          {/* Each body area as a tile: a glance shows where the trouble is. */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+            {story.areas.map((area) => (
+              <AreaTile
+                key={area.category}
+                category={area.category}
+                off={area.off}
+                onPress={() => router.push(`/mini/health/labs?person=${personId}`)}
+              />
+            ))}
+          </View>
+
+          {shown.length > 0 ? (
+            <View style={{ gap: space.sm }}>
+              <Text variant="label" tone="muted">
+                NEEDS WORK
+              </Text>
+              {shown.map((item) => (
+                <NeedsWorkItem
+                  key={item.testKey}
+                  item={item}
+                  onPress={() => router.push(metricHref(personId, item.testKey))}
+                />
+              ))}
+              {more > 0 ? (
+                <Pressable
+                  onPress={() => router.push(`/mini/health/labs?person=${personId}`)}
+                  accessibilityRole="button"
+                  hitSlop={8}
+                >
+                  <Text variant="small" tone="accent" style={{ fontWeight: '700' }}>
+                    {`See ${more} more`}
+                  </Text>
+                </Pressable>
               ) : null}
             </View>
           ) : null}
-
-          {/* What is off: one callout each, the number large. */}
-          {shownFlags.map((s) => (
-            <FlaggedCallout
-              key={s.testKey}
-              series={s}
-              onPress={() => router.push(metricHref(personId, s.testKey))}
-            />
-          ))}
-          {moreFlags > 0 ? (
-            <Text variant="caption" tone="secondary">
-              {`and ${moreFlags} more in My numbers`}
-            </Text>
-          ) : null}
         </View>
 
-        {/* The next step: the full read-through, or a scan to get one. */}
+        {health.latestAnalysis ? (
+          <>
+            <Divider />
+            <Pressable
+              onPress={() => router.push(`/mini/health/analysis?id=${health.latestAnalysis!.id}`)}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: space.sm,
+                paddingHorizontal: space.lg,
+                paddingVertical: space.md,
+                backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+              })}
+            >
+              <Ionicons name="document-text-outline" size={18} color={colors.accent} />
+              <Text variant="bodyStrong" tone="accent" style={{ flex: 1 }}>
+                See the full report
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+            </Pressable>
+          </>
+        ) : null}
+      </Surface>
+    </View>
+  );
+}
+
+/** One body area: its icon, its name, and a tick or a warning badge. */
+function AreaTile({ category, off, onPress }: { category: string; off: number; onPress: () => void }) {
+  const { colors, radius, space } = useTheme();
+  const look = categoryLook(category);
+  const ok = off === 0;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${look.title}: ${ok ? 'normal' : `${off} need a look`}`}
+      style={({ pressed }) => ({
+        width: '31.5%',
+        alignItems: 'center',
+        gap: 6,
+        paddingVertical: space.md,
+        paddingHorizontal: 4,
+        borderRadius: radius.md,
+        backgroundColor: pressed ? colors.hairline : colors.surfaceSunken,
+      })}
+    >
+      <View>
+        <View
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: look.color,
+          }}
+        >
+          <Ionicons name={look.icon} size={20} color="#FFFFFF" />
+        </View>
+        <View
+          style={{
+            position: 'absolute',
+            right: -5,
+            bottom: -3,
+            width: 18,
+            height: 18,
+            borderRadius: 9,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surface,
+          }}
+        >
+          <Ionicons
+            name={ok ? 'checkmark-circle' : 'alert-circle'}
+            size={17}
+            color={ok ? colors.completed : colors.pending}
+          />
+        </View>
+      </View>
+      <View style={{ alignItems: 'center' }}>
+        <Text variant="caption" numberOfLines={1} style={{ textAlign: 'center', fontWeight: '700' }}>
+          {look.short}
+        </Text>
+        <Text
+          variant="caption"
+          color={ok ? colors.completed : colors.pending}
+          numberOfLines={1}
+          style={{ fontSize: 11, fontWeight: '700' }}
+        >
+          {ok ? 'All normal' : `${off} to check`}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+/**
+ * One result that is off, drawn first and explained second:
+ *
+ *   Fasting blood sugar                142 mg/dL
+ *   [ low |  normal  | ●  high ]
+ *   👣 See your doctor soon.
+ *   Why it matters ▾                      (opens the meaning)
+ */
+function NeedsWorkItem({ item, onPress }: { item: NeedsWork; onPress: () => void }) {
+  const { colors, radius, space } = useTheme();
+  const [why, setWhy] = useState(false);
+  const status = labStatusStyle(item.status, colors);
+  const value = item.numbers.split('. Normal is')[0].replace(/\.$/, '');
+  const hasBar = item.value !== null && (item.refLow !== null || item.refHigh !== null);
+
+  return (
+    <View
+      style={{
+        padding: space.md,
+        gap: space.sm,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: colors.hairline,
+      }}
+    >
+      <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${item.title}. ${item.numbers}`}>
+        <Row style={{ gap: space.sm, alignItems: 'center' }}>
+          <Ionicons name={status.icon} size={20} color={status.fg} />
+          <Text variant="bodyStrong" style={{ flex: 1 }} numberOfLines={2}>
+            {item.title}
+          </Text>
+          <Text variant="bodyStrong" color={status.fg} style={{ fontVariant: ['tabular-nums'] }} numberOfLines={1}>
+            {value}
+          </Text>
+        </Row>
+      </Pressable>
+
+      {hasBar ? (
+        <RangeBar value={item.value} refLow={item.refLow} refHigh={item.refHigh} status={item.status} />
+      ) : (
+        <Text variant="caption" tone="secondary">
+          {item.numbers}
+        </Text>
+      )}
+
+      <Row gap={space.sm} style={{ alignItems: 'flex-start' }}>
+        <Ionicons name="footsteps" size={15} color={colors.accent} style={{ marginTop: 2 }} />
+        <Text variant="small" style={{ flex: 1 }}>
+          {item.todo}
+        </Text>
+      </Row>
+
+      {item.meaning ? (
+        <>
+          <Pressable
+            onPress={() => setWhy((v) => !v)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: why }}
+            hitSlop={8}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+          >
+            <Text variant="caption" tone="accent" style={{ fontWeight: '700' }}>
+              {why ? 'Hide' : 'Why it matters'}
+            </Text>
+            <Ionicons name={why ? 'chevron-up' : 'chevron-down'} size={13} color={colors.accent} />
+          </Pressable>
+          {why ? (
+            <Text variant="small" tone="secondary">
+              {item.meaning}
+            </Text>
+          ) : null}
+        </>
+      ) : null}
+    </View>
+  );
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * This week's plan
+ * ---------------------------------------------------------------------------
+ */
+
+const EXERCISE_ICON = { walk: 'walk', strength: 'barbell', active: 'bicycle', rest: 'bed' } as const;
+
+export function WeekPlanCard({ personId, plan }: { personId: string; plan: WeeklyPlan }) {
+  const { colors, radius, space } = useTheme();
+  const router = useRouter();
+  const todayIndex = planDayIndex(new Date());
+  const today = plan.days[todayIndex];
+  const stop = plan.cautions.find((c) => c.level === 'stop');
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Label>YOUR PLAN FOR THIS WEEK</Label>
+      <Surface padded={false} style={{ overflow: 'hidden' }}>
+        <View style={{ padding: space.lg, gap: space.lg }}>
+          <View style={{ gap: space.sm }}>
+            <Text variant="heading">{plan.summary}</Text>
+            {plan.focus.length > 0 ? (
+              <Row gap={6} style={{ flexWrap: 'wrap' }}>
+                {plan.focus.map((f) => (
+                  <View
+                    key={f}
+                    style={{
+                      paddingHorizontal: space.sm,
+                      paddingVertical: 3,
+                      borderRadius: radius.pill,
+                      backgroundColor: colors.accentSoft,
+                    }}
+                  >
+                    <Text variant="caption" color={colors.accentInk} style={{ fontWeight: '700' }}>
+                      {FOCUS_LABEL[f]}
+                    </Text>
+                  </View>
+                ))}
+              </Row>
+            ) : null}
+          </View>
+
+          {stop ? (
+            <Row
+              gap={space.sm}
+              style={{ alignItems: 'flex-start', padding: space.md, borderRadius: radius.md, backgroundColor: colors.dangerSoft }}
+            >
+              <Ionicons name="warning" size={18} color={colors.danger} />
+              <Text variant="small" style={{ flex: 1, fontWeight: '700' }}>
+                {stop.text}
+              </Text>
+            </Row>
+          ) : null}
+
+          {/* The week at a glance: one icon per day, today ringed. */}
+          <Row style={{ justifyContent: 'space-between' }}>
+            {plan.days.map((d, index) => {
+              const isToday = index === todayIndex;
+              const rest = d.exercise.kind === 'rest';
+              return (
+                <View key={d.short} style={{ alignItems: 'center', gap: 4 }}>
+                  <Text
+                    variant="caption"
+                    tone={isToday ? undefined : 'secondary'}
+                    style={{ fontWeight: isToday ? '800' : '500', fontSize: 11 }}
+                  >
+                    {d.short.charAt(0)}
+                  </Text>
+                  <View
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 19,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: isToday ? colors.completed : rest ? colors.surfaceSunken : colors.completedSoft,
+                    }}
+                  >
+                    <Ionicons
+                      name={EXERCISE_ICON[d.exercise.kind]}
+                      size={18}
+                      color={isToday ? '#FFFFFF' : rest ? colors.inkMuted : colors.completed}
+                    />
+                  </View>
+                </View>
+              );
+            })}
+          </Row>
+
+          {/* Today, in four short lines. */}
+          <View style={{ gap: space.sm }}>
+            <Text variant="label" tone="muted">
+              {`TODAY · ${today.day.toUpperCase()}`}
+            </Text>
+            <TodayLine icon={EXERCISE_ICON[today.exercise.kind]} color={colors.completed} text={today.exercise.title} />
+            {today.extras.slice(0, 1).map((e) => (
+              <TodayLine key={e} icon="add-circle" color={colors.completed} text={e} />
+            ))}
+            <TodayLine icon="sunny" color={colors.pending} text={today.meals.breakfast} />
+            <TodayLine icon="restaurant" color={colors.accent} text={today.meals.lunch} />
+            <TodayLine icon="moon" color={colors.inkSecondary} text={today.meals.dinner} />
+          </View>
+        </View>
+
         <Divider />
         <Pressable
-          onPress={() =>
-            latestAnalysis ? router.push(`/mini/health/analysis?id=${latestAnalysis.id}`) : scan()
-          }
+          onPress={() => router.push(`/mini/health/plan?person=${personId}`)}
           accessibilityRole="button"
           style={({ pressed }) => ({
             flexDirection: 'row',
@@ -174,115 +544,62 @@ export function CurrentHealthCard({ personId, health }: { personId: string; heal
             backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
           })}
         >
-          <Ionicons
-            name={latestAnalysis ? 'document-text-outline' : 'scan-outline'}
-            size={18}
-            color={colors.accent}
-          />
+          <Ionicons name="calendar-outline" size={18} color={colors.accent} />
           <Text variant="bodyStrong" tone="accent" style={{ flex: 1 }}>
-            {latestAnalysis ? 'Read the full analysis' : 'Scan a lab report for a full read'}
+            See the whole week and why
           </Text>
           <Ionicons name="chevron-forward" size={16} color={colors.accent} />
         </Pressable>
-
-        {latestAnalysis ? (
-          <View style={{ paddingHorizontal: space.lg, paddingBottom: space.lg }}>
-            <AiDisclaimer compact />
-          </View>
-        ) : null}
       </Surface>
     </View>
   );
 }
 
-/**
- * One out-of-range measure, as a callout on its status tint:
- *
- *   ┌──────────────────────────────────────┐
- *   │ ↓ LOW · BLOOD PRESSURE      15 Aug › │
- *   │ 128/50 mmHg                          │
- *   │ The bottom number should be 60–79    │
- *   └──────────────────────────────────────┘
- *
- * Three lines, in the order they matter: what and how, the number, what it
- * should be. The status word sits with its icon (never colour alone), the
- * figure is the largest thing, and the sentence names the part that is off.
- */
-function FlaggedCallout({ series, onPress }: { series: MetricSeries; onPress: () => void }) {
-  const { colors, radius, space } = useTheme();
-  const latest = series.latest;
-  const status = labStatusStyle(latest.status, colors);
-  const should = shouldBe(latest);
-  const when = latest.measuredAt.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-
+function TodayLine({ icon, color, text }: { icon: keyof typeof Ionicons.glyphMap; color: string; text: string }) {
+  const { space } = useTheme();
   return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={`${series.testName} is ${status.label.toLowerCase()}: ${latest.valueText} ${latest.unit ?? ''} on ${when}. ${should ?? ''}`}
-      style={({ pressed }) => ({
-        padding: space.md,
-        gap: space.xs,
-        borderRadius: radius.md,
-        backgroundColor: status.bg,
-        opacity: pressed ? 0.8 : 1,
-      })}
-    >
-      <Row style={{ gap: 6, alignItems: 'center' }}>
-        <Ionicons name={status.icon} size={16} color={status.fg} />
-        <Text variant="label" color={status.fg} numberOfLines={1} style={{ flex: 1 }}>
-          {`${status.label} · ${series.testName}`.toUpperCase()}
-        </Text>
-        <Text variant="caption" tone="secondary">
-          {when}
-        </Text>
-        <Ionicons name="chevron-forward" size={14} color={colors.inkSecondary} />
-      </Row>
-
-      <Text variant="title" style={{ fontVariant: ['tabular-nums'] }}>
-        {latest.valueText}
-        {latest.unit ? (
-          <Text variant="body" tone="secondary">{` ${latest.unit}`}</Text>
-        ) : null}
+    <Row gap={space.sm} style={{ alignItems: 'flex-start' }}>
+      <Ionicons name={icon} size={17} color={color} style={{ marginTop: 1, width: 20 }} />
+      <Text variant="small" style={{ flex: 1 }} numberOfLines={2}>
+        {text}
       </Text>
-
-      {should ? <Text variant="small">{should}</Text> : null}
-    </Pressable>
+    </Row>
   );
 }
 
-/*
- * ---------------------------------------------------------------------------
- * Ask
- * ---------------------------------------------------------------------------
- */
-
-export function AskBar({ personId }: { personId: string }) {
-  const { colors, radius, space } = useTheme();
-  const router = useRouter();
+export function PlanLine({
+  icon,
+  color,
+  title,
+  body,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  title: string;
+  body: string;
+}) {
+  const { radius, space } = useTheme();
   return (
-    <Pressable
-      onPress={() => router.push(`/mini/health/labs?person=${personId}&focus=1`)}
-      accessibilityRole="search"
-      accessibilityLabel="Ask about your health numbers"
-      style={({ pressed }) => ({
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: space.sm,
-        paddingHorizontal: space.lg,
-        paddingVertical: space.md,
-        borderRadius: radius.pill,
-        backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
-        borderWidth: 1,
-        borderColor: colors.hairlineStrong,
-      })}
-    >
-      <Ionicons name="search" size={18} color={colors.inkSecondary} />
-      <Text variant="body" tone="secondary" style={{ flex: 1 }} numberOfLines={1}>
-        Ask: what is my sugar level?
-      </Text>
-      <Ionicons name="cloud-offline-outline" size={16} color={colors.inkMuted} />
-    </Pressable>
+    <Row gap={space.md} style={{ alignItems: 'flex-start' }}>
+      <View
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: radius.sm,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: `${color}1A`,
+        }}
+      >
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text variant="bodyStrong">{title}</Text>
+        <Text variant="small" tone="secondary">
+          {body}
+        </Text>
+      </View>
+    </Row>
   );
 }
 
@@ -292,7 +609,7 @@ export function AskBar({ personId }: { personId: string }) {
  * ---------------------------------------------------------------------------
  */
 
-export function NumbersGrid({ personId, health }: { personId: string; health: PersonHealth }) {
+export function NumbersList({ personId, health }: { personId: string; health: PersonHealth }) {
   const { colors, space } = useTheme();
   const router = useRouter();
   if (health.series.length === 0) return null;
@@ -300,39 +617,47 @@ export function NumbersGrid({ personId, health }: { personId: string; health: Pe
 
   return (
     <View style={{ gap: space.sm }}>
-      <Row style={{ alignItems: 'center', paddingHorizontal: space.xs }}>
-        <Label>MY NUMBERS</Label>
-        <View style={{ flex: 1 }} />
-        <Pressable
-          onPress={() => router.push(`/mini/health/labs?person=${personId}`)}
-          accessibilityRole="button"
-          hitSlop={8}
-          style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-        >
-          <Text variant="caption" color={colors.accent} style={{ fontWeight: '700' }}>
-            {`See all ${health.series.length}`}
-          </Text>
-        </Pressable>
-      </Row>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-        {shown.map((s) => (
-          <NumberTile
-            key={s.testKey}
-            series={s}
-            onPress={() => router.push(metricHref(personId, s.testKey))}
-          />
+      <Label>MY NUMBERS</Label>
+      <Surface padded={false} style={{ overflow: 'hidden' }}>
+        {shown.map((s, index) => (
+          <View key={s.testKey}>
+            {index > 0 ? <Divider /> : null}
+            <NumberRow series={s} onPress={() => router.push(metricHref(personId, s.testKey))} />
+          </View>
         ))}
-      </View>
+        {health.series.length > shown.length ? (
+          <>
+            <Divider />
+            <Pressable
+              onPress={() => router.push(`/mini/health/labs?person=${personId}`)}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                paddingVertical: space.md,
+                backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
+              })}
+            >
+              <Text variant="small" tone="accent" style={{ fontWeight: '700' }}>
+                {`See all ${health.series.length} tests`}
+              </Text>
+              <Ionicons name="chevron-forward" size={14} color={colors.accent} />
+            </Pressable>
+          </>
+        ) : null}
+      </Surface>
     </View>
   );
 }
 
-function NumberTile({ series, onPress }: { series: MetricSeries; onPress: () => void }) {
+/** Name and normal range on the left; the number and its word on the right. */
+function NumberRow({ series, onPress }: { series: MetricSeries; onPress: () => void }) {
   const { colors, radius, space } = useTheme();
   const latest = series.latest;
   const status = labStatusStyle(latest.status, colors);
-  const change = changeSincePrevious(series);
-  const values = series.history.filter((r) => r.value !== null).map((r) => r.value as number);
+  const normal = normalRangeText(latest);
 
   return (
     <Pressable
@@ -340,148 +665,43 @@ function NumberTile({ series, onPress }: { series: MetricSeries; onPress: () => 
       accessibilityRole="button"
       accessibilityLabel={`${series.testName}, ${latest.valueText} ${latest.unit ?? ''}, ${status.label}`}
       style={({ pressed }) => ({
-        width: '48.5%',
-        padding: space.md,
-        gap: space.xs,
-        borderRadius: radius.lg,
-        backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
-        borderWidth: 1,
-        borderColor: colors.hairline,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: space.md,
+        paddingHorizontal: space.lg,
+        paddingVertical: space.md,
+        backgroundColor: pressed ? colors.surfaceSunken : 'transparent',
       })}
     >
-      <Row style={{ gap: 4, alignItems: 'center' }}>
-        <Ionicons name={status.icon} size={13} color={status.fg} />
-        <Text variant="caption" tone="secondary" numberOfLines={1} style={{ flex: 1 }}>
-          {series.testName}
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text variant="bodyStrong" numberOfLines={1}>
+          {plainName(series.testKey, series.testName, latest.unit)}
         </Text>
-      </Row>
-      <Text variant="figureLarge" numberOfLines={1} style={{ fontVariant: ['tabular-nums'] }}>
-        {latest.valueText}
-        {latest.unit ? (
-          <Text variant="caption" tone="secondary">{` ${latest.unit}`}</Text>
-        ) : null}
-      </Text>
-      <Sparkline values={values} color={status.fg} />
-      <Text variant="caption" tone="muted" numberOfLines={1}>
-        {change
-          ? `${
-              change.delta === 0
-                ? 'No change'
-                : change.delta > 0
-                  ? `↑ ${fmt(change.delta)}`
-                  : `↓ ${fmt(-change.delta)}`
-            } since ${change.since.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`
-          : latest.source === 'lab'
-            ? 'From a lab report'
-            : 'One reading so far'}
-      </Text>
+        <Text variant="caption" tone="secondary" numberOfLines={1}>
+          {normal ? `Normal: ${normal}` : `Checked ${shortDate(latest.measuredAt)}`}
+        </Text>
+      </View>
+      <View style={{ alignItems: 'flex-end', gap: 4 }}>
+        <Text variant="figure" style={{ fontVariant: ['tabular-nums'] }}>
+          {tidyValue(latest.valueText)}
+          {latest.unit ? <Text variant="caption" tone="secondary">{` ${latest.unit}`}</Text> : null}
+        </Text>
+        <Row
+          gap={3}
+          style={{
+            paddingHorizontal: 7,
+            paddingVertical: 2,
+            borderRadius: radius.pill,
+            backgroundColor: status.bg,
+          }}
+        >
+          <Ionicons name={status.icon} size={12} color={status.fg} />
+          <Text variant="label" color={status.fg}>
+            {status.label.toUpperCase()}
+          </Text>
+        </Row>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
     </Pressable>
   );
 }
-
-function fmt(n: number): string {
-  return String(Number(n.toFixed(1)));
-}
-
-/** A tiny trend line. Two points make a line; fewer draws a flat rule. */
-function Sparkline({ values, color }: { values: readonly number[]; color: string }) {
-  const { colors } = useTheme();
-  const W = 100;
-  const H = 24;
-  if (values.length < 2) {
-    return (
-      <View style={{ height: H, justifyContent: 'center' }}>
-        <View style={{ height: 2, borderRadius: 1, backgroundColor: colors.surfaceSunken }} />
-      </View>
-    );
-  }
-  const recent = values.slice(-8);
-  const min = Math.min(...recent);
-  const max = Math.max(...recent);
-  const span = max - min || 1;
-  const points = recent
-    .map((v, i) => `${(i / (recent.length - 1)) * W},${H - 3 - ((v - min) / span) * (H - 6)}`)
-    .join(' ');
-  return (
-    <View style={{ height: H }}>
-      <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-        <Polyline points={points} fill="none" stroke={color} strokeWidth={2} />
-      </Svg>
-    </View>
-  );
-}
-
-/*
- * ---------------------------------------------------------------------------
- * Suggestions
- * ---------------------------------------------------------------------------
- */
-
-/**
- * What to do with it: from the latest AI read-through.
- *
- * Collapsed to the first few lines of each list, because three lists of five
- * on the home screen is a page of text above the record itself. "Show more"
- * opens them in place.
- */
-export function SuggestionsCard({ health }: { health: PersonHealth }) {
-  const { colors, space } = useTheme();
-  const [open, setOpen] = useState(false);
-  const overall = health.overall;
-  if (!overall) return null;
-
-  type Section = {
-    key: string;
-    title: string;
-    icon: keyof typeof Ionicons.glyphMap;
-    color: string;
-    items: string[];
-  };
-  const all: Section[] = [
-    { key: 'watch', title: 'Keep an eye on', icon: 'eye', color: colors.pending, items: overall.watchOut },
-    { key: 'tips', title: 'Simple things that often help', icon: 'leaf-outline', color: colors.completed, items: overall.tips },
-    { key: 'ask', title: 'Ask your doctor', icon: 'chatbubble-ellipses-outline', color: colors.accent, items: overall.questionsForDoctor },
-  ];
-  const sections = all.filter((s) => s.items.length > 0);
-  if (sections.length === 0) return null;
-
-  const limit = open ? Infinity : 2;
-  const hidden = sections.reduce((n, s) => n + Math.max(0, s.items.length - 2), 0);
-
-  return (
-    <View style={{ gap: space.sm }}>
-      <Label>SUGGESTIONS</Label>
-      <Surface>
-        <View style={{ gap: space.lg }}>
-          {sections.map((section) => (
-            <View key={section.key} style={{ gap: space.sm }}>
-              <Text variant="small" style={{ fontWeight: '700' }}>
-                {section.title}
-              </Text>
-              {section.items.slice(0, limit).map((item, index) => (
-                <View key={index} style={{ flexDirection: 'row', gap: space.sm, alignItems: 'flex-start' }}>
-                  <Ionicons name={section.icon} size={16} color={section.color} style={{ marginTop: 2 }} />
-                  <Text variant="body" style={{ flex: 1 }}>
-                    {item}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ))}
-          {hidden > 0 ? (
-            <Pressable onPress={() => setOpen((v) => !v)} accessibilityRole="button" hitSlop={8}>
-              <Row style={{ gap: 4 }}>
-                <Text variant="caption" tone="accent" style={{ fontWeight: '700' }}>
-                  {open ? 'Show less' : `Show ${hidden} more`}
-                </Text>
-                <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={14} color={colors.accent} />
-              </Row>
-            </Pressable>
-          ) : null}
-          <AiDisclaimer compact />
-        </View>
-      </Surface>
-    </View>
-  );
-}
-
