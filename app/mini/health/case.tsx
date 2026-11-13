@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { HEALTH_TINT } from '~/features/health/components/healthCategory';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useDocumentViewer } from '~/shared/components/DocumentViewer';
 import React, { useMemo } from 'react';
@@ -216,7 +217,7 @@ export default function HealthCase() {
                 {index > 0 ? <Divider /> : null}
                 <LinkedRow
                   icon="pulse-outline"
-                  tint="#D6336C"
+                  tint={HEALTH_TINT.reading}
                   title={formatReading({
                     metric: reading.metric,
                     value: reading.value,
@@ -273,7 +274,7 @@ export default function HealthCase() {
                 {index > 0 ? <Divider /> : null}
                 <LinkedRow
                   icon="document-text-outline"
-                  tint="#8B5CF6"
+                  tint={HEALTH_TINT.report}
                   imageUri={document.imageUri}
                   title={document.title}
                   /*
@@ -322,7 +323,7 @@ export default function HealthCase() {
           <AddToVisit
             icon="pulse-outline"
             label="Reading"
-            tint="#D6336C"
+            tint={HEALTH_TINT.reading}
             onPress={() =>
               router.push(`/mini/health/reading?person=${visit.personId}&visit=${visit.id}`)
             }
@@ -338,7 +339,7 @@ export default function HealthCase() {
           <AddToVisit
             icon="camera-outline"
             label="Photo"
-            tint="#8B5CF6"
+            tint={HEALTH_TINT.report}
             onPress={() =>
               router.push(`/mini/health/document?person=${visit.personId}&visit=${visit.id}`)
             }

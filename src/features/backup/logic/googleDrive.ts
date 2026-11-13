@@ -134,6 +134,12 @@ function loadCrypto(): Crypto | null {
  */
 const REFRESH_TOKEN_KEY = 'google_drive_refresh_token';
 const ACCOUNT_LABEL_KEY = 'google_drive_account';
+/**
+ * Set when GOOGLE ended the connection (a dead refresh token), never when the
+ * user disconnected. Holds the account it was, so the prompt can name it.
+ * Device-local, like the token — a restored backup must not carry it.
+ */
+const RECONNECT_KEY = 'google_drive_reconnect_needed';
 
 /** The OAuth client id, from app config. Not a secret — see core/googleAuth.ts. */
 export function driveClientId(): string | null {
@@ -183,6 +189,65 @@ export async function isSignedIn(): Promise<boolean> {
   }
 }
 
+/**
+ * Google refused the saved sign-in: forget it, and remember that it was lost
+ * rather than switched off, so the app can ask to sign in again.
+ */
+async function loseConnection(): Promise<void> {
+  const store = loadSecureStore();
+  let account: string | null = null;
+  try {
+    account = (await store?.getItemAsync(ACCOUNT_LABEL_KEY)) ?? null;
+  } catch {
+    // Unknown account — the prompt just does not name it.
+  }
+  await signOut();
+  try {
+    await store?.setItemAsync(RECONNECT_KEY, account ?? '');
+  } catch {
+    // Without the flag the user still sees "Not connected" in Settings.
+  }
+}
+
+/**
+ * Is Drive still connected?
+ *
+ *   - 'connected' — a working sign-in (refreshed now if it had to be).
+ *   - 'lost'      — Google ended it (expired or revoked): ask to sign in again.
+ *     `account` is the address it was, when known.
+ *   - 'off'       — never connected, or the user disconnected: say nothing.
+ *   - 'unknown'   — signed in, but Google could not be reached (offline).
+ */
+export async function checkDriveConnection(): Promise<{
+  state: 'connected' | 'lost' | 'off' | 'unknown';
+  account?: string | null;
+}> {
+  const store = loadSecureStore();
+  if (!store) return { state: 'off' };
+  const lost = async () => {
+    try {
+      return await store.getItemAsync(RECONNECT_KEY);
+    } catch {
+      return null;
+    }
+  };
+  const before = await lost();
+  if (before !== null) return { state: 'lost', account: before || null };
+  if (!(await isSignedIn())) return { state: 'off' };
+  if (await accessToken()) return { state: 'connected' };
+  const after = await lost();
+  return after !== null ? { state: 'lost', account: after || null } : { state: 'unknown' };
+}
+
+/** The user chose not to reconnect at all — stop asking. */
+export async function forgetLostConnection(): Promise<void> {
+  try {
+    await loadSecureStore()?.deleteItemAsync(RECONNECT_KEY);
+  } catch {
+    // Already gone.
+  }
+}
+
 /** Forget the connection. Does not revoke server-side — the user does that in
  *  their Google account settings, and saying so is the honest framing. */
 export async function signOut(): Promise<void> {
@@ -193,6 +258,8 @@ export async function signOut(): Promise<void> {
   try {
     await store.deleteItemAsync(REFRESH_TOKEN_KEY);
     await store.deleteItemAsync(ACCOUNT_LABEL_KEY);
+    // A deliberate disconnect is not a lost one (`loseConnection` sets it after this).
+    await store.deleteItemAsync(RECONNECT_KEY);
   } catch {
     // Already gone.
   }
@@ -298,6 +365,8 @@ export async function signIn(): Promise<{ ok: boolean; error?: string }> {
 
     await store.setItemAsync(REFRESH_TOKEN_KEY, tokens.refreshToken);
     cachedToken = tokens;
+    // Connected again: the "sign in again" prompt has done its job.
+    await store.deleteItemAsync(RECONNECT_KEY).catch(() => undefined);
 
     return { ok: true };
   } catch (error) {
@@ -343,7 +412,7 @@ async function accessToken(): Promise<string | null> {
        * 500 must NOT sign the user out — they will work again on their own,
        * and clearing the token would turn a blip into a re-authentication.
        */
-      if (isRefreshTokenDead(payload)) await signOut();
+      if (isRefreshTokenDead(payload)) await loseConnection();
       return null;
     }
 

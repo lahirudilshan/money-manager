@@ -202,6 +202,14 @@ export default function AiSettingsSheet() {
             />
             <Divider />
             <Point
+              tile={<Glyph icon="receipt" color={colors.gradientStart} gradient={ai} />}
+              title="Filling in forms from a photo"
+              body="In Fuel & vehicles, snap a garage bill or the fuel pump and AI fills in the parts, prices, litres and odometer. It can also match the maintenance schedule to your exact model. You check everything before it is saved, and it all works by hand too."
+              badge={enabled ? 'ON' : 'OFF'}
+              badgeColor={enabled ? colors.gradientStart : colors.inkSecondary}
+            />
+            <Divider />
+            <Point
               tile={<Glyph icon="chatbubble-ellipses" color={colors.gradientStart} gradient={ai} />}
               title="Ask AI"
               body={`The sparkle button on the dashboard and each section. AI answers from the parts of the app you allow below, and searches Google when needed. ${asked} asked today.`}
@@ -255,7 +263,7 @@ export default function AiSettingsSheet() {
             <Point
               tile={<Glyph icon="arrow-up" color={colors.accent} />}
               title="Sent to Google Gemini"
-              body="The report photos or PDFs you choose, and the person's name, age and known health conditions. With a question: only the parts you allowed above."
+              body="The report photos or PDFs you choose, and the person's name, age and known health conditions. A garage bill or fill-up photo you attach, or your vehicle's make, model and year, with its maintenance list. With a question: only the parts you allowed above."
             />
             <Divider />
             <Point

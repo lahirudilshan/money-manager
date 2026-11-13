@@ -11,7 +11,7 @@ import { FOCUS_LABEL, planDayIndex, type WeeklyPlan } from '~/features/health/lo
 import { starterQuestions } from '~/features/health/logic/askHealth';
 import { plainName, tidyValue } from '~/features/health/logic/plainTests';
 import { labStatusStyle, RangeBar } from './LabUi';
-import { categoryLook } from './healthCategory';
+import { categoryLook, ON_FILL } from './healthCategory';
 import type { PersonHealth } from './usePersonHealth';
 
 /**
@@ -40,7 +40,7 @@ function shortDate(date: Date): string {
  */
 
 export function AskAiBar({ personId, health }: { personId: string; health: PersonHealth }) {
-  const { colors, radius, space } = useTheme();
+  const { colors, radius, shadow, space } = useTheme();
   const router = useRouter();
   const open = (q?: string) =>
     router.push(`/ask?scope=health&person=${personId}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
@@ -57,21 +57,22 @@ export function AskAiBar({ personId, health }: { personId: string; health: Perso
         accessibilityLabel="Ask AI anything about your health"
         style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
       >
-        {/* A gradient rim, so the one AI entry reads as the way in. */}
-        <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ borderRadius: radius.pill, padding: 1.5 }}
-        >
+        {/*
+          A plain field with the gradient only on its send button. The gradient
+          rim around the whole bar spent the screen's one gradient on a border,
+          and made the bar louder than the record it sits above.
+        */}
           <Row
             gap={space.sm}
             style={{
-              paddingLeft: space.md,
+              paddingLeft: space.lg,
               paddingRight: 6,
               paddingVertical: 6,
               borderRadius: radius.pill,
               backgroundColor: colors.surface,
+              borderWidth: 1,
+              borderColor: colors.hairline,
+              ...shadow.card,
             }}
           >
             <Ionicons name="sparkles" size={18} color={colors.gradientStart} />
@@ -90,10 +91,9 @@ export function AskAiBar({ personId, health }: { personId: string; health: Perso
                 justifyContent: 'center',
               }}
             >
-              <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
+              <Ionicons name="arrow-up" size={18} color={ON_FILL} />
             </LinearGradient>
           </Row>
-        </LinearGradient>
       </Pressable>
 
       <ScrollView
@@ -310,7 +310,7 @@ function AreaTile({ category, off, onPress }: { category: string; off: number; o
             backgroundColor: look.color,
           }}
         >
-          <Ionicons name={look.icon} size={20} color="#FFFFFF" />
+          <Ionicons name={look.icon} size={20} color={ON_FILL} />
         </View>
         <View
           style={{
@@ -508,7 +508,7 @@ export function WeekPlanCard({ personId, plan }: { personId: string; plan: Weekl
                     <Ionicons
                       name={EXERCISE_ICON[d.exercise.kind]}
                       size={18}
-                      color={isToday ? '#FFFFFF' : rest ? colors.inkMuted : colors.completed}
+                      color={isToday ? ON_FILL : rest ? colors.inkMuted : colors.completed}
                     />
                   </View>
                 </View>

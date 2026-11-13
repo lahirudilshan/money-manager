@@ -3,8 +3,12 @@ import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, Switch, View } from 'react-native';
 import { BottomSheet, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { AmountField, Field, PillSelect } from '~/shared/components/forms';
-import { ImageUploader } from '~/shared/components/ImageUploader';
+import { DatePickerField } from '~/shared/components/DatePickerField';
+import { AiScanCard, type ReadOutcome } from '~/features/ai/components/AiScanCard';
+import { aiFill, aiFillBlocked } from '~/features/ai/services/aiFill';
+import { describeFuelRead, FUEL_PHOTO_FORM } from '~/features/fuel/logic/fuelPhoto';
 import { FUEL_STATIONS } from '~/features/fuel/logic/fuelStations';
+import { withMaintenanceCheck } from '~/features/fuel/services/maintenanceReminders';
 import { formatAmountInput, parseAmount } from '~/shared/lib/money';
 import { fuelEntryRepo } from '../../../src/db/repositories';
 import { useModalClose } from '~/shared/hooks/useModalClose';
@@ -68,6 +72,40 @@ export default function FuelEntryScreen() {
   const [isFullTank, setIsFullTank] = useState(existing?.isFullTank ?? true);
   const [missedPrevious, setMissedPrevious] = useState(existing?.missedPrevious ?? false);
   const [imageUri, setImageUri] = useState<string | null>(existing?.imageUri ?? null);
+  /*
+   * When the tank was filled — not when it was typed in. Fill-ups are often
+   * logged later from the slip, and every "km a day" and "due in ~8 weeks" is
+   * worked out from these dates.
+   */
+  const [filledAt, setFilledAt] = useState<Date>(() => existing?.filledAt ?? new Date());
+
+  /** Fill only what the photo shows; leave what the user typed for the rest. */
+  async function readPhoto(uri: string): Promise<ReadOutcome> {
+    const result = await aiFill({
+      form: FUEL_PHOTO_FORM,
+      documentKind: 'a fuel pump display, a fuel receipt, or a vehicle dashboard showing the odometer',
+      purpose: 'The form logs one fill-up at a fuel station.',
+      fileUri: uri,
+      live: {
+        title: 'Reading your fill-up photo',
+        subtitle: vehicle?.name ?? 'Fuel',
+        expectedSeconds: 12,
+        done: {
+          title: 'Fill-up read',
+          body: 'The odometer, litres and price are filled in. Open Dayly to check and save.',
+        },
+        failed: { title: 'Could not read the photo', body: 'Open Dayly to try again or type it in.' },
+      },
+    });
+    if (!result.ok) return result;
+    const v = result.values;
+    if (v.odometer != null) setOdometer(String(Math.round(v.odometer)));
+    if (v.litres != null) setLitres(String(Math.round(v.litres * 100) / 100));
+    if (v.total != null) setAmount(formatAmountInput(String(v.total)));
+    if (v.station) setStation(v.station);
+    if (v.date) setFilledAt(v.date);
+    return { ok: true, note: describeFuelRead(v) };
+  }
 
   const odometerValue = Number.parseFloat(odometer.replace(/,/g, ''));
   const litresValue = Number.parseFloat(litres);
@@ -90,14 +128,17 @@ export default function FuelEntryScreen() {
       imageUri,
     };
 
-    if (existing) {
-      // `filledAt` is deliberately not in `fields`: correcting a typed litre
-      // count should not restamp WHEN the tank was filled, and re-dating it
-      // would silently reorder the log.
-      fuelEntryRepo.update(existing.id, fields);
-    } else {
-      fuelEntryRepo.create({ ...fields, filledAt: new Date() });
-    }
+    // Bracketed by a maintenance check: a new odometer reading is what pushes
+    // the oil change or the brake fluid into "due", and that is announced now.
+    withMaintenanceCheck(vehicle, () => {
+      if (existing) {
+        // The date only moves when the user changes it, so a corrected litre
+        // count does not reorder the log.
+        fuelEntryRepo.update(existing.id, { ...fields, filledAt });
+      } else {
+        fuelEntryRepo.create({ ...fields, filledAt });
+      }
+    });
 
     state.refresh();
     router.back();
@@ -147,13 +188,34 @@ export default function FuelEntryScreen() {
         />
       }
     >
+      {/*
+        The photo comes first: one shot of the pump, the receipt or the dash
+        fills the fields below it (AI, when switched on). Without AI it is still
+        worth keeping — the odometer exists only on the dash at the moment of
+        filling, and a shot of it lets a mistyped reading be corrected months
+        on, where a wrong one silently corrupts every consumption figure after.
+      */}
+      <AiScanCard
+        label="PHOTO"
+        title="Snap the pump or the dash"
+        hint="AI fills in the odometer, litres, price and station from whatever the photo shows."
+        value={imageUri}
+        onChange={setImageUri}
+        onRead={readPhoto}
+        hasData={Boolean(odometer || litres || amount)}
+        deleteOnReplace={!editing}
+      />
+
+      <DatePickerField label="Filled on" value={filledAt} onChange={setFilledAt} />
+
       <Field
         label={`Odometer (${unit})`}
         value={odometer}
         onChangeText={setOdometer}
         placeholder="e.g. 47310"
         keyboardType="numeric"
-        autoFocus={!editing}
+        // The keyboard would cover the scan card; only jump to typing when AI is off.
+        autoFocus={!editing && aiFillBlocked() !== null}
       />
 
       <Field
@@ -182,16 +244,6 @@ export default function FuelEntryScreen() {
         onSelect={(key) => setStation(key === station ? '' : key)}
       />
 
-      {/*
-        A photo of the ODOMETER, not the receipt.
-
-        The reading is the one figure here that cannot be recovered later: the
-        litres and the price are on a slip and in the bank alert, but the
-        odometer exists only on the dash at the moment of filling. A shot of it
-        is what lets a mistyped reading be corrected months on — and a wrong
-        odometer silently corrupts every consumption figure after it.
-      */}
-      <ImageUploader label="Odometer photo" value={imageUri} onChange={setImageUri} />
 
       <Surface style={{ gap: space.md }}>
         <Row justify="space-between" align="center">

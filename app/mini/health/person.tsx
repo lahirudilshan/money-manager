@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { ON_FILL } from '~/features/health/components/healthCategory';
 import React, { useMemo, useState } from 'react';
 import { Alert, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -474,7 +475,7 @@ export default function HealthPersonForm() {
                 })}
               >
                 {selected ? (
-                  <Ionicons name="checkmark" size={20} color="#FFFFFF" />
+                  <Ionicons name="checkmark" size={20} color={ON_FILL} />
                 ) : null}
               </Pressable>
             );
@@ -530,7 +531,7 @@ export default function HealthPersonForm() {
                 >
                   <Text
                     variant="body"
-                    color={selected ? '#FFFFFF' : colors.inkSecondary}
+                    color={selected ? ON_FILL : colors.inkSecondary}
                     style={{ fontWeight: '700' }}
                   >
                     {group}

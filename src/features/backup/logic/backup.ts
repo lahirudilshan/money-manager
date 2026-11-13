@@ -115,6 +115,10 @@ export const SNAPSHOT_TABLES = [
   'vehicle_services',
   // References vehicle_services.
   'service_items',
+  // References vehicles and vehicle_services.
+  'maintenance_marks',
+  // References vehicles. Setup (this vehicle's schedule), not history.
+  'maintenance_overrides',
   /*
    * Health records — see the `health` part below.
    *
@@ -218,6 +222,11 @@ export const HISTORY_TABLES: readonly SnapshotTable[] = [
   'fuel_entries',
   'vehicle_services',
   'service_items',
+  /*
+   * With `vehicle_services`, necessarily: a mark may point at the visit it was
+   * ticked on, and a structure-only restore skips the visits.
+   */
+  'maintenance_marks',
   /*
    * Health EVENTS are history; health PEOPLE and their medicine list are not.
    *
@@ -656,7 +665,7 @@ export const BACKUP_PARTS: readonly BackupPart[] = [
     key: 'vehicles',
     label: 'Vehicles',
     hint: 'Vehicles and their service records',
-    tables: ['vehicles', 'vehicle_services', 'service_items'],
+    tables: ['vehicles', 'vehicle_services', 'service_items', 'maintenance_marks', 'maintenance_overrides'],
   },
   {
     key: 'rules',
@@ -841,6 +850,8 @@ const TABLE_LABELS: Record<string, string> = {
   vehicles: 'Vehicles',
   vehicle_services: 'Service visits',
   service_items: 'Service items',
+  maintenance_marks: 'Maintenance done',
+  maintenance_overrides: 'Maintenance schedule',
   merchant_rules: 'Learned merchants',
   transactions: 'Transactions',
   subcategory_states: 'Monthly bill states',

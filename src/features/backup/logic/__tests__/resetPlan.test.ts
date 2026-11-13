@@ -65,6 +65,8 @@ describe('erase records, keep setup', () => {
     const setup = new Set([
       'settings', 'cards', 'houses', 'loans', 'vehicles', 'categories', 'incomes',
       'merchant_rules', 'subcategories', 'health_people', 'health_medicines',
+      // A vehicle's own schedule — setup, like the vehicle itself.
+      'maintenance_overrides',
       'buddy_loans', 'buddy_repayments', 'tracked_items', 'doc_folders', 'doc_files',
     ]);
     const records = new Set(RECORD_TABLES);

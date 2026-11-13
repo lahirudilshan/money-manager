@@ -115,7 +115,7 @@ export const RESET_AREAS: readonly ResetArea[] = [
     label: 'Vehicles',
     hint: 'Vehicles, fuel and service records',
     icon: 'car-outline',
-    tables: ['vehicles', 'vehicle_services', 'service_items', 'fuel_entries'],
+    tables: ['vehicles', 'vehicle_services', 'service_items', 'maintenance_marks', 'maintenance_overrides', 'fuel_entries'],
   },
   {
     key: 'health',
@@ -182,6 +182,7 @@ export const RECORD_TABLES: readonly string[] = [
   ...MONEY_RECORDS,
   'vehicle_services',
   'service_items',
+  'maintenance_marks',
   'health_visits',
   'health_documents',
   'health_readings',

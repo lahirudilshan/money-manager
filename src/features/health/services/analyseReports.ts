@@ -376,7 +376,7 @@ const PHOTO_MAX_SIDE = 2048;
  * or null to send the original (a build without the native module, or any
  * failure — the original always works, only slower).
  */
-async function shrinkPhoto(path: string): Promise<string | null> {
+export async function shrinkPhoto(path: string): Promise<string | null> {
   // Probe before requiring: a missing native module throws at import time,
   // outside any try/catch here (see googleDrive.ts).
   const registry = (globalThis as { expo?: { modules?: Record<string, unknown> } }).expo?.modules;

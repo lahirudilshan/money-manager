@@ -3,7 +3,7 @@ import { hasAcceptedTerms } from '~/features/terms/components/termsStore';
 import * as Linking from 'expo-linking';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useState } from 'react';
-import { AppState, ScrollView, View } from 'react-native';
+import { Alert, AppState, ScrollView, View } from 'react-native';
 import Constants from 'expo-constants';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -13,7 +13,8 @@ import { ThemeProvider, useTheme } from '~/shared/theme/ThemeProvider';
 import { extractSmsFromUrl, looksTruncated } from '~/features/sms/logic/smsIntakeUrl';
 import { logSmsIntake } from '~/features/sms/logic/smsIntakeLog';
 import { selectCategoryViews, selectSavingPlans, useAppStore } from '../src/store/useAppStore';
-import { syncCategoryReminders } from '~/shared/lib/notifications';
+import { onNotificationRoute, syncCategoryReminders } from '~/shared/lib/notifications';
+import { syncAllMaintenanceReminders } from '~/features/fuel/services/maintenanceReminders';
 import { refreshBankRates } from '~/features/rates/logic/bankRatesApi';
 import { refreshFxRates } from '~/features/rates/logic/fxApi';
 import { resolveUsdRate } from '~/features/rates/logic/bankRates';
@@ -27,7 +28,9 @@ import {
   registerAttachmentGate,
 } from '~/shared/lib/attachmentGate';
 import {
+  checkDriveConnection,
   connectedAccount,
+  forgetLostConnection,
   isDriveAvailable,
   isSignedIn,
   signIn,
@@ -54,11 +57,77 @@ async function runDriveHousekeeping(): Promise<void> {
     .catch(() => 'failed' as const);
 }
 
+const DRIVE_RECONNECT_SNOOZED_UNTIL = 'drive_reconnect_snoozed_until';
+const DAY_MS = 86_400_000;
+let reconnectAsking = false;
+
+/**
+ * Google ended the Drive sign-in (it expired or was revoked): say so when the
+ * app opens, with the button that fixes it.
+ *
+ * Before this, an expired sign-in only showed as a console warning — backups
+ * and sync just stopped, and the user found out when they needed a restore.
+ * Asked at launch and on every return to the app, at most once a session
+ * while the alert is up, and not again for a day after "Not now". A user who
+ * disconnected Drive on purpose is never asked (see `loseConnection`).
+ */
+async function promptDriveReconnect(): Promise<void> {
+  if (reconnectAsking || !isDriveAvailable()) return;
+  if (isSnoozed(settingsRepo.get(DRIVE_RECONNECT_SNOOZED_UNTIL), Date.now())) return;
+  const { state, account } = await checkDriveConnection();
+  if (state !== 'lost') return;
+
+  reconnectAsking = true;
+  const done = () => {
+    reconnectAsking = false;
+  };
+  Alert.alert(
+    'Sign in to Google again',
+    `Your Google sign-in${account ? ` (${account})` : ''} has expired, so backups and sync to Drive have stopped. Sign in again to turn them back on — nothing on this phone is lost.`,
+    [
+      {
+        text: 'Not now',
+        style: 'cancel',
+        onPress: () => {
+          settingsRepo.set(DRIVE_RECONNECT_SNOOZED_UNTIL, String(Date.now() + DAY_MS));
+          done();
+        },
+      },
+      {
+        text: 'Stop using Drive',
+        style: 'destructive',
+        onPress: () => {
+          void forgetLostConnection();
+          done();
+        },
+      },
+      {
+        text: 'Sign in',
+        onPress: () => {
+          void (async () => {
+            const result = await signIn();
+            done();
+            if (result.ok) {
+              // Catch up straight away: the backup that was missed.
+              void runDriveHousekeeping();
+            } else if (result.error && !/cancel/i.test(result.error)) {
+              Alert.alert('Could not sign in', result.error);
+            }
+          })();
+        },
+      },
+    ],
+    { cancelable: false },
+  );
+}
+
 // The daily backup is checked on every return to the app, not only at cold
 // launch: an iPhone keeps an app suspended for days, so "at launch" alone
 // could mean a week without a backup.
 AppState.addEventListener('change', (state) => {
-  if (state === 'active') void runDriveHousekeeping();
+  if (state === 'active') {
+    void runDriveHousekeeping();
+  }
 });
 registerAttachmentGate({
   async shouldOfferDrive() {
@@ -263,6 +332,27 @@ function RootNavigator() {
     return () => cancelAnimationFrame(handle);
   }, [ready, appLockEnabled, unlockedOnce]);
 
+  // Google ended the Drive sign-in? Ask once the app is showing (after any
+  // app lock), and again on each return to the app — see promptDriveReconnect.
+  useEffect(() => {
+    if (!contentReady) return;
+    const first = setTimeout(() => void promptDriveReconnect(), 1_500);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') setTimeout(() => void promptDriveReconnect(), 1_500);
+    });
+    return () => {
+      clearTimeout(first);
+      sub.remove();
+    };
+  }, [contentReady]);
+
+  // A tapped reminder opens what it is about — the maintenance schedule, the
+  // draft queue. Only once the app is ready, so the route tree exists.
+  useEffect(() => {
+    if (!contentReady) return;
+    return onNotificationRoute((route) => router.push(route as never));
+  }, [contentReady, router]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -292,9 +382,11 @@ function RootNavigator() {
             dueDay: plan.plan.dueDate.getDate(),
           }));
 
-        void syncCategoryReminders([...reminders, ...planReminders]).catch((error) =>
-          console.warn('Reminder sync skipped:', error),
-        );
+        void syncCategoryReminders([...reminders, ...planReminders])
+          .catch((error) => console.warn('Reminder sync skipped:', error))
+          // After, not alongside: the funding sync is what asks for permission,
+          // and the maintenance sync quietly does nothing without it.
+          .then(() => syncAllMaintenanceReminders(useAppStore.getState().vehicles));
 
         /*
          * Refresh the per-bank USD rates, in the background.
@@ -685,6 +777,11 @@ function RootNavigator() {
           <Stack.Screen name="mini/fuel/vehicle" />
           <Stack.Screen name="mini/fuel/history" />
           <Stack.Screen name="mini/fuel/services" />
+          <Stack.Screen name="mini/fuel/maintenance" />
+          <Stack.Screen name="mini/fuel/maintenance-item" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/fuel/service-visit" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/fuel/model-schedule" options={SHEET_ROUTE} />
+          <Stack.Screen name="mini/fuel/vehicle-edit" options={SHEET_ROUTE} />
           {/*
             Health add-on — see core/miniApps.ts. Same reasoning as fuel above:
             pushed screens rather than sheets, because this is a place the user

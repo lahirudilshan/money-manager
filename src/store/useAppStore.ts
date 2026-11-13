@@ -161,6 +161,7 @@ import {
   stateRepo,
   subcategoryRepo,
   vehicleRepo,
+  maintenanceMarkRepo,
   healthPersonRepo,
   transactionRepo,
   transactionSplitRepo,
@@ -168,6 +169,7 @@ import {
 } from '../db/repositories';
 import { seedFuelSample } from '~/features/fuel/logic/seedFuel';
 import { seedHealthSample } from '~/features/health/logic/seedHealth';
+import { syncAllMaintenanceReminders } from '~/features/fuel/services/maintenanceReminders';
 import {
   cancelAllReminders,
   notifyDraftsImported,
@@ -177,6 +179,8 @@ import {
   LOAN_LINE_ICON,
   supportsSavingPlan,
   type NewVehicle,
+  type MaintenanceMark,
+  type NewMaintenanceMark,
   type Vehicle,
   type HealthPerson,
   type TrackedItem,
@@ -405,6 +409,9 @@ export interface AppState {
   addVehicle: (input: Omit<NewVehicle, 'id'>) => Vehicle;
   updateVehicle: (id: string, patch: Partial<NewVehicle>) => void;
   deleteVehicle: (id: string) => void;
+  /** "Done here" / "does not apply" against the maintenance schedule. */
+  addMaintenanceMark: (input: Omit<NewMaintenanceMark, 'id'>) => MaintenanceMark;
+  removeMaintenanceMark: (id: string) => void;
   /**
    * Merge this phone's data with the other paired device, through Drive.
    *
@@ -1771,6 +1778,19 @@ export const useAppStore = create<AppState>((set, get, api) => ({
   deleteVehicle(id) {
     vehicleRepo.remove(id);
     get().refreshMiniAppData();
+  },
+
+  addMaintenanceMark(input) {
+    const created = maintenanceMarkRepo.create(input);
+    get().refreshMiniAppData();
+    void syncAllMaintenanceReminders(get().vehicles);
+    return created;
+  },
+
+  removeMaintenanceMark(id) {
+    maintenanceMarkRepo.remove(id);
+    get().refreshMiniAppData();
+    void syncAllMaintenanceReminders(get().vehicles);
   },
 
   addHealthPerson(input) {

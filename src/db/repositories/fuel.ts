@@ -1,15 +1,21 @@
 /** Fuel mini-app: vehicles, fill-ups and servicing. */
 
-import { asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '~/db/client';
 import {
   fuelEntries,
   healthPeople,
+  maintenanceMarks,
+  maintenanceOverrides,
   serviceItems,
   vehicleServices,
   vehicles,
   type FuelEntry,
+  type MaintenanceMark,
+  type MaintenanceOverride,
+  type NewMaintenanceOverride,
   type NewFuelEntry,
+  type NewMaintenanceMark,
   type NewServiceItem,
   type NewVehicle,
   type NewVehicleService,
@@ -168,8 +174,78 @@ export const serviceItemRepo = {
       .get();
   },
 
+  update(id: string, patch: Partial<NewServiceItem>): void {
+    db.update(serviceItems)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(serviceItems.id, id))
+      .run();
+  },
+
   remove(id: string): void {
     db.delete(serviceItems).where(eq(serviceItems.id, id)).run();
+  },
+};
+
+/**
+ * "Done here" / "does not apply" facts against the maintenance schedule — see
+ * `maintenanceMarks` in the schema and features/fuel/logic/maintenance.ts.
+ */
+export const maintenanceMarkRepo = {
+  byVehicle(vehicleId: string): MaintenanceMark[] {
+    return db
+      .select()
+      .from(maintenanceMarks)
+      .where(eq(maintenanceMarks.vehicleId, vehicleId))
+      .orderBy(desc(maintenanceMarks.doneAt))
+      .all();
+  },
+
+  create(input: Omit<NewMaintenanceMark, 'id'> & { id?: string }): MaintenanceMark {
+    return db
+      .insert(maintenanceMarks)
+      .values({ ...input, id: input.id ?? createId() })
+      .returning()
+      .get();
+  },
+
+  remove(id: string): void {
+    db.delete(maintenanceMarks).where(eq(maintenanceMarks.id, id)).run();
+  },
+};
+
+/** This vehicle's own changes to the maintenance schedule — see `maintenanceOverrides`. */
+export const maintenanceOverrideRepo = {
+  byVehicle(vehicleId: string): MaintenanceOverride[] {
+    return db
+      .select()
+      .from(maintenanceOverrides)
+      .where(eq(maintenanceOverrides.vehicleId, vehicleId))
+      .all();
+  },
+
+  /** One row per item: replaces whatever was there for this key. */
+  put(
+    vehicleId: string,
+    itemKey: string,
+    values: Omit<NewMaintenanceOverride, 'id' | 'vehicleId' | 'itemKey'>,
+  ): void {
+    db.delete(maintenanceOverrides)
+      .where(and(eq(maintenanceOverrides.vehicleId, vehicleId), eq(maintenanceOverrides.itemKey, itemKey)))
+      .run();
+    db.insert(maintenanceOverrides)
+      .values({ ...values, id: createId(), vehicleId, itemKey })
+      .run();
+  },
+
+  remove(vehicleId: string, itemKey: string): void {
+    db.delete(maintenanceOverrides)
+      .where(and(eq(maintenanceOverrides.vehicleId, vehicleId), eq(maintenanceOverrides.itemKey, itemKey)))
+      .run();
+  },
+
+  /** Back to Dayly's defaults for this vehicle. */
+  clear(vehicleId: string): void {
+    db.delete(maintenanceOverrides).where(eq(maintenanceOverrides.vehicleId, vehicleId)).run();
   },
 };
 

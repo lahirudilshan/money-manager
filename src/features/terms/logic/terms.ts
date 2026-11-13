@@ -5,7 +5,7 @@
  * (a new kind of data leaves the phone, a new AI use) asks everyone to read
  * and agree again, instead of quietly assuming the old "yes" covers it.
  */
-export const TERMS_VERSION = 3;
+export const TERMS_VERSION = 4;
 
 export const TERMS_SETTING = 'terms_accepted';
 
@@ -53,10 +53,12 @@ export const TERMS: TermsSection[] = [
     key: 'ai',
     icon: 'sparkles-outline',
     title: 'AI is your choice',
-    summary: 'Google Gemini can explain your lab reports and answer your questions. Only when you ask, with only what you allow.',
+    summary: 'Google Gemini can explain your lab reports, fill in forms from a photo (garage bills, fill-ups) and answer your questions. Only when you ask, with only what you allow.',
     points: [
       'When you ask a question, only the parts you allowed are sent with it: health records, money totals, or vehicles, trackers and documents. Each has its own switch.',
       'Money is sent as totals only — never account or card numbers, SMS text or notes.',
+      'A garage invoice or fill-up photo is sent only when AI is on and you attach one, to fill in the form, with your vehicle type and its maintenance list.',
+      'Matching the maintenance schedule to your model sends only the make, model, year and engine you typed, with the maintenance list.',
       'Some questions are also searched on Google.',
       'It is free. Dayly never turns on billing.',
       'You can get your own free Gemini with your Google email.',

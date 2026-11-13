@@ -37,6 +37,8 @@ export function ImageUploader({
   onViewFullScreen,
   /** Offer a PDF from Files as well as a photo — a receipt that arrived by email. */
   allowPdf = true,
+  /** Leave out the label, for a caller that heads the slot itself. */
+  hideLabel = false,
 }: {
   label?: string;
   value: string | null;
@@ -45,68 +47,14 @@ export function ImageUploader({
   size?: number;
   onViewFullScreen?: () => void;
   allowPdf?: boolean;
+  hideLabel?: boolean;
 }) {
   const { colors, radius, space } = useTheme();
-  const [busy, setBusy] = React.useState(false);
-  const drive = useDriveGate();
-
-  /** Swap in a newly saved file, then let the Drive pass pick it up. */
-  function commit(copied: string) {
-    // Replacing leaves the old file orphaned on disk unless it is cleaned up.
-    if (value && deleteOnReplace) deletePersistedImage(value);
-    onChange(localRef(copied));
-    attachmentGate().afterAttach();
-  }
-
-  async function pickPdf() {
-    await drive.ensureDriveChoice();
-    const picked = await pickPdfFiles({ multiple: false });
-    if (!picked.ok) {
-      if (picked.error) Alert.alert('Could not open Files', picked.error);
-      return;
-    }
-    const file = picked.files[0];
-    if (!file) return;
-    setBusy(true);
-    try {
-      commit(await persistPickedFile(file.uri, 'pdf'));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function pick(source: 'camera' | 'library') {
-    // Asked once, before the first attachment — see DriveConnectSheet.
-    await drive.ensureDriveChoice();
-
-    const permission =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return;
-
-    const result =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ quality: 0.6 })
-        : await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
-    if (result.canceled || !result.assets[0]) return;
-
-    setBusy(true);
-    try {
-      const copied = await persistPickedImage(result.assets[0].uri);
-      /*
-       * Stored as a REFERENCE, not a bare path.
-       *
-       * The upload to Drive happens afterwards, in the background — see
-       * `imageSync.ts`. Writing the reference form here is what lets that pass
-       * find this row later and record the id it gets back, without the form
-       * ever waiting on a network call.
-       */
-      commit(copied);
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { busy, pick, pickPdf, remove, driveSheet } = useAttachmentPicking({
+    value,
+    onChange,
+    deleteOnReplace,
+  });
 
   /*
    * Three empty slots must still fit one row on a narrow phone, so they are
@@ -124,15 +72,10 @@ export function ImageUploader({
     if (resolved) void openAttachment(resolved);
   }
 
-  function remove() {
-    if (value && deleteOnReplace) deletePersistedImage(value);
-    onChange(null);
-  }
-
   return (
     <View style={{ gap: space.sm }}>
-      <Label>{label.toUpperCase()}</Label>
-      {drive.sheet}
+      {hideLabel ? null : <Label>{label.toUpperCase()}</Label>}
+      {driveSheet}
 
       {value ? (
         <View
@@ -401,4 +344,88 @@ function SlotButton({
       )}
     </Pressable>
   );
+}
+
+/**
+ * Taking, choosing and removing an attachment — the behaviour behind
+ * `ImageUploader`, for a caller that draws its own control (the AI scan card).
+ * Render `driveSheet` somewhere in the tree: it is the one-time "keep photos in
+ * Drive?" question asked before the first attachment.
+ */
+export function useAttachmentPicking({
+  value,
+  onChange,
+  deleteOnReplace = true,
+}: {
+  value: string | null;
+  onChange: (uri: string | null) => void;
+  deleteOnReplace?: boolean;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const drive = useDriveGate();
+
+  /** Swap in a newly saved file, then let the Drive pass pick it up. */
+  function commit(copied: string) {
+    // Replacing leaves the old file orphaned on disk unless it is cleaned up.
+    if (value && deleteOnReplace) deletePersistedImage(value);
+    onChange(localRef(copied));
+    attachmentGate().afterAttach();
+  }
+
+  async function pickPdf() {
+    await drive.ensureDriveChoice();
+    const picked = await pickPdfFiles({ multiple: false });
+    if (!picked.ok) {
+      if (picked.error) Alert.alert('Could not open Files', picked.error);
+      return;
+    }
+    const file = picked.files[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      commit(await persistPickedFile(file.uri, 'pdf'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pick(source: 'camera' | 'library') {
+    // Asked once, before the first attachment — see DriveConnectSheet.
+    await drive.ensureDriveChoice();
+
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+
+    const result =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ quality: 0.6 })
+        : await ImagePicker.launchImageLibraryAsync({ quality: 0.6 });
+    if (result.canceled || !result.assets[0]) return;
+
+    setBusy(true);
+    try {
+      const copied = await persistPickedImage(result.assets[0].uri);
+      /*
+       * Stored as a REFERENCE, not a bare path.
+       *
+       * The upload to Drive happens afterwards, in the background — see
+       * `imageSync.ts`. Writing the reference form here is what lets that pass
+       * find this row later and record the id it gets back, without the form
+       * ever waiting on a network call.
+       */
+      commit(copied);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function remove() {
+    if (value && deleteOnReplace) deletePersistedImage(value);
+    onChange(null);
+  }
+
+  return { busy, pick, pickPdf, remove, driveSheet: drive.sheet };
 }

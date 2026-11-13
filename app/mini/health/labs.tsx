@@ -22,7 +22,7 @@ import {
   LabStatusPill,
   labStatusStyle,
 } from '~/features/health/components/LabUi';
-import { categoryLook } from '~/features/health/components/healthCategory';
+import { ON_FILL, categoryLook } from '~/features/health/components/healthCategory';
 import { normalRangeText } from '~/features/health/logic/healthMetrics';
 import { plainName } from '~/features/health/logic/plainTests';
 import { AnalyseRunBanner } from '~/features/health/components/AnalyseRunBanner';
@@ -346,7 +346,7 @@ function CategoryCard({
             backgroundColor: look.color,
           }}
         >
-          <Ionicons name={look.icon} size={22} color="#FFFFFF" />
+          <Ionicons name={look.icon} size={22} color={ON_FILL} />
         </View>
         <View style={{ flex: 1, gap: 2 }}>
           <Text variant="title" style={{ fontSize: 19 }}>

@@ -32,3 +32,20 @@ const LOOKS: Record<string, CategoryLook> = {
 export function categoryLook(category: string): CategoryLook {
   return LOOKS[category] ?? { short: category || 'Other', reportName: 'Lab test', title: category || 'Other tests', icon: 'ellipsis-horizontal-circle', color: '#475569' };
 }
+
+/**
+ * The health screens' own kinds, each pinned to a design-system category
+ * colour so no screen invents a hex: a reading is pink, a report or photo is
+ * violet, blood is red, weight is teal. Used as a solid fill behind a white
+ * icon, or as an icon tint — never as body text.
+ */
+export const HEALTH_TINT = {
+  reading: '#DB2777',
+  report: '#7C3AED',
+  blood: '#DC2626',
+  weight: '#0D9488',
+  waist: '#7C3AED',
+} as const;
+
+/** White type on a filled category colour — the same in both themes. */
+export const ON_FILL = '#FFFFFF';

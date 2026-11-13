@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { HEALTH_TINT } from '~/features/health/components/healthCategory';
 import React, { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -98,7 +99,7 @@ export default function HealthDocumentForm() {
       onClose={closeModal}
       title={existing ? 'Edit document' : 'Add a document'}
       icon="camera-outline"
-      iconColor={'#8B5CF6'}
+      iconColor={HEALTH_TINT.report}
       footer={
         <GradientButton
           label={existing ? 'Save changes' : 'Save document'}

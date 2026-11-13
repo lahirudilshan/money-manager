@@ -29,6 +29,8 @@ vi.mock('expo-notifications', () => ({
   requestPermissionsAsync: vi.fn().mockResolvedValue({ granted: true }),
   setNotificationChannelAsync,
   cancelAllScheduledNotificationsAsync: vi.fn().mockResolvedValue(undefined),
+  getAllScheduledNotificationsAsync: vi.fn().mockResolvedValue([]),
+  cancelScheduledNotificationAsync: vi.fn().mockResolvedValue(undefined),
   scheduleNotificationAsync,
   AndroidImportance: { DEFAULT: 3 },
   SchedulableTriggerInputTypes: { DATE: 'date' },

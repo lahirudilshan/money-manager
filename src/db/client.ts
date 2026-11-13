@@ -350,6 +350,16 @@ CREATE TABLE IF NOT EXISTS category_states (
     color TEXT NOT NULL DEFAULT '#0E9F6E',
     icon TEXT NOT NULL DEFAULT 'car-sport-outline',
     image_uri TEXT,
+    condition TEXT,
+    acquired_odometer REAL,
+    acquired_at INTEGER,
+    make TEXT,
+    model TEXT,
+    year INTEGER,
+    engine TEXT,
+    transmission TEXT,
+    service_interval_km REAL,
+    service_interval_months INTEGER,
     is_active INTEGER NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
@@ -390,6 +400,7 @@ CREATE TABLE IF NOT EXISTS category_states (
     next_due_odometer REAL,
     next_due_date INTEGER,
     note TEXT,
+    image_uri TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
@@ -405,12 +416,49 @@ CREATE TABLE IF NOT EXISTS category_states (
     kind TEXT NOT NULL DEFAULT 'part',
     note TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    item_key TEXT,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
     deleted_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS service_items_service_idx ON service_items(service_id)`,
+  `CREATE TABLE IF NOT EXISTS maintenance_marks (
+    id TEXT PRIMARY KEY NOT NULL,
+    vehicle_id TEXT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    item_key TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'done',
+    done_at INTEGER NOT NULL,
+    odometer REAL,
+    service_id TEXT REFERENCES vehicle_services(id) ON DELETE SET NULL,
+    note TEXT,
+    brand TEXT,
+    spec TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS maintenance_marks_vehicle_idx ON maintenance_marks(vehicle_id, item_key)`,
+  `CREATE TABLE IF NOT EXISTS maintenance_overrides (
+    id TEXT PRIMARY KEY NOT NULL,
+    vehicle_id TEXT NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+    item_key TEXT NOT NULL,
+    title TEXT,
+    item_group TEXT,
+    action TEXT,
+    every_km REAL,
+    every_months INTEGER,
+    applies INTEGER NOT NULL DEFAULT 1,
+    recommended TEXT,
+    detail TEXT,
+    source TEXT NOT NULL DEFAULT 'user',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+    -- Tombstone for sync; NULL means live. See the timestamps helper in schema.ts.
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS maintenance_overrides_vehicle_idx ON maintenance_overrides(vehicle_id)`,
   // Health mini-app — see core/miniApps.ts. Opt-in, so these stay empty on a
   // device that never enables it. Column comments live in schema.ts.
   `CREATE TABLE IF NOT EXISTS health_people (
@@ -1340,7 +1388,49 @@ function ensureAdditiveColumns(): void {
   const hasVehicles = expoDb.getFirstSync(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='vehicles'`,
   );
-  if (hasVehicles) ensureColumn('vehicles', 'image_uri', 'image_uri TEXT');
+  if (hasVehicles) {
+    ensureColumn('vehicles', 'image_uri', 'image_uri TEXT');
+    // Maintenance schedule baseline — see `vehicles.condition`.
+    ensureColumn('vehicles', 'condition', 'condition TEXT');
+    ensureColumn('vehicles', 'acquired_odometer', 'acquired_odometer REAL');
+    ensureColumn('vehicles', 'acquired_at', 'acquired_at INTEGER');
+    // The exact model, for the owner's-manual lookup.
+    ensureColumn('vehicles', 'make', 'make TEXT');
+    ensureColumn('vehicles', 'model', 'model TEXT');
+    ensureColumn('vehicles', 'year', 'year INTEGER');
+    ensureColumn('vehicles', 'engine', 'engine TEXT');
+    ensureColumn('vehicles', 'transmission', 'transmission TEXT');
+    // The vehicle's own service interval — see `vehicles.serviceIntervalKm`.
+    ensureColumn('vehicles', 'service_interval_km', 'service_interval_km REAL');
+    ensureColumn('vehicles', 'service_interval_months', 'service_interval_months INTEGER');
+  }
+
+  const hasMaintenanceMarks = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='maintenance_marks'`,
+  );
+  const hasServices = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='vehicle_services'`,
+  );
+  if (hasServices) {
+    // The invoice photo and the per-line schedule mapping — see schema.ts.
+    ensureColumn('vehicle_services', 'image_uri', 'image_uri TEXT');
+    ensureColumn('service_items', 'item_key', 'item_key TEXT');
+  }
+
+  const hasOverrides = expoDb.getFirstSync(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='maintenance_overrides'`,
+  );
+  if (hasOverrides) {
+    // A dev build briefly created this table with a column named "group" (an
+    // SQL keyword) before it became item_group; that table needs the column.
+    ensureColumn('maintenance_overrides', 'item_group', 'item_group TEXT');
+  }
+
+  if (hasMaintenanceMarks) {
+    // The part that was fitted — see `maintenanceMarks.brand`.
+    ensureColumn('maintenance_marks', 'brand', 'brand TEXT');
+    ensureColumn('maintenance_marks', 'spec', 'spec TEXT');
+  }
 
   const hasFuelEntries = expoDb.getFirstSync(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='fuel_entries'`,
@@ -1424,6 +1514,8 @@ const SYNCED_TABLES = [
   'fuel_entries',
   'vehicle_services',
   'service_items',
+  'maintenance_marks',
+  'maintenance_overrides',
   'health_people',
   'health_visits',
   'health_medicines',

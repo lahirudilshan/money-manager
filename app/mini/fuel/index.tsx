@@ -5,8 +5,10 @@ import { Image, Pressable, ScrollView, View } from 'react-native';
 import { Divider, Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { Screen } from '~/shared/components/Screen';
 import { fuelStats, litresPer100, tankWindows, type FuelFill } from '~/features/fuel/logic/fuel';
+import { describeDue } from '~/features/fuel/logic/maintenance';
+import { vehicleMaintenancePlan } from '~/features/fuel/services/maintenanceReminders';
 import { formatMoney } from '~/shared/lib/money';
-import { fuelEntryRepo, vehicleServiceRepo } from '../../../src/db/repositories';
+import { fuelEntryRepo } from '~/db/repositories';
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
@@ -46,8 +48,8 @@ export default function FuelHome() {
     }));
   }, [vehicle, state.vehicles]);
 
-  const services = useMemo(
-    () => (vehicle ? vehicleServiceRepo.byVehicle(vehicle.id) : []),
+  const maintenance = useMemo(
+    () => (vehicle ? vehicleMaintenancePlan(vehicle) : null),
     [vehicle, state.vehicles],
   );
 
@@ -248,6 +250,61 @@ export default function FuelHome() {
       </Surface>
 
       {/*
+        Maintenance, right under the headline — but only the items that need
+        doing. An "all on track" card would be a permanent fixture nobody reads;
+        the Manage row below always reaches the full schedule.
+      */}
+      {maintenance && (maintenance.counts.overdue > 0 || maintenance.counts.soon > 0) ? (
+        <Pressable
+          onPress={() => router.push(`/mini/fuel/maintenance?vehicle=${vehicle?.id}`)}
+          accessibilityRole="button"
+          accessibilityLabel="Open maintenance schedule"
+        >
+          <Surface
+            style={{
+              gap: space.sm,
+              borderWidth: 1,
+              borderColor: maintenance.counts.overdue > 0 ? colors.danger : colors.pending,
+            }}
+          >
+            <Row gap={space.sm} align="center">
+              <Ionicons
+                name="warning-outline"
+                size={17}
+                color={maintenance.counts.overdue > 0 ? colors.danger : colors.pending}
+              />
+              <Text variant="bodyStrong" style={{ flex: 1 }}>
+                {[
+                  maintenance.counts.overdue > 0 ? `${maintenance.counts.overdue} overdue` : null,
+                  maintenance.counts.soon > 0 ? `${maintenance.counts.soon} due soon` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+              <Ionicons name="chevron-forward" size={15} color={colors.inkMuted} />
+            </Row>
+            {maintenance.items
+              .filter((e) => e.status === 'overdue' || e.status === 'soon')
+              .slice(0, 3)
+              .map((e) => (
+                <Row key={e.item.key} justify="space-between" gap={space.sm}>
+                  <Text variant="small" style={{ flex: 1 }} numberOfLines={1}>
+                    {e.item.title}
+                  </Text>
+                  <Text
+                    variant="caption"
+                    color={e.status === 'overdue' ? colors.danger : colors.pending}
+                    numberOfLines={1}
+                  >
+                    {describeDue(e, unit)}
+                  </Text>
+                </Row>
+              ))}
+          </Surface>
+        </Pressable>
+      ) : null}
+
+      {/*
         Running costs, led by the one figure that makes fuel comparable to any
         other spending: what a kilometre costs.
 
@@ -398,10 +455,10 @@ export default function FuelHome() {
           />
           <Divider style={{ marginHorizontal: space.lg }} />
           <ManageRow
-            icon="build-outline"
-            label="Service log"
-            count={services.length}
-            onPress={() => router.push(`/mini/fuel/services?vehicle=${vehicle?.id}`)}
+            icon="construct-outline"
+            label="Maintenance & services"
+            count={maintenance ? maintenance.counts.overdue + maintenance.counts.soon : 0}
+            onPress={() => router.push(`/mini/fuel/maintenance?vehicle=${vehicle?.id}`)}
           />
           <Divider style={{ marginHorizontal: space.lg }} />
           <ManageRow

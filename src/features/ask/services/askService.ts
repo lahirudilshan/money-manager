@@ -10,6 +10,7 @@ import {
 import { askAllowance, recordQuestion } from '~/features/health/services/askHealth';
 import { isAiEnabled } from '~/features/health/services/aiSettings';
 import { generateAnswerText, isAiAvailable } from '~/features/health/services/firebaseAi';
+import { withLiveWork } from '~/shared/lib/liveWork';
 import { userGeminiKey } from '~/features/health/services/userGemini';
 import { askInstruction, SCOPE_AREAS, type AskArea, type AskScope } from '~/features/ask/logic/askScope';
 import { buildAskContext } from './askContext';
@@ -62,13 +63,29 @@ export async function askQuestion(input: {
 
   const route = routeQuestion(input.question);
   const context = buildAskContext(input.scope, { personId: input.personId });
-  const result = await generateAnswerText({
-    models: route.models,
-    systemInstruction: askInstruction(input.scope, context.areas),
-    prompt: buildAskPrompt({ context: context.text, earlier: input.earlier, question: input.question }),
-    web: route.web,
-    onPartial: input.onPartial ? (text) => input.onPartial?.(cleanAnswer(text)) : undefined,
-  });
+  // Keeps answering if the phone is locked or the user switches apps, with a
+  // notification carrying the start of the answer — see shared/lib/liveWork.ts.
+  const shortQuestion = input.question.length > 60 ? `${input.question.slice(0, 57)}…` : input.question;
+  const result = await withLiveWork(
+    {
+      title: 'Answering your question',
+      subtitle: shortQuestion,
+      expectedSeconds: route.web ? 20 : 10,
+      done: (r) =>
+        r.ok
+          ? { title: 'Your answer is ready', body: previewOf(cleanAnswer(r.text)) }
+          : { title: 'Could not answer', body: 'Open Dayly to ask again.' },
+      failed: { title: 'Could not answer', body: 'Open Dayly to ask again.' },
+    },
+    () =>
+      generateAnswerText({
+        models: route.models,
+        systemInstruction: askInstruction(input.scope, context.areas),
+        prompt: buildAskPrompt({ context: context.text, earlier: input.earlier, question: input.question }),
+        web: route.web,
+        onPartial: input.onPartial ? (text) => input.onPartial?.(cleanAnswer(text)) : undefined,
+      }),
+  );
   if (!result.ok) return result;
 
   recordQuestion();
@@ -81,4 +98,10 @@ export async function askQuestion(input: {
       areas: context.areas,
     },
   };
+}
+
+/** The first line or so of an answer, for the notification. */
+function previewOf(text: string): string {
+  const plain = text.replace(/[*_#>`]/g, '').replace(/\s+/g, ' ').trim();
+  return plain.length > 140 ? `${plain.slice(0, 137)}…` : plain;
 }

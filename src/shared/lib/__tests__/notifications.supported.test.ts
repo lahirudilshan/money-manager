@@ -20,6 +20,11 @@ vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 
 const scheduleNotificationAsync = vi.fn().mockResolvedValue('id');
 const cancelAllScheduledNotificationsAsync = vi.fn().mockResolvedValue(undefined);
+// One stale funding reminder and one maintenance reminder already queued.
+const getAllScheduledNotificationsAsync = vi
+  .fn()
+  .mockResolvedValue([{ identifier: 'old-funding' }, { identifier: 'maint:v1:engine_oil' }]);
+const cancelScheduledNotificationAsync = vi.fn().mockResolvedValue(undefined);
 const setNotificationHandler = vi.fn();
 
 vi.mock('expo-notifications', () => ({
@@ -28,6 +33,8 @@ vi.mock('expo-notifications', () => ({
   requestPermissionsAsync: vi.fn().mockResolvedValue({ granted: true }),
   setNotificationChannelAsync: vi.fn().mockResolvedValue(undefined),
   cancelAllScheduledNotificationsAsync,
+  getAllScheduledNotificationsAsync,
+  cancelScheduledNotificationAsync,
   scheduleNotificationAsync,
   AndroidImportance: { DEFAULT: 3 },
   SchedulableTriggerInputTypes: { DATE: 'date' },
@@ -46,7 +53,9 @@ describe('supported platform', () => {
 
     expect(count).toBe(1);
     expect(setNotificationHandler).toHaveBeenCalled();
-    expect(cancelAllScheduledNotificationsAsync).toHaveBeenCalled();
+    // Funding reminders are rebuilt; maintenance reminders share the queue and stay.
+    expect(cancelScheduledNotificationAsync).toHaveBeenCalledWith('old-funding');
+    expect(cancelScheduledNotificationAsync).not.toHaveBeenCalledWith('maint:v1:engine_oil');
     expect(scheduleNotificationAsync).toHaveBeenCalledTimes(1);
 
     // The reminder must carry the transaction id so tapping it can deep-link.

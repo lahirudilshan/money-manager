@@ -937,6 +937,37 @@ export const vehicles = sqliteTable('vehicles', {
   icon: text('icon').notNull().default('car-sport-outline'),
   /** Local file URI of a photo of the vehicle — see core/imageStorage.ts. */
   imageUri: text('image_uri'),
+  /**
+   * Bought new or second-hand — the maintenance schedule turns on it.
+   *
+   * A new vehicle's history is known: nothing has been done, so every item is
+   * due one interval from the delivery odometer. A used one's is NOT, and
+   * pretending the brake fluid was changed at purchase would hide exactly the
+   * work a second-hand buyer most needs to do. Null (vehicles added before this
+   * existed) is read as used, the cautious answer.
+   */
+  condition: text('condition', { enum: ['new', 'used'] }),
+  /** Odometer when the user got it — the baseline for a new vehicle's schedule. */
+  acquiredOdometer: real('acquired_odometer'),
+  /** When the user got it — the baseline for time-based items (brake fluid, coolant). */
+  acquiredAt: integer('acquired_at', { mode: 'timestamp_ms' }),
+  /**
+   * The exact model — what an owner's manual schedule is looked up by
+   * ("Toyota", "Aqua", 2015, "1NZ-FXE 1.5", "cvt"). All optional.
+   */
+  make: text('make'),
+  model: text('model'),
+  year: integer('year'),
+  engine: text('engine'),
+  transmission: text('transmission', { enum: ['automatic', 'manual', 'cvt'] }),
+  /**
+   * How often this vehicle goes in for a service — 5,000 km / 6 months, say.
+   * Groups the schedule into real garage visits ("10,000 km service") and sets
+   * the engine-oil interval unless that item has its own override. Null = no
+   * fixed service; items are grouped by when they fall due.
+   */
+  serviceIntervalKm: real('service_interval_km'),
+  serviceIntervalMonths: integer('service_interval_months'),
   isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
   sortOrder: integer('sort_order').notNull().default(0),
   ...timestamps,
@@ -1026,6 +1057,8 @@ export const vehicleServices = sqliteTable(
     nextDueOdometer: real('next_due_odometer'),
     nextDueDate: integer('next_due_date', { mode: 'timestamp_ms' }),
     note: text('note'),
+    /** The garage invoice — photo or PDF, read by AI into the line items. */
+    imageUri: text('image_uri'),
     ...timestamps,
   },
   (t) => [index('vehicle_services_vehicle_idx').on(t.vehicleId)],
@@ -1061,9 +1094,57 @@ export const serviceItems = sqliteTable(
       .default('part'),
     note: text('note'),
     sortOrder: integer('sort_order').notNull().default(0),
+    /**
+     * The maintenance schedule item this line covers ("engine_oil"), as the
+     * user confirmed it — '' means "not on the schedule". Null on lines saved
+     * before the mapping existed; those are matched by their name.
+     */
+    itemKey: text('item_key'),
     ...timestamps,
   },
   (t) => [index('service_items_service_idx').on(t.serviceId)],
+);
+
+/**
+ * "This maintenance item was done here" — or "this item does not apply".
+ *
+ * The schedule itself (what to replace and how often) is reference data in
+ * features/fuel/logic/maintenance.ts, not rows: it is the same for every Aqua
+ * and changes with research, not with the user. Only the user's FACTS live
+ * here — the brake fluid was changed at 48,200 km, this car has a timing chain
+ * so the belt item is not applicable.
+ *
+ * `itemKey` is a key from that catalogue. `serviceId` links the mark to the
+ * service visit it was ticked on, `set null` so deleting the visit keeps the
+ * fact that the work was done.
+ */
+export const maintenanceMarks = sqliteTable(
+  'maintenance_marks',
+  {
+    id: text('id').primaryKey(),
+    vehicleId: text('vehicle_id')
+      .notNull()
+      .references(() => vehicles.id, { onDelete: 'cascade' }),
+    itemKey: text('item_key').notNull(),
+    action: text('action', { enum: ['done', 'not_applicable'] })
+      .notNull()
+      .default('done'),
+    doneAt: integer('done_at', { mode: 'timestamp_ms' }).notNull(),
+    odometer: real('odometer'),
+    serviceId: text('service_id').references(() => vehicleServices.id, {
+      onDelete: 'set null',
+    }),
+    note: text('note'),
+    /**
+     * What was fitted, so next time can say "same as last time": the brand
+     * ("Mobil", "NGK") and the variant / grade / size ("0W-20", "175/65 R15").
+     * Free text — the chips in the UI are suggestions, not a list.
+     */
+    brand: text('brand'),
+    spec: text('spec'),
+    ...timestamps,
+  },
+  (t) => [index('maintenance_marks_vehicle_idx').on(t.vehicleId, t.itemKey)],
 );
 
 /*
@@ -1657,6 +1738,48 @@ export const SERVICE_ITEM_KIND_LABEL: Record<ServiceItemKind, string> = {
   labour: 'Labour',
   other: 'Other',
 };
+
+/**
+ * This vehicle's own version of the maintenance schedule.
+ *
+ * The catalogue in features/fuel/logic/maintenance.ts is the default for a
+ * kind + fuel; a row here changes one item for ONE vehicle — the interval its
+ * owner's manual gives, "this model has a timing chain" (`applies` false), the
+ * exact oil grade — or adds an item the catalogue does not have (`item_key`
+ * starting "custom:", with its own title). Written by the AI model lookup
+ * (`source` 'ai', after the user reviewed it) or by hand ('user').
+ */
+export const maintenanceOverrides = sqliteTable(
+  'maintenance_overrides',
+  {
+    id: text('id').primaryKey(),
+    vehicleId: text('vehicle_id')
+      .notNull()
+      .references(() => vehicles.id, { onDelete: 'cascade' }),
+    itemKey: text('item_key').notNull(),
+    /** Custom items only — a catalogue item keeps its own title. */
+    title: text('title'),
+    group: text('item_group'),
+    action: text('action'),
+    everyKm: real('every_km'),
+    everyMonths: integer('every_months'),
+    applies: integer('applies', { mode: 'boolean' }).notNull().default(true),
+    /** "0W-20, 3.4 L with filter" — the exact spec for this model. */
+    recommended: text('recommended'),
+    detail: text('detail'),
+    source: text('source', { enum: ['ai', 'user'] }).notNull().default('user'),
+    ...timestamps,
+  },
+  (t) => [index('maintenance_overrides_vehicle_idx').on(t.vehicleId)],
+);
+
+export type MaintenanceOverride = typeof maintenanceOverrides.$inferSelect;
+export type NewMaintenanceOverride = typeof maintenanceOverrides.$inferInsert;
+export type VehicleTransmission = NonNullable<Vehicle['transmission']>;
+
+export type MaintenanceMark = typeof maintenanceMarks.$inferSelect;
+export type NewMaintenanceMark = typeof maintenanceMarks.$inferInsert;
+export type VehicleCondition = NonNullable<Vehicle['condition']>;
 
 export type VehicleService = typeof vehicleServices.$inferSelect;
 export type NewVehicleService = typeof vehicleServices.$inferInsert;

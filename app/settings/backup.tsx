@@ -74,6 +74,7 @@ const FREQUENCY_COPY: Record<
   monthly: { label: 'Monthly', when: 'once a month', icon: 'calendar-number-outline' },
 };
 import { useAppStore } from '../../src/store/useAppStore';
+import { withLiveWork } from '~/shared/lib/liveWork';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 
 /**
@@ -367,12 +368,26 @@ export default function BackupScreen() {
     const snapshot = exportSnapshot(appVersion, { parts, label: label.trim() || undefined });
 
     setProgress('Uploading to Google Drive…');
-    const result = await uploadBackup(
-      snapshotFilename(new Date(snapshot.createdAt)),
-      serialiseSnapshot(snapshot),
-      // Carried as the Drive file's description so the restore list can show it
-      // without downloading the file — see `DriveFile.description`.
-      snapshot.label,
+    // Keeps uploading if the phone is locked; notifies if it ends off-screen.
+    const result = await withLiveWork(
+      {
+        title: 'Backing up to Google Drive',
+        subtitle: 'Dayly',
+        expectedSeconds: 20,
+        done: (r) =>
+          r.ok
+            ? { title: 'Backup saved to Drive', body: 'Everything on this phone is backed up.' }
+            : { title: 'Backup did not finish', body: 'Open Dayly to see why and try again.' },
+        failed: { title: 'Backup did not finish', body: 'Open Dayly to see why and try again.' },
+      },
+      () =>
+        uploadBackup(
+          snapshotFilename(new Date(snapshot.createdAt)),
+          serialiseSnapshot(snapshot),
+          // Carried as the Drive file's description so the restore list can show it
+          // without downloading the file — see `DriveFile.description`.
+          snapshot.label,
+        ),
     );
 
     if (!result.ok) {
@@ -726,7 +741,18 @@ export default function BackupScreen() {
       Alert.alert(title, message);
     };
 
-    const result = await downloadDriveBackup(file.id);
+    const result = await withLiveWork(
+      {
+        title: 'Downloading your backup',
+        subtitle: 'Google Drive',
+        expectedSeconds: 10,
+        done: (r) =>
+          r.ok
+            ? { title: 'Backup downloaded', body: 'Open Dayly to choose what to restore.' }
+            : { title: 'Download did not finish', body: 'Open Dayly to try again.' },
+      },
+      () => downloadDriveBackup(file.id),
+    );
 
     if (!result.ok || !result.contents) {
       setInspecting(null);

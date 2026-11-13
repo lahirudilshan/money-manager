@@ -16,7 +16,7 @@ import { isOutOfRange, readOverall } from '~/features/health/logic/labReports';
 import { canonicalKey } from '~/features/health/logic/healthMetrics';
 import { AiDisclaimer, BulletList, GlossaryText } from '~/features/health/components/LabUi';
 import { ResultRow } from '~/features/health/components/ResultRow';
-import { categoryLook } from '~/features/health/components/healthCategory';
+import { ON_FILL, categoryLook } from '~/features/health/components/healthCategory';
 
 /**
  * One batch of reports, explained.
@@ -177,7 +177,7 @@ export default function AnalysisScreen() {
                 backgroundColor: mainLook.color,
               }}
             >
-              <Ionicons name={mainLook.icon} size={24} color="#FFFFFF" />
+              <Ionicons name={mainLook.icon} size={24} color={ON_FILL} />
             </View>
             <View style={{ flex: 1, gap: 2 }}>
               <Text variant="title">{friendlyName}</Text>

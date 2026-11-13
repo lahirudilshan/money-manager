@@ -1,11 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Image, Pressable, View } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Row, Text } from '~/shared/components/ui';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { relationLabel, type HealthPerson } from '~/db/schema';
 import { bodyReport, formatHeight, formatWaist } from '~/features/health/logic/bodyMeasures';
+import { HEALTH_TINT, ON_FILL } from './healthCategory';
 
 /**
  * Who this record is for, and the facts needed in a hurry:
@@ -66,7 +66,7 @@ export function PersonCard({
     .join(' · ');
 
   const tiles: { key: string; icon: keyof typeof Ionicons.glyphMap; tint: string; value: string | null; label: string; labelColor?: string }[] = [
-    { key: 'blood', icon: 'water', tint: '#DC2626', value: person.bloodGroup ?? null, label: 'Blood' },
+    { key: 'blood', icon: 'water', tint: HEALTH_TINT.blood, value: person.bloodGroup ?? null, label: 'Blood' },
     {
       key: 'height',
       icon: 'resize',
@@ -77,7 +77,7 @@ export function PersonCard({
     {
       key: 'weight',
       icon: 'barbell',
-      tint: '#0D9488',
+      tint: HEALTH_TINT.weight,
       value: weight?.value != null ? `${trim(weight.value)} ${weight.unit ?? 'kg'}` : null,
       label: 'Weight',
     },
@@ -86,7 +86,7 @@ export function PersonCard({
       : {
           key: 'waist',
           icon: 'ellipse-outline',
-          tint: '#7C3AED',
+          tint: HEALTH_TINT.waist,
           value: person.waistCm ? formatWaist(person.waistCm, person.lengthUnit) : null,
           label: 'Waist',
         },
@@ -99,12 +99,14 @@ export function PersonCard({
       accessibilityLabel={`${person.name}'s profile`}
       style={({ pressed }) => ({ opacity: pressed ? 0.9 : 1 })}
     >
-      {/* A soft green wash fading into the card — a hint of colour, not a highlight. */}
-      <LinearGradient
-        colors={[colors.completedSoft, colors.surface]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+      {/*
+        A plain card, ringed in the person's own colour — the same colour as
+        their avatar in the people strip, so switching person visibly changes
+        the card. The green wash it had was the same for everyone.
+      */}
+      <View
         style={{
+          backgroundColor: colors.surface,
           borderRadius: radius.lg,
           padding: space.lg,
           gap: space.lg,
@@ -120,7 +122,7 @@ export function PersonCard({
               height: 58,
               borderRadius: 29,
               borderWidth: 2,
-              borderColor: colors.completed,
+              borderColor: person.color,
               alignItems: 'center',
               justifyContent: 'center',
             }}
@@ -132,14 +134,14 @@ export function PersonCard({
                 borderRadius: 24,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: colors.completed,
+                backgroundColor: person.color,
                 overflow: 'hidden',
               }}
             >
               {person.imageUri ? (
                 <Image source={{ uri: person.imageUri }} style={{ width: 48, height: 48 }} />
               ) : (
-                <Text variant="title" color="#FFFFFF">
+                <Text variant="title" color={ON_FILL}>
                   {person.name.trim().charAt(0).toUpperCase()}
                 </Text>
               )}
@@ -171,10 +173,8 @@ export function PersonCard({
         <View
           style={{
             flexDirection: 'row',
-            borderRadius: radius.lg,
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.hairline,
+            borderRadius: radius.md,
+            backgroundColor: colors.surfaceSunken,
             paddingVertical: space.md,
           }}
         >
@@ -187,7 +187,7 @@ export function PersonCard({
                 gap: 4,
                 paddingHorizontal: 2,
                 borderLeftWidth: index === 0 ? 0 : 1,
-                borderLeftColor: colors.hairline,
+                borderLeftColor: colors.hairlineStrong,
               }}
             >
               <Ionicons name={t.icon} size={16} color={t.tint} />
@@ -209,29 +209,6 @@ export function PersonCard({
           ))}
         </View>
 
-        {bmi && bmiTone ? (
-          <Row
-            gap={space.sm}
-            style={{
-              alignSelf: 'flex-start',
-              marginTop: -space.xs,
-              paddingHorizontal: space.md,
-              paddingVertical: 6,
-              borderRadius: radius.pill,
-              backgroundColor: bmiTone.bg,
-            }}
-          >
-            <Ionicons
-              name={bmi.who === 'healthy' ? 'checkmark-circle' : 'alert-circle'}
-              size={15}
-              color={bmiTone.fg}
-            />
-            <Text variant="small" numberOfLines={1} style={{ fontWeight: '700' }}>
-              {bmiTone.line}
-            </Text>
-          </Row>
-        ) : null}
-
         {person.allergies ? (
           <Row
             gap={space.sm}
@@ -251,7 +228,7 @@ export function PersonCard({
             </Text>
           </Row>
         ) : null}
-      </LinearGradient>
+      </View>
     </Pressable>
   );
 }

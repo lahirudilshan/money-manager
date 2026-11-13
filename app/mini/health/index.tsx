@@ -55,6 +55,7 @@ import {
 import { useAppStore } from '../../../src/store/useAppStore';
 import { useTheme } from '~/shared/theme/ThemeProvider';
 import { AnalyseRunBanner } from '~/features/health/components/AnalyseRunBanner';
+import { HEALTH_TINT, ON_FILL } from '~/features/health/components/healthCategory';
 
 /**
  * One person's health record — what happened, and what the numbers are doing.
@@ -368,7 +369,7 @@ export default function HealthHome() {
                       */
                       <Text
                         variant="bodyStrong"
-                        color={active ? '#FFFFFF' : p.color}
+                        color={active ? ON_FILL : p.color}
                         style={{ fontSize: 19 }}
                       >
                         {p.name.trim().charAt(0).toUpperCase()}
@@ -442,24 +443,16 @@ export default function HealthHome() {
         />
       ) : null}
 
-      {/*
-        Three questions, in the order people ask them:
-          ASK AI                 — "I have a question" (answers anything)
-          WHAT YOUR REPORTS SAY  — simple English: what needs work, the good news
-          YOUR PLAN THIS WEEK    — today's exercise and meals, the week one tap away
-        Then MY NUMBERS for looking things up, and the record itself below.
-      */}
-      {person ? (
-        <>
-          <AskAiBar personId={person.id} health={health} />
-          <ReportStoryCard personId={person.id} health={health} />
-          {health.series.length > 0 ? <WeekPlanCard personId={person.id} plan={plan} /> : null}
-          <NumbersList personId={person.id} health={health} />
-        </>
-      ) : null}
+      {/* An AI reading still going after the Analyse screen was left. */}
+      <AnalyseRunBanner personId={person?.id} />
 
+      {/*
+        Adding comes straight after who this is: it is the thing done most
+        often here, and buried mid-page it meant a scroll past every card
+        before a new report could be scanned.
+      */}
       <View style={{ gap: space.sm }}>
-        <Label>ADD</Label>
+        <Label>ADD TO THE RECORD</Label>
         <Row gap={space.sm}>
           <QuickAction
             icon="scan-outline"
@@ -470,7 +463,7 @@ export default function HealthHome() {
           <QuickAction
             icon="pulse-outline"
             label="Reading"
-            color="#D6336C"
+            color={HEALTH_TINT.reading}
             onPress={() => router.push(`/mini/health/reading?person=${person?.id}`)}
           />
           <QuickAction
@@ -482,19 +475,11 @@ export default function HealthHome() {
           <QuickAction
             icon="camera-outline"
             label="Photo"
-            color="#8B5CF6"
+            color={HEALTH_TINT.report}
             onPress={() => router.push(`/mini/health/document?person=${person?.id}`)}
           />
         </Row>
       </View>
-
-      {person ? (
-        <BodyCard
-          person={person}
-          weightSeries={health.series.find((series) => series.testKey === 'weight')}
-          onEdit={() => router.push(`/mini/health/person?id=${person.id}`)}
-        />
-      ) : null}
 
       {/* Appointments ahead — the only forward-looking item in the record. */}
       {followUps.length > 0 ? (
@@ -518,9 +503,9 @@ export default function HealthHome() {
                   >
                     <View
                       style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: radius.sm,
+                        width: 40,
+                        height: 40,
+                        borderRadius: radius.md,
                         alignItems: 'center',
                         justifyContent: 'center',
                         backgroundColor:
@@ -529,7 +514,7 @@ export default function HealthHome() {
                     >
                       <Ionicons
                         name="calendar"
-                        size={17}
+                        size={19}
                         color={item.daysAway < 0 ? colors.danger : colors.accent}
                       />
                     </View>
@@ -558,6 +543,25 @@ export default function HealthHome() {
         </View>
       ) : null}
 
+      {person ? <AskAiBar personId={person.id} health={health} /> : null}
+
+      {person ? (
+        <>
+          <ReportStoryCard personId={person.id} health={health} />
+          <NumbersList personId={person.id} health={health} />
+        </>
+      ) : null}
+
+      {person ? (
+        <BodyCard
+          person={person}
+          weightSeries={health.series.find((series) => series.testKey === 'weight')}
+          onEdit={() => router.push(`/mini/health/person?id=${person.id}`)}
+        />
+      ) : null}
+
+      {person && health.series.length > 0 ? <WeekPlanCard personId={person.id} plan={plan} /> : null}
+
       {/*
         The two collections, as a segmented card rather than two text links.
 
@@ -567,9 +571,6 @@ export default function HealthHome() {
         match the row treatment used everywhere else on this screen, and give
         the count somewhere to sit that is not glued to the noun.
       */}
-      {/* An AI reading still going after the Analyse screen was left. */}
-      <AnalyseRunBanner personId={person?.id} />
-
       <Surface padded={false} style={{ overflow: 'hidden' }}>
         <BrowseRow
           icon="medical-outline"
@@ -585,7 +586,7 @@ export default function HealthHome() {
         <Divider />
         <BrowseRow
           icon="document-text-outline"
-          tint="#8B5CF6"
+          tint={HEALTH_TINT.report}
           label="Papers and photos"
           detail={
             documents.length > 0
@@ -607,6 +608,7 @@ export default function HealthHome() {
           onPress={() => router.push(`/mini/health/labs?person=${person?.id}`)}
         />
       </Surface>
+
 
       {/*
         THE STORY — the main thing on this screen.
@@ -724,8 +726,13 @@ function QuickAction({
   color: string;
   onPress: () => void;
 }) {
-  const { colors, radius, space } = useTheme();
+  const { colors, radius, shadow, space } = useTheme();
 
+  /*
+   * A filled icon tile, the same 40px tile the BottomSheet header opens with,
+   * so tapping "Visit" here and landing on the Visit sheet feels like one
+   * continuous thing. The faint tinted circle it replaced read as disabled.
+   */
   return (
     <Pressable
       onPress={onPress}
@@ -733,27 +740,29 @@ function QuickAction({
       accessibilityLabel={`Add a ${label.toLowerCase()}`}
       style={({ pressed }) => ({
         flex: 1,
-        opacity: pressed ? 0.75 : 1,
         alignItems: 'center',
-        gap: 6,
-        paddingVertical: space.md,
-        borderRadius: radius.md,
-        backgroundColor: colors.surface,
+        gap: space.sm,
+        paddingTop: space.md,
+        paddingBottom: space.md - 2,
+        borderRadius: radius.lg,
+        backgroundColor: pressed ? colors.surfaceSunken : colors.surface,
         borderWidth: 1,
         borderColor: colors.hairline,
+        transform: [{ scale: pressed ? 0.97 : 1 }],
+        ...shadow.card,
       })}
     >
       <View
         style={{
-          width: 34,
-          height: 34,
-          borderRadius: 17,
+          width: 40,
+          height: 40,
+          borderRadius: radius.md,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: `${color}1A`,
+          backgroundColor: color,
         }}
       >
-        <Ionicons name={icon} size={18} color={color} />
+        <Ionicons name={icon} size={20} color={ON_FILL} />
       </View>
       <Text variant="caption" numberOfLines={1} style={{ fontWeight: '700' }}>
         {label}
@@ -801,15 +810,15 @@ function BrowseRow({
     >
       <View
         style={{
-          width: 38,
-          height: 38,
-          borderRadius: radius.sm,
+          width: 40,
+          height: 40,
+          borderRadius: radius.md,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: `${tint}1A`,
+          backgroundColor: tint,
         }}
       >
-        <Ionicons name={icon} size={18} color={tint} />
+        <Ionicons name={icon} size={19} color={ON_FILL} />
       </View>
       <View style={{ flex: 1, gap: 2 }}>
         <Text variant="bodyStrong" numberOfLines={1}>
@@ -819,7 +828,7 @@ function BrowseRow({
           {detail}
         </Text>
       </View>
-      <Ionicons name="chevron-forward" size={16} color={colors.inkFaint} />
+      <Ionicons name="chevron-forward" size={16} color={colors.inkMuted} />
     </Pressable>
   );
 }
@@ -1240,5 +1249,5 @@ function mergeTopics(lists: ReportTopic[][], limit = 4): ReportTopic[] {
 }
 
 /** The report colour used across the health screens (the "Photo" quick action). */
-const REPORT_COLOR = '#8B5CF6';
+const REPORT_COLOR = HEALTH_TINT.report;
 

@@ -131,7 +131,14 @@ async function scheduleAll(
     });
   }
 
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  /*
+   * Cancel only the FUNDING reminders, not everything.
+   *
+   * This used to cancel every scheduled notification, which was fine while
+   * funding was the only kind. Maintenance reminders share the queue now, and
+   * a launch-time funding rebuild silently wiped them all.
+   */
+  await cancelScheduled(Notifications, (id) => !id.startsWith(MAINTENANCE_PREFIX));
 
   const now = new Date();
   let scheduled = 0;
@@ -177,6 +184,171 @@ function nextFireDate(dueDay: number, daysBefore: number, from: Date): Date {
   const thisMonth = build(from.getFullYear(), from.getMonth());
   if (thisMonth.getTime() > from.getTime()) return thisMonth;
   return build(from.getFullYear(), from.getMonth() + 1);
+}
+
+const MAINTENANCE_PREFIX = 'maint:';
+
+async function cancelScheduled(
+  Notifications: NotificationsModule,
+  keep: (identifier: string) => boolean,
+): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  await Promise.all(
+    scheduled
+      .filter((request) => keep(request.identifier))
+      .map((request) => Notifications.cancelScheduledNotificationAsync(request.identifier)),
+  );
+}
+
+export interface MaintenanceReminder {
+  vehicleId: string;
+  itemKey: string;
+  vehicleName: string;
+  itemTitle: string;
+  /** What was fitted last time ("Mobil · 0W-20"), so the reminder doubles as a shopping note. */
+  lastPart?: string | null;
+  /** When it is expected to fall due — the reminder fires `daysBefore` ahead. */
+  expectedDate: Date;
+}
+
+/**
+ * Rebuild the vehicle-maintenance reminders.
+ *
+ * Mileage is only known when the user logs it, so a reminder for "oil due at
+ * 15,000 km" is scheduled for the DATE that reading is expected on, at the
+ * vehicle's usual daily distance (see features/fuel/logic/maintenance.ts). A
+ * rebuild after every fill-up keeps that projection current.
+ *
+ * Never asks for permission: this runs at launch and after a fill-up, and a
+ * prompt the user did not initiate is worse than a reminder they did not get.
+ * The settings screen is where permission is requested.
+ */
+export async function syncMaintenanceReminders(
+  reminders: readonly MaintenanceReminder[],
+  daysBefore = 3,
+): Promise<number> {
+  try {
+    const Notifications = await loadNotifications();
+    if (!Notifications) return 0;
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return 0;
+
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('maintenance-reminders', {
+        name: 'Vehicle maintenance',
+        importance: Notifications.AndroidImportance.DEFAULT,
+      });
+    }
+
+    await cancelScheduled(Notifications, (id) => id.startsWith(MAINTENANCE_PREFIX));
+
+    const now = Date.now();
+    // iOS keeps at most 64 pending notifications across the whole app, and
+    // funding reminders need room too — the nearest 30 are the ones that matter.
+    const upcoming = reminders
+      .map((r) => {
+        const fireAt = new Date(r.expectedDate.getTime() - daysBefore * 86_400_000);
+        fireAt.setHours(9, 0, 0, 0);
+        return { ...r, fireAt };
+      })
+      .filter((r) => r.fireAt.getTime() > now)
+      .sort((a, b) => a.fireAt.getTime() - b.fireAt.getTime())
+      .slice(0, 30);
+
+    for (const r of upcoming) {
+      await Notifications.scheduleNotificationAsync({
+        identifier: `${MAINTENANCE_PREFIX}${r.vehicleId}:${r.itemKey}`,
+        content: {
+          title: `${r.vehicleName}: ${r.itemTitle} due soon`,
+          body: r.lastPart
+            ? `Expected in a few days at your usual driving. Last time: ${r.lastPart}.`
+            : 'Expected in a few days at your usual driving. Tap to see the schedule.',
+          data: { route: `/mini/fuel/maintenance?vehicle=${r.vehicleId}` },
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: r.fireAt,
+          channelId: 'maintenance-reminders',
+        },
+      });
+    }
+    return upcoming.length;
+  } catch (error) {
+    lastFailureReason = String(error);
+    return 0;
+  }
+}
+
+/**
+ * Announce items that a fill-up just pushed into "due soon" or "overdue".
+ *
+ * Delivered now — the odometer reading that made them due has just been
+ * typed. One notification per vehicle, not per item: an overdue 10,000 km
+ * service crosses five items at once, and five banners for one visit to the
+ * garage is noise.
+ */
+export async function notifyMaintenanceDue(
+  vehicleId: string,
+  vehicleName: string,
+  items: readonly { title: string; overdue: boolean }[],
+): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    const Notifications = await loadNotifications();
+    if (!Notifications) return;
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+
+    const overdue = items.filter((i) => i.overdue).length;
+    const names = items.map((i) => i.title);
+    const body =
+      names.length <= 2
+        ? names.join(' and ')
+        : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title:
+          overdue > 0
+            ? `${vehicleName}: maintenance overdue`
+            : `${vehicleName}: maintenance due soon`,
+        body,
+        data: { route: `/mini/fuel/maintenance?vehicle=${vehicleId}` },
+      },
+      trigger: null,
+    });
+  } catch (error) {
+    lastFailureReason = String(error);
+  }
+}
+
+/**
+ * "Your invoice is read" — a job the user started, finished while they were
+ * in another app or had the phone locked. Delivered now; never asks for
+ * permission (a finished job is no moment to interrupt with a system prompt).
+ */
+export async function notifyWorkDone(input: {
+  title: string;
+  body: string;
+  /** Opened on tap; omit to just bring the app back where it was. */
+  route?: string;
+}): Promise<void> {
+  try {
+    const Notifications = await loadNotifications();
+    if (!Notifications) return;
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: input.title,
+        body: input.body,
+        data: input.route ? { route: input.route } : {},
+      },
+      trigger: null,
+    });
+  } catch (error) {
+    lastFailureReason = String(error);
+  }
 }
 
 export async function cancelAllReminders(): Promise<void> {
@@ -230,3 +402,35 @@ export async function notifyDraftsImported(count: number): Promise<void> {
   }
 }
 
+
+/**
+ * Follow a tapped notification's `data.route`.
+ *
+ * Loaded lazily for the same Expo Go reason as everything else here, so the
+ * listener is attached once the module resolves. Returns an unsubscribe.
+ */
+export function onNotificationRoute(navigate: (route: string) => void): () => void {
+  let remove: (() => void) | null = null;
+  let cancelled = false;
+
+  void loadNotifications().then((Notifications) => {
+    if (!Notifications || cancelled) return;
+    const follow = (response: { notification: { request: { content: { data?: unknown } } } }) => {
+      const data = response.notification.request.content.data as { route?: unknown } | undefined;
+      if (typeof data?.route === 'string' && data.route.startsWith('/')) navigate(data.route);
+    };
+    // A tap that launched the app from cold arrives before any listener exists.
+    void Notifications.getLastNotificationResponseAsync()
+      .then((last) => {
+        if (last && !cancelled) follow(last);
+      })
+      .catch(() => undefined);
+    const subscription = Notifications.addNotificationResponseReceivedListener(follow);
+    remove = () => subscription.remove();
+  });
+
+  return () => {
+    cancelled = true;
+    remove?.();
+  };
+}

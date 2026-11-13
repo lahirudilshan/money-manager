@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Image, Pressable, ScrollView, View } from 'react-native';
 import { Screen } from '~/shared/components/Screen';
 import { Button, Empty, GradientButton, Label, Row, Surface, Text } from '~/shared/components/ui';
 import { useDriveGate } from '~/shared/components/DriveConnectSheet';
@@ -39,6 +39,7 @@ import {
   lockScreenText,
 } from '~/features/health/logic/analyseProgress';
 import { startBackgroundJob } from '~/shared/lib/backgroundWork';
+import { notifyWorkDone } from '~/shared/lib/notifications';
 import { titleFromFileName } from '~/features/health/logic/labReports';
 import { OwnGoogleAiCard } from '~/features/health/components/OwnGoogleAiCard';
 import {
@@ -375,6 +376,13 @@ export default function AnalyzeReports() {
     }
     // A moment for the last words to reach the Lock Screen before iOS closes the card.
     setTimeout(() => job.finish(result.ok), 1500);
+    // Finished while the user was in another app or had the phone locked: tell them.
+    if (AppState.currentState !== 'active') {
+      const said = result.ok
+        ? lockScreenDone({ personName: person.name, results: result.results, flagged: result.flagged, elapsedSeconds: elapsed() })
+        : lockScreenFailed({ personName: person.name, error: result.error });
+      void notifyWorkDone({ title: said.title, body: said.subtitle });
+    }
     useAppStore.getState().refreshMiniAppData();
     setLastLog([...log]);
     finishAnalyseRun(

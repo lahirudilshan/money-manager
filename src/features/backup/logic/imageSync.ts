@@ -31,6 +31,8 @@ export const IMAGE_TABLES = [
   'transactions',
   'vehicles',
   'fuel_entries',
+  // The garage invoice on a service record.
+  'vehicle_services',
   'health_people',
   'health_documents',
   'buddy_loans',

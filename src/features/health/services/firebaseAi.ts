@@ -296,6 +296,8 @@ export async function generateAnswerText(input: {
 export async function generateAnalysisJson(input: {
   /** Which of the two calls — picks the schema and how much the model thinks. */
   task: AnalysisTask;
+  /** A JSON Schema for the reply, in place of the task's own (lab) schema. */
+  schema?: Record<string, unknown>;
   files: readonly InlineFile[];
   /** The fixed rules — identical across calls, so Gemini can cache them. */
   systemInstruction: string;
@@ -309,7 +311,8 @@ export async function generateAnalysisJson(input: {
   if (!prepared.ok) return prepared;
   const { generate, owner } = prepared;
 
-  const schema = input.task === 'extract' ? EXTRACTION_JSON_SCHEMA : EXPLANATION_JSON_SCHEMA;
+  const schema =
+    input.schema ?? (input.task === 'extract' ? EXTRACTION_JSON_SCHEMA : EXPLANATION_JSON_SCHEMA);
   let lastError = 'No AI model answered. Try again in a minute.';
   for (const [attempt, model] of MODELS_FOR[input.task].entries()) {
     if (attempt > 0) input.onLog?.('Trying again');

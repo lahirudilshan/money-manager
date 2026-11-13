@@ -96,9 +96,11 @@ export const TOUR: TourSlide[] = [
     icon: 'car-outline',
     color: '#16A34A',
     title: 'Fuel & vehicles',
-    line: 'Fill-ups, real mileage, running costs and services.',
-    example: '14.2 km/L · next service in 800 km',
+    line: 'Fill-ups, mileage, service bills and alerts when each part is due.',
+    example: 'Engine oil · due in 300 km',
+    ai: true,
     addOn: true,
+    isNew: true,
   },
   {
     key: 'buddyloans',
